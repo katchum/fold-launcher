@@ -435,19 +435,21 @@ class VcBackgroundMonitor private constructor(context: Context) {
         sessionId: String?
     ): PendingIntent? {
         val pkg = VcBridgeClient.resolveInstalledVcPackage(appContext)
-        val targetIntent: Intent = if (pkg != null) {
-            appContext.packageManager.getLaunchIntentForPackage(pkg)?.apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                if (!sessionId.isNullOrBlank()) {
-                    putExtra("sessionId", sessionId)
+        val targetIntent: Intent = when {
+            pkg != null -> {
+                appContext.packageManager.getLaunchIntentForPackage(pkg)?.apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    if (!sessionId.isNullOrBlank()) {
+                        putExtra("sessionId", sessionId)
+                    }
                 }
             }
-        } else if (config.isConfigured) {
-            Intent(Intent.ACTION_VIEW, Uri.parse(config.normalizedServerUrl)).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            config.isConfigured -> {
+                Intent(Intent.ACTION_VIEW, Uri.parse(config.normalizedServerUrl)).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
             }
-        } else {
-            null
+            else -> null
         } ?: return null
 
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE

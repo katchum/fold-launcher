@@ -11,6 +11,8 @@ object VcPackages {
     const val PREFLIGHT = "dev.agentconversation.preview.preflight"
     const val LEGACY = "com.example.agentconversation"
     const val TALK_ACTION = "dev.agentconversation.widget.TALK"
+    const val EXTRA_SESSION_ID = "dev.agentconversation.extra.SESSION_ID"
+    const val EXTRA_PROJECT_ID = "dev.agentconversation.extra.PROJECT_ID"
 
     val ALL_VC_PACKAGES: List<String> = listOf(
         VCI,

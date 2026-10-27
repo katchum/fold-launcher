@@ -310,11 +310,17 @@ object VcBridgeClient {
             val effectiveStatus = when {
                 effectiveWorking -> "working"
                 hasFailedEvent -> "failed"
+                rawWorking != null && agent.status.equals("working", ignoreCase = true) -> "idle"
                 else -> agent.status
+            }
+            val effectiveApprovals = if (rawRoster != null) {
+                maxOf(agent.approvalCount, eventApprovals)
+            } else {
+                eventApprovals
             }
             combinedAgentsMap[agent.sessionId] = agent.copy(
                 status = effectiveStatus,
-                approvalCount = maxOf(agent.approvalCount, eventApprovals),
+                approvalCount = effectiveApprovals,
                 hasUnreadUpdate = sessionEvents.isNotEmpty()
             )
         }
