@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Rect
 import android.os.BatteryManager
+import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -24,6 +25,7 @@ import com.xsun.foldlauncher.omni.ClipboardItem
 import com.xsun.foldlauncher.omni.ClipboardVault
 import com.xsun.foldlauncher.omni.OmniAction
 import com.xsun.foldlauncher.omni.OmniCommandEngine
+import com.xsun.foldlauncher.posture.PostureOverride
 import com.xsun.foldlauncher.search.SearchEngine
 import com.xsun.foldlauncher.service.FoldAccessibilityService
 import com.xsun.foldlauncher.service.SystemTweaker
@@ -166,6 +168,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _spatialParallaxEnabled = MutableStateFlow(preferences.spatialParallaxEnabled)
     val spatialParallaxEnabled: StateFlow<Boolean> = _spatialParallaxEnabled.asStateFlow()
+
+    // Z Fold 8 Live Posture Simulator & Manual Override state
+    private val _postureOverride = MutableStateFlow(PostureOverride.AUTO)
+    val postureOverride: StateFlow<PostureOverride> = _postureOverride.asStateFlow()
 
     // VC Background Monitor & Command Center states
     val vcConfig: StateFlow<VcConnectionConfig> = vcMonitor.config
@@ -379,6 +385,54 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         return false
     }
 
+    // Live Posture Override Controls (AUTO -> FORCE_FLEX -> FORCE_INNER -> FORCE_COVER -> TENT_MODE -> AUTO)
+    fun setPostureOverride(mode: PostureOverride) {
+        _postureOverride.value = mode
+        val feedback = "Posture: ${mode.displayName} (${mode.shortLabel})"
+        _omniStatusMessage.value = feedback
+        try {
+            Toast.makeText(appContext, feedback, Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) {
+        }
+    }
+
+    fun cyclePostureOverride() {
+        val next = when (_postureOverride.value) {
+            PostureOverride.AUTO -> PostureOverride.FORCE_FLEX
+            PostureOverride.FORCE_FLEX -> PostureOverride.FORCE_INNER
+            PostureOverride.FORCE_INNER -> PostureOverride.FORCE_COVER
+            PostureOverride.FORCE_COVER -> PostureOverride.TENT_MODE
+            PostureOverride.TENT_MODE -> PostureOverride.AUTO
+        }
+        setPostureOverride(next)
+    }
+
+    private fun handlePostureCommandId(actionId: String): Boolean {
+        return when (actionId.lowercase()) {
+            "posture_flex" -> {
+                setPostureOverride(PostureOverride.FORCE_FLEX)
+                true
+            }
+            "posture_inner" -> {
+                setPostureOverride(PostureOverride.FORCE_INNER)
+                true
+            }
+            "posture_cover" -> {
+                setPostureOverride(PostureOverride.FORCE_COVER)
+                true
+            }
+            "posture_tent" -> {
+                setPostureOverride(PostureOverride.TENT_MODE)
+                true
+            }
+            "posture_auto" -> {
+                setPostureOverride(PostureOverride.AUTO)
+                true
+            }
+            else -> false
+        }
+    }
+
     // Omni-Command & Clipboard Vault Operations
     fun executeOmniAction(action: OmniAction) {
         when (action) {
@@ -409,6 +463,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             onToggleThumbArc = ::toggleRadialThumbArc,
             onStatusMessage = { msg ->
                 _omniStatusMessage.value = msg
+            },
+            onPostureCommand = { actionId ->
+                handlePostureCommandId(actionId)
             }
         )
 
@@ -418,10 +475,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
-     * Synchronizes ViewModel state (app launch counts, live VC prompt dispatch, and companion state)
+     * Synchronizes ViewModel state (app launch counts, live VC prompt dispatch, posture overrides, and companion state)
      * when [SpotlightSearchOverlay] or [OmniCommandResultsCard] executes an [OmniAction].
      */
     fun onOmniActionFromSpotlight(action: OmniAction) {
+        handlePostureCommandId(action.actionId)
         when (action) {
             is OmniAction.LaunchAdHocSplit -> {
                 preferences.incrementLaunchCount(action.primaryApp.packageName)

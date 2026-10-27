@@ -33,6 +33,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
@@ -56,9 +57,11 @@ import com.xsun.foldlauncher.model.AppEntry
 import com.xsun.foldlauncher.model.AppPair
 import com.xsun.foldlauncher.model.FolderItem
 import com.xsun.foldlauncher.posture.DevicePostureState
+import com.xsun.foldlauncher.posture.PostureOverride
 import com.xsun.foldlauncher.service.SystemTweaker
 import com.xsun.foldlauncher.spatial.FlexVirtualTrackpadCard
 import com.xsun.foldlauncher.spatial.RadialThumbArcOverlay
+import com.xsun.foldlauncher.spatial.TentModeStandbyHud
 import com.xsun.foldlauncher.spatial.rememberSpatialTiltState
 import com.xsun.foldlauncher.spatial.spatialParallaxCard
 import com.xsun.foldlauncher.ui.animation.AlphabetWaveScrubber
@@ -73,6 +76,169 @@ import com.xsun.foldlauncher.ui.theme.IconShapePreset
 import com.xsun.foldlauncher.vc.VcBackgroundMonitor
 import kotlinx.coroutines.launch
 
+private val CORE_DRAWER_CATEGORY_PILLS = listOf("All", "VC & Dev", "Frequent", "System")
+
+private fun isVcAndDevPackage(app: AppEntry): Boolean {
+    val pkg = app.packageName.lowercase()
+    val lbl = app.label.lowercase()
+    return pkg.startsWith("dev.agentconversation") ||
+        pkg.startsWith("com.termux") ||
+        pkg == "com.android.chrome" ||
+        pkg.contains("chrome") ||
+        pkg.startsWith("com.xsun.foldlauncher") ||
+        pkg == "com.android.settings" ||
+        pkg.contains("github") ||
+        pkg.contains("adb") ||
+        pkg.contains("terminal") ||
+        pkg.contains("developer") ||
+        lbl.contains("termux") ||
+        lbl.contains("agent") ||
+        lbl.contains("vc") ||
+        lbl.contains("settings")
+}
+
+private fun filterAppsByDrawerPill(allApps: List<AppEntry>, selectedCategory: String): List<AppEntry> {
+    return when (selectedCategory) {
+        "All" -> allApps
+        "VC & Dev" -> {
+            val matched = allApps.filter { isVcAndDevPackage(it) }
+            if (matched.isNotEmpty()) matched else allApps.take(12)
+        }
+        "Frequent" -> allApps.sortedByDescending { it.launchCount }.take(18)
+        "System" -> allApps.filter {
+            it.isSystemApp ||
+                it.category.equals("System", ignoreCase = true) ||
+                it.category.equals("Utilities", ignoreCase = true)
+        }
+        else -> allApps.filter { it.category.equals(selectedCategory, ignoreCase = true) }
+    }
+}
+
+@Composable
+private fun AppDrawerCategoryPillsBar(
+    categories: List<String>,
+    selectedCategory: String,
+    onSelectCategory: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        categories.forEach { category ->
+            val active = category == selectedCategory
+            val isVcDev = category == "VC & Dev"
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(
+                        when {
+                            active -> FoldLauncherColors.CyanGlow
+                            isVcDev -> FoldLauncherColors.ElectricCyan.copy(alpha = 0.10f)
+                            else -> FoldLauncherColors.GlassSurfaceHighlight
+                        }
+                    )
+                    .border(
+                        1.dp,
+                        when {
+                            active -> FoldLauncherColors.ElectricCyan
+                            isVcDev -> FoldLauncherColors.ElectricCyan.copy(alpha = 0.45f)
+                            else -> FoldLauncherColors.GlassBorder
+                        },
+                        RoundedCornerShape(14.dp)
+                    )
+                    .clickable { onSelectCategory(category) }
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = if (isVcDev) "⚡ VC & Dev" else category,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = when {
+                        active -> FoldLauncherColors.CyanBright
+                        isVcDev -> FoldLauncherColors.ElectricCyan
+                        else -> FoldLauncherColors.TextSecondary
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TentModeStandbyBannerCard(
+    hingeAngleDegrees: Float?,
+    batteryPct: Int,
+    isCharging: Boolean,
+    nextEventText: String,
+    onExitTentMode: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val vcMonitor = remember(context) { VcBackgroundMonitor.getInstance(context) }
+    val vcSummary by vcMonitor.summary.collectAsState()
+    val angleText = hingeAngleDegrees?.let { "${it.toInt()}°" } ?: "TENT"
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(18.dp))
+                .background(FoldLauncherColors.AmberWarning.copy(alpha = 0.14f))
+                .border(1.dp, FoldLauncherColors.AmberWarning.copy(alpha = 0.65f), RoundedCornerShape(18.dp))
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "⛺ TENT MODE STANDBY ACTIVE · $angleText",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = FoldLauncherColors.AmberWarning
+                )
+                Text(
+                    text = "120Hz OLED bedside & desk ambient HUD · Tap to restore automatic posture",
+                    fontSize = 10.sp,
+                    color = FoldLauncherColors.TextSecondary
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(FoldLauncherColors.CyanGlow)
+                    .border(1.dp, FoldLauncherColors.ElectricCyan, RoundedCornerShape(12.dp))
+                    .clickable(onClick = onExitTentMode)
+                    .padding(horizontal = 12.dp, vertical = 7.dp)
+            ) {
+                Text(
+                    text = "Exit Tent Mode (AUTO)",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = FoldLauncherColors.CyanBright
+                )
+            }
+        }
+
+        TentModeStandbyHud(
+            hingeAngleDegrees = hingeAngleDegrees,
+            batteryPct = batteryPct,
+            isCharging = isCharging,
+            nextEventText = nextEventText,
+            vcSummary = vcSummary,
+            onTalkToVc = { vcMonitor.launchVcVoiceTalk() },
+            onOpenVcApp = { vcMonitor.launchVc(null) },
+            onExitTentMode = onExitTentMode
+        )
+    }
+}
+
 /**
  * One-handed Cover Screen (Z Fold 8 folded) & Standard Slab Phone (Galaxy S23 Ultra) Home Screen.
  * Combines:
@@ -85,6 +251,9 @@ import kotlinx.coroutines.launch
 @Composable
 fun CoverOrSlabHomeScreen(
     postureState: DevicePostureState,
+    postureOverride: PostureOverride = PostureOverride.AUTO,
+    onCyclePostureOverride: (() -> Unit)? = null,
+    onSetPostureOverride: ((PostureOverride) -> Unit)? = null,
     allApps: List<AppEntry>,
     pinnedCoverApps: List<AppEntry>,
     dockApps: List<AppEntry>,
@@ -121,6 +290,7 @@ fun CoverOrSlabHomeScreen(
     val coroutineScope = rememberCoroutineScope()
     val spatialTilt = rememberSpatialTiltState(enabled = true, hingeAngleFactor = 0f)
 
+    var selectedCategory by remember { mutableStateOf("All") }
     var activeLetter by remember { mutableStateOf<Char?>(null) }
     var showCompanionCards by remember { mutableStateOf(true) }
     var arcTriggerGeneration by remember { mutableIntStateOf(0) }
@@ -128,8 +298,14 @@ fun CoverOrSlabHomeScreen(
     var arcStartExpanded by remember { mutableStateOf(false) }
 
     val allAppsMap = remember(allApps) { allApps.associateBy { it.packageName } }
-    val letters = remember(allApps) {
-        val available = allApps.map { it.firstLetter }.distinct().sorted()
+    val categories = remember(allApps) {
+        (CORE_DRAWER_CATEGORY_PILLS + allApps.map { it.category }.distinct().sorted()).distinct()
+    }
+    val filteredApps = remember(allApps, selectedCategory) {
+        filterAppsByDrawerPill(allApps, selectedCategory)
+    }
+    val letters = remember(filteredApps) {
+        val available = filteredApps.map { it.firstLetter }.distinct().sorted()
         if (available.isEmpty()) ('A'..'Z').toList() else available
     }
     val radialArcApps = remember(pinnedCoverApps, recentApps, allApps) {
@@ -160,11 +336,24 @@ fun CoverOrSlabHomeScreen(
                 isCharging = isCharging,
                 nextEventText = nextEventText,
                 isDeXConnected = isDeXConnected,
+                hingeAngleDegrees = postureState.hingeAngleDegrees,
+                postureOverrideLabel = postureOverride.shortLabel,
+                onCyclePostureOverride = onCyclePostureOverride,
                 onClockClick = onClockClick,
                 onSearchPillClick = onOpenSearch,
                 onSettingsClick = onOpenSettings,
                 modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.7f)
             )
+
+            if (postureState.isTentMode) {
+                TentModeStandbyBannerCard(
+                    hingeAngleDegrees = postureState.hingeAngleDegrees,
+                    batteryPct = batteryPct,
+                    isCharging = isCharging,
+                    nextEventText = nextEventText,
+                    onExitTentMode = { onSetPostureOverride?.invoke(PostureOverride.AUTO) }
+                )
+            }
 
             // Section header with toggle for 120Hz Native Companion & VC Cards
             Row(
@@ -175,7 +364,7 @@ fun CoverOrSlabHomeScreen(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "COVER / SLAB · ${allApps.size} APPS · 3D PARALLAX",
+                    text = "COVER / SLAB · ${filteredApps.size} APPS · 3D PARALLAX",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.ExtraBold,
                     color = FoldLauncherColors.ElectricCyan
@@ -215,6 +404,9 @@ fun CoverOrSlabHomeScreen(
                         isDefaultLauncher = isDefaultLauncher,
                         quickNoteText = quickNoteText,
                         onQuickNoteChange = onQuickNoteChange,
+                        hingeAngleDegrees = postureState.hingeAngleDegrees,
+                        customAppPairs = appPairs,
+                        onLaunchAppPair = onLaunchAppPair,
                         spatialTiltState = spatialTilt,
                         onOpenSpotlight = onOpenSearch,
                         onToggleRadialArc = {
@@ -264,6 +456,13 @@ fun CoverOrSlabHomeScreen(
                 }
             }
 
+            // App Drawer Category Filter Pills (All, VC & Dev, Frequent, System)
+            AppDrawerCategoryPillsBar(
+                categories = categories,
+                selectedCategory = selectedCategory,
+                onSelectCategory = { selectedCategory = it }
+            )
+
             // Main App Grid + Right-Edge One-Handed AlphabetWaveScrubber
             Row(
                 modifier = Modifier
@@ -282,7 +481,7 @@ fun CoverOrSlabHomeScreen(
                         .fillMaxHeight()
                 ) {
                     items(
-                        items = allApps,
+                        items = filteredApps,
                         key = { "${it.packageName}/${it.activityName}" }
                     ) { app ->
                         AppIconTile(
@@ -301,7 +500,7 @@ fun CoverOrSlabHomeScreen(
                     activeLetter = activeLetter,
                     onLetterSelected = { letter ->
                         activeLetter = letter
-                        val targetIdx = allApps.indexOfFirst { it.firstLetter == letter }
+                        val targetIdx = filteredApps.indexOfFirst { it.firstLetter == letter }
                         if (targetIdx >= 0) {
                             coroutineScope.launch {
                                 gridState.scrollToItem(targetIdx)
@@ -350,6 +549,9 @@ fun CoverOrSlabHomeScreen(
 @Composable
 fun UnfoldedInnerDashboardScreen(
     postureState: DevicePostureState,
+    postureOverride: PostureOverride = PostureOverride.AUTO,
+    onCyclePostureOverride: (() -> Unit)? = null,
+    onSetPostureOverride: ((PostureOverride) -> Unit)? = null,
     allApps: List<AppEntry>,
     pinnedInnerApps: List<AppEntry>,
     dockApps: List<AppEntry>,
@@ -398,14 +600,10 @@ fun UnfoldedInnerDashboardScreen(
 
     val allAppsMap = remember(allApps) { allApps.associateBy { it.packageName } }
     val categories = remember(allApps) {
-        listOf("All", "Frequent") + allApps.map { it.category }.distinct().sorted()
+        (CORE_DRAWER_CATEGORY_PILLS + allApps.map { it.category }.distinct().sorted()).distinct()
     }
     val filteredApps = remember(allApps, selectedCategory) {
-        when (selectedCategory) {
-            "All" -> allApps
-            "Frequent" -> allApps.sortedByDescending { it.launchCount }.take(18)
-            else -> allApps.filter { it.category.equals(selectedCategory, ignoreCase = true) }
-        }
+        filterAppsByDrawerPill(allApps, selectedCategory)
     }
     val letters = remember(filteredApps) {
         val available = filteredApps.map { it.firstLetter }.distinct().sorted()
@@ -450,11 +648,24 @@ fun UnfoldedInnerDashboardScreen(
                 isCharging = isCharging,
                 nextEventText = nextEventText,
                 isDeXConnected = isDeXConnected,
+                hingeAngleDegrees = postureState.hingeAngleDegrees,
+                postureOverrideLabel = postureOverride.shortLabel,
+                onCyclePostureOverride = onCyclePostureOverride,
                 onClockClick = onClockClick,
                 onSearchPillClick = onOpenSearch,
                 onSettingsClick = onOpenSettings,
                 modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.65f)
             )
+
+            if (postureState.isTentMode) {
+                TentModeStandbyBannerCard(
+                    hingeAngleDegrees = postureState.hingeAngleDegrees,
+                    batteryPct = batteryPct,
+                    isCharging = isCharging,
+                    nextEventText = nextEventText,
+                    onExitTentMode = { onSetPostureOverride?.invoke(PostureOverride.AUTO) }
+                )
+            }
 
             // 2. Dual-Hemisphere Inner Workspace (Left Dashboard + Hinge Gutter + Right App Matrix)
             Row(
@@ -486,6 +697,9 @@ fun UnfoldedInnerDashboardScreen(
                         isDefaultLauncher = isDefaultLauncher,
                         quickNoteText = quickNoteText,
                         onQuickNoteChange = onQuickNoteChange,
+                        hingeAngleDegrees = postureState.hingeAngleDegrees,
+                        customAppPairs = appPairs,
+                        onLaunchAppPair = onLaunchAppPair,
                         spatialTiltState = spatialTilt,
                         onOpenSpotlight = onOpenSearch,
                         onToggleRadialArc = {
@@ -617,41 +831,12 @@ fun UnfoldedInnerDashboardScreen(
                         .padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    // Category Filter Bar
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        categories.forEach { category ->
-                            val active = category == selectedCategory
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(
-                                        if (active) FoldLauncherColors.CyanGlow
-                                        else FoldLauncherColors.GlassSurfaceHighlight
-                                    )
-                                    .border(
-                                        1.dp,
-                                        if (active) FoldLauncherColors.ElectricCyan
-                                        else FoldLauncherColors.GlassBorder,
-                                        RoundedCornerShape(14.dp)
-                                    )
-                                    .clickable { selectedCategory = category }
-                                    .padding(horizontal = 12.dp, vertical = 6.dp)
-                            ) {
-                                Text(
-                                    text = category,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (active) FoldLauncherColors.CyanBright else FoldLauncherColors.TextSecondary
-                                )
-                            }
-                        }
-                    }
+                    // Category Filter Bar (All, VC & Dev, Frequent, System + categories)
+                    AppDrawerCategoryPillsBar(
+                        categories = categories,
+                        selectedCategory = selectedCategory,
+                        onSelectCategory = { selectedCategory = it }
+                    )
 
                     Row(
                         modifier = Modifier
@@ -740,6 +925,9 @@ fun UnfoldedInnerDashboardScreen(
 @Composable
 fun FlexTabletopHomeScreen(
     postureState: DevicePostureState,
+    postureOverride: PostureOverride = PostureOverride.AUTO,
+    onCyclePostureOverride: (() -> Unit)? = null,
+    onSetPostureOverride: ((PostureOverride) -> Unit)? = null,
     allApps: List<AppEntry>,
     favoriteApps: List<AppEntry>,
     dockApps: List<AppEntry>,
@@ -777,6 +965,7 @@ fun FlexTabletopHomeScreen(
     val allAppsMap = remember(allApps) { allApps.associateBy { it.packageName } }
 
     var showVirtualTrackpad by remember { mutableStateOf(true) }
+    var selectedCategory by remember { mutableStateOf("All") }
 
     val deckApps = remember(favoriteApps, allApps) {
         if (favoriteApps.isNotEmpty()) {
@@ -784,6 +973,12 @@ fun FlexTabletopHomeScreen(
         } else {
             allApps
         }
+    }
+    val categories = remember(deckApps) {
+        (CORE_DRAWER_CATEGORY_PILLS + deckApps.map { it.category }.distinct().sorted()).distinct()
+    }
+    val filteredDeckApps = remember(deckApps, selectedCategory) {
+        filterAppsByDrawerPill(deckApps, selectedCategory)
     }
 
     Column(
@@ -812,11 +1007,24 @@ fun FlexTabletopHomeScreen(
                 isCharging = isCharging,
                 nextEventText = nextEventText,
                 isDeXConnected = isDeXConnected,
+                hingeAngleDegrees = postureState.hingeAngleDegrees,
+                postureOverrideLabel = postureOverride.shortLabel,
+                onCyclePostureOverride = onCyclePostureOverride,
                 onClockClick = onClockClick,
                 onSearchPillClick = onOpenSearch,
                 onSettingsClick = onOpenSettings,
                 modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.8f)
             )
+
+            if (postureState.isTentMode) {
+                TentModeStandbyBannerCard(
+                    hingeAngleDegrees = postureState.hingeAngleDegrees,
+                    batteryPct = batteryPct,
+                    isCharging = isCharging,
+                    nextEventText = nextEventText,
+                    onExitTentMode = { onSetPostureOverride?.invoke(PostureOverride.AUTO) }
+                )
+            }
 
             NativeDashboardCards(
                 postureState = postureState,
@@ -833,6 +1041,9 @@ fun FlexTabletopHomeScreen(
                 isDefaultLauncher = isDefaultLauncher,
                 quickNoteText = quickNoteText,
                 onQuickNoteChange = onQuickNoteChange,
+                hingeAngleDegrees = postureState.hingeAngleDegrees,
+                customAppPairs = appPairs,
+                onLaunchAppPair = onLaunchAppPair,
                 spatialTiltState = spatialTilt,
                 onOpenSpotlight = onOpenSearch
             )
@@ -912,9 +1123,16 @@ fun FlexTabletopHomeScreen(
                     onQuickLaunchVc = {
                         vcMonitor.launchVc(null)
                     },
+                    hingeAngleDegrees = postureState.hingeAngleDegrees,
                     modifier = Modifier.weight(1f)
                 )
             } else {
+                AppDrawerCategoryPillsBar(
+                    categories = categories,
+                    selectedCategory = selectedCategory,
+                    onSelectCategory = { selectedCategory = it }
+                )
+
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(postureState.recommendedGridColumns.coerceAtLeast(5)),
                     contentPadding = PaddingValues(4.dp),
@@ -929,7 +1147,7 @@ fun FlexTabletopHomeScreen(
                         .padding(8.dp)
                 ) {
                     items(
-                        items = deckApps,
+                        items = filteredDeckApps,
                         key = { "${it.packageName}/${it.activityName}" }
                     ) { app ->
                         AppIconTile(

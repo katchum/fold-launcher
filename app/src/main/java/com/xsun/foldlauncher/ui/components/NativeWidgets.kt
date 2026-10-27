@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -42,6 +43,7 @@ import androidx.compose.ui.unit.sp
 import com.xsun.foldlauncher.hud.FloatingHudControlCard
 import com.xsun.foldlauncher.hud.FloatingHudController
 import com.xsun.foldlauncher.hud.VcHudAgentStatus
+import com.xsun.foldlauncher.model.AppPair
 import com.xsun.foldlauncher.posture.DevicePostureState
 import com.xsun.foldlauncher.service.SystemTweaker
 import com.xsun.foldlauncher.spatial.SpatialTiltState
@@ -52,6 +54,32 @@ import com.xsun.foldlauncher.vc.VcBackgroundMonitor
 import com.xsun.foldlauncher.vc.VcCommandCenterCard
 import com.xsun.foldlauncher.vc.VcConnectionConfig
 import com.xsun.foldlauncher.vc.VcLiveSummary
+import com.xsun.foldlauncher.vc.VcPackages
+import kotlin.math.roundToInt
+
+/**
+ * Built-in Z Fold 8 Multi-Window Power Presets (1-tap side-by-side split-screen).
+ */
+val DefaultZFold8AppPairPresets: List<AppPair> = listOf(
+    AppPair(
+        id = "preset_vc_termux",
+        title = "VC + Termux",
+        primaryPackage = VcPackages.PREVIEW,
+        secondaryPackage = VcPackages.TERMUX_PACKAGE
+    ),
+    AppPair(
+        id = "preset_vc_prod_compare",
+        title = "VC Prod + Compare",
+        primaryPackage = VcPackages.RELEASE,
+        secondaryPackage = VcPackages.PREVIEW
+    ),
+    AppPair(
+        id = "preset_vc_chrome",
+        title = "VC + Chrome",
+        primaryPackage = VcPackages.PREVIEW,
+        secondaryPackage = VcPackages.CHROME_PACKAGE
+    )
+)
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -75,17 +103,22 @@ fun NativeDashboardCards(
     vcSummaryOverride: VcLiveSummary? = null,
     vcConfigOverride: VcConnectionConfig? = null,
     onOpenSpotlight: (() -> Unit)? = null,
-    onToggleRadialArc: (() -> Unit)? = null
+    onToggleRadialArc: (() -> Unit)? = null,
+    hingeAngleDegrees: Float? = null,
+    customAppPairs: List<AppPair> = emptyList(),
+    onLaunchAppPair: ((AppPair) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val vcMonitor = remember(context) { VcBackgroundMonitor.getInstance(context) }
     val monitorSummary by vcMonitor.liveSummary.collectAsState()
     val monitorConfig by vcMonitor.config.collectAsState()
     val lastSendFeedback by vcMonitor.lastSendFeedback.collectAsState()
-    val hudState by FloatingHudController.state.collectAsState()
 
     val effectiveVcSummary = vcSummaryOverride ?: monitorSummary
     val effectiveVcConfig = vcConfigOverride ?: monitorConfig
+
+    val sensorHingeAngle = rememberHardwareHingeAngleDegrees()
+    val effectiveHingeAngle = hingeAngleDegrees ?: sensorHingeAngle
 
     val hingeFactor = when {
         postureState.isFlexTabletop -> 0.55f
@@ -193,98 +226,26 @@ fun NativeDashboardCards(
             modifier = Modifier.spatialParallaxCard(tilt = tilt, depthLayer = 1.15f)
         )
 
-        // 3. Z Fold 8 System Companion, DeX & Floating Micro-HUD Quick Control Card
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .spatialParallaxCard(tilt = tilt, depthLayer = 1.0f)
-                .clip(cardShape)
-                .background(FoldLauncherColors.GlassSurface)
-                .border(1.dp, FoldLauncherColors.GlassBorder, cardShape)
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "Z FOLD 8 COMPANION · DeX · HUD",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = FoldLauncherColors.ElectricCyan
-                    )
-                    StatusBadgeDot(
-                        label = if (isWriteSecureSettingsGranted) "ADB OK" else "ADB Required",
-                        ok = isWriteSecureSettingsGranted
-                    )
-                    StatusBadgeDot(
-                        label = if (isAccessibilityActive) "A11y OK" else "A11y Off",
-                        ok = isAccessibilityActive
-                    )
-                }
-                Text(
-                    text = "${postureState.widthDp}×${postureState.heightDp}dp · ${if (isCharging) "⚡" else ""}$batteryPct%",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = FoldLauncherColors.TextSecondary
-                )
-            }
-
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                QuickTweakPill(
-                    title = if (hudState.isEnabled) "◉ Micro-HUD Pill: ON" else "◎ Micro-HUD Pill: OFF",
-                    active = hudState.isEnabled,
-                    onClick = {
-                        val attached = FloatingHudController.setHudEnabled(context, !hudState.isEnabled)
-                        if (!hudState.isEnabled && !attached) {
-                            SystemTweaker.openAccessibilitySettings(context)
-                        }
-                    }
-                )
-                QuickTweakPill(
-                    title = if (showFloatingHudConfigurator) "▴ Hide HUD Studio" else "▾ Configure HUD",
-                    active = showFloatingHudConfigurator,
-                    onClick = { showFloatingHudConfigurator = !showFloatingHudConfigurator }
-                )
-                if (onToggleRadialArc != null) {
-                    QuickTweakPill(
-                        title = "◡ One-Handed Arc Deck",
-                        active = false,
-                        onClick = onToggleRadialArc
-                    )
-                }
-                QuickTweakPill(
-                    title = if (lockScreenRotationEnabled) "⟳ Lock Rotation: ON" else "⟳ Lock Rotation: OFF",
-                    active = lockScreenRotationEnabled,
-                    onClick = onToggleLockRotation
-                )
-                QuickTweakPill(
-                    title = "⌨ Enforce Gboard in DeX",
-                    active = isWriteSecureSettingsGranted,
-                    onClick = onEnforceGboardDeX
-                )
-                QuickTweakPill(
-                    title = "🔒 Lock Screen",
-                    active = isAccessibilityActive,
-                    onClick = onLockScreenNow
-                )
-                QuickTweakPill(
-                    title = "✦ Wallpaper",
-                    active = false,
-                    onClick = onOpenWallpaperPicker
-                )
-            }
-        }
+        // 3. Z Fold 8 System Dashboard Card (120Hz VRR & Hinge Angle Telemetry + Companion Tweak Pills)
+        SystemDashboardCard(
+            postureState = postureState,
+            batteryPct = batteryPct,
+            isCharging = isCharging,
+            isAccessibilityActive = isAccessibilityActive,
+            isWriteSecureSettingsGranted = isWriteSecureSettingsGranted,
+            lockScreenRotationEnabled = lockScreenRotationEnabled,
+            onToggleLockRotation = onToggleLockRotation,
+            onEnforceGboardDeX = onEnforceGboardDeX,
+            onLockScreenNow = onLockScreenNow,
+            onOpenWallpaperPicker = onOpenWallpaperPicker,
+            hingeAngleDegrees = effectiveHingeAngle,
+            showFloatingHudConfigurator = showFloatingHudConfigurator,
+            onToggleFloatingHudConfigurator = {
+                showFloatingHudConfigurator = !showFloatingHudConfigurator
+            },
+            onToggleRadialArc = onToggleRadialArc,
+            modifier = Modifier.spatialParallaxCard(tilt = tilt, depthLayer = 1.0f)
+        )
 
         // Expandable System-Wide Floating Micro-HUD Pill Studio
         if (showFloatingHudConfigurator) {
@@ -296,7 +257,14 @@ fun NativeDashboardCards(
             )
         }
 
-        // 4. Inline Interactive 120Hz Quick Scratchpad Card (Zero-IPC BasicTextField right on Home Screen)
+        // 4. Z Fold 8 Multi-App Pair Presets Card (1-Tap Split-Screen Power Pairs)
+        AppPairsQuickCard(
+            customAppPairs = customAppPairs,
+            onLaunchAppPair = onLaunchAppPair,
+            modifier = Modifier.spatialParallaxCard(tilt = tilt, depthLayer = 0.95f)
+        )
+
+        // 5. Inline Interactive 120Hz Quick Scratchpad Card (Zero-IPC BasicTextField right on Home Screen)
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -360,6 +328,319 @@ fun NativeDashboardCards(
                     cursorBrush = SolidColor(FoldLauncherColors.ElectricCyan),
                     modifier = Modifier.fillMaxWidth()
                 )
+            }
+        }
+    }
+}
+
+/**
+ * Z Fold 8 System Dashboard Card with live 120Hz VRR & Hinge Angle Sensor Telemetry Gauge
+ * (`120Hz VRR • Hinge 180°`) and quick hardware/DeX/HUD controls.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun SystemDashboardCard(
+    postureState: DevicePostureState,
+    batteryPct: Int,
+    isCharging: Boolean,
+    isAccessibilityActive: Boolean,
+    isWriteSecureSettingsGranted: Boolean,
+    lockScreenRotationEnabled: Boolean,
+    onToggleLockRotation: () -> Unit,
+    onEnforceGboardDeX: () -> Unit,
+    onLockScreenNow: () -> Unit,
+    onOpenWallpaperPicker: () -> Unit,
+    modifier: Modifier = Modifier,
+    hingeAngleDegrees: Float? = null,
+    showFloatingHudConfigurator: Boolean = false,
+    onToggleFloatingHudConfigurator: (() -> Unit)? = null,
+    onToggleRadialArc: (() -> Unit)? = null
+) {
+    val context = LocalContext.current
+    val hudState by FloatingHudController.state.collectAsState()
+    val sensorHingeAngle = rememberHardwareHingeAngleDegrees()
+
+    val resolvedHingeDeg = (hingeAngleDegrees ?: sensorHingeAngle ?: when {
+        postureState.isFlexTabletop -> 118f
+        postureState.isBookPosture -> 135f
+        postureState.isUnfoldedInner -> 180f
+        else -> 0f
+    }).coerceIn(0f, 180f)
+
+    val roundedHingeDeg = resolvedHingeDeg.roundToInt()
+    val hingeProgress = (resolvedHingeDeg / 180f).coerceIn(0.04f, 1f)
+    val postureModeText = when {
+        roundedHingeDeg in 25..74 -> "TENT"
+        postureState.isFlexTabletop || roundedHingeDeg in 75..145 -> "FLEX"
+        postureState.isBookPosture -> "BOOK"
+        postureState.isUnfoldedInner || roundedHingeDeg >= 146 -> "UNFOLDED"
+        else -> "COVER"
+    }
+
+    val cardShape = RoundedCornerShape(22.dp)
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(cardShape)
+            .background(FoldLauncherColors.GlassSurface)
+            .border(1.dp, FoldLauncherColors.GlassBorder, cardShape)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Z FOLD 8 COMPANION · DeX · HUD",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = FoldLauncherColors.ElectricCyan
+                )
+                StatusBadgeDot(
+                    label = if (isWriteSecureSettingsGranted) "ADB OK" else "ADB Required",
+                    ok = isWriteSecureSettingsGranted
+                )
+                StatusBadgeDot(
+                    label = if (isAccessibilityActive) "A11y OK" else "A11y Off",
+                    ok = isAccessibilityActive
+                )
+            }
+            Text(
+                text = "${postureState.widthDp}×${postureState.heightDp}dp · ${if (isCharging) "⚡" else ""}$batteryPct%",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = FoldLauncherColors.TextSecondary
+            )
+        }
+
+        // Live Z Fold 8 Hinge & Display VRR Telemetry Gauge ("120Hz VRR • Hinge 180°")
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(FoldLauncherColors.DeepVoid.copy(alpha = 0.65f))
+                .border(1.dp, FoldLauncherColors.GlassBorder, RoundedCornerShape(14.dp))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(FoldLauncherColors.EmeraldSuccess)
+                    )
+                    Text(
+                        text = "120Hz VRR • Hinge ${roundedHingeDeg}°",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = FoldLauncherColors.CyanBright
+                    )
+                }
+                Text(
+                    text = "$postureModeText · LTPO 1–120Hz",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = FoldLauncherColors.TextSecondary
+                )
+            }
+
+            // Visual Hinge Angle Bar (0° Closed Cover -> 90° Flex -> 180° Flat Unfolded)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(FoldLauncherColors.GlassSurfaceHighlight)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(hingeProgress)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(
+                            Brush.horizontalGradient(
+                                colors = listOf(
+                                    FoldLauncherColors.IndigoAccent,
+                                    FoldLauncherColors.ElectricCyan,
+                                    FoldLauncherColors.EmeraldSuccess
+                                )
+                            )
+                        )
+                )
+            }
+        }
+
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            QuickTweakPill(
+                title = if (hudState.isEnabled) "◉ Micro-HUD Pill: ON" else "◎ Micro-HUD Pill: OFF",
+                active = hudState.isEnabled,
+                onClick = {
+                    val attached = FloatingHudController.setHudEnabled(context, !hudState.isEnabled)
+                    if (!hudState.isEnabled && !attached) {
+                        SystemTweaker.openAccessibilitySettings(context)
+                    }
+                }
+            )
+            if (onToggleFloatingHudConfigurator != null) {
+                QuickTweakPill(
+                    title = if (showFloatingHudConfigurator) "▴ Hide HUD Studio" else "▾ Configure HUD",
+                    active = showFloatingHudConfigurator,
+                    onClick = onToggleFloatingHudConfigurator
+                )
+            }
+            if (onToggleRadialArc != null) {
+                QuickTweakPill(
+                    title = "◡ One-Handed Arc Deck",
+                    active = false,
+                    onClick = onToggleRadialArc
+                )
+            }
+            QuickTweakPill(
+                title = if (lockScreenRotationEnabled) "⟳ Lock Rotation: ON" else "⟳ Lock Rotation: OFF",
+                active = lockScreenRotationEnabled,
+                onClick = onToggleLockRotation
+            )
+            QuickTweakPill(
+                title = "⌨ Enforce Gboard in DeX",
+                active = isWriteSecureSettingsGranted,
+                onClick = onEnforceGboardDeX
+            )
+            QuickTweakPill(
+                title = "🔒 Lock Screen",
+                active = isAccessibilityActive,
+                onClick = onLockScreenNow
+            )
+            QuickTweakPill(
+                title = "✦ Wallpaper",
+                active = false,
+                onClick = onOpenWallpaperPicker
+            )
+        }
+    }
+}
+
+/**
+ * 1-Tap Z Fold 8 Multi-Window App Pair Launcher Card with built-in power presets:
+ * - `VC + Termux`
+ * - `VC Prod + Compare`
+ * - `VC + Chrome`
+ * Plus any user-customized AppPairs.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun AppPairsQuickCard(
+    modifier: Modifier = Modifier,
+    customAppPairs: List<AppPair> = emptyList(),
+    onLaunchAppPair: ((AppPair) -> Unit)? = null
+) {
+    val context = LocalContext.current
+    val effectivePairs = remember(customAppPairs) {
+        if (customAppPairs.isEmpty()) {
+            DefaultZFold8AppPairPresets
+        } else {
+            (customAppPairs + DefaultZFold8AppPairPresets).distinctBy {
+                "${it.primaryPackage}|${it.secondaryPackage}"
+            }
+        }
+    }
+
+    val cardShape = RoundedCornerShape(22.dp)
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(cardShape)
+            .background(FoldLauncherColors.GlassSurface)
+            .border(1.dp, FoldLauncherColors.GlassBorder, cardShape)
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = "Z FOLD 8 SPLIT-SCREEN POWER PAIRS",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = FoldLauncherColors.CyanBright
+            )
+            Text(
+                text = "1-TAP MULTI-WINDOW",
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                color = FoldLauncherColors.TextSecondary
+            )
+        }
+
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            effectivePairs.forEach { pair ->
+                val chipShape = RoundedCornerShape(14.dp)
+                Row(
+                    modifier = Modifier
+                        .clip(chipShape)
+                        .background(
+                            Brush.horizontalGradient(
+                                colors = listOf(
+                                    FoldLauncherColors.IndigoAccent.copy(alpha = 0.28f),
+                                    FoldLauncherColors.GlassSurfaceHighlight
+                                )
+                            )
+                        )
+                        .border(1.dp, FoldLauncherColors.GlassBorderStrong, chipShape)
+                        .clickable {
+                            if (onLaunchAppPair != null) {
+                                onLaunchAppPair(pair)
+                            } else {
+                                SystemTweaker.launchSplitScreenPair(
+                                    context = context,
+                                    primaryPackage = pair.primaryPackage,
+                                    secondaryPackage = pair.secondaryPackage
+                                )
+                            }
+                        }
+                        .padding(horizontal = 11.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "⊞",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = FoldLauncherColors.ElectricCyan
+                    )
+                    Text(
+                        text = pair.title,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = FoldLauncherColors.TextPrimary
+                    )
+                }
             }
         }
     }

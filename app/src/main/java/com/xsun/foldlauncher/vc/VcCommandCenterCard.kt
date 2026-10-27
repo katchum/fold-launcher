@@ -74,13 +74,21 @@ fun VcCommandCenterCard(
     onMarkAttentionRead: (eventId: String?, markAll: Boolean) -> Unit,
     onUpdateConfig: (serverUrl: String, authToken: String, monitorEnabled: Boolean, notifyBackground: Boolean) -> Unit,
     modifier: Modifier = Modifier,
-    onTalkVc: ((sessionId: String?) -> Unit)? = null
+    onTalkVc: ((sessionId: String?) -> Unit)? = null,
+    onSplitLaunch: ((secondaryPackage: String) -> Unit)? = null,
+    onSelectVariant: ((VcVariant) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val cardShape = RoundedCornerShape(22.dp)
     var showConfigEditor by remember { mutableStateOf(false) }
     var selectedSessionId by remember { mutableStateOf<String?>(null) }
+    var selectedVariant by remember(summary.selectedVariant) { mutableStateOf(summary.selectedVariant) }
     var quickMessageDraft by remember { mutableStateOf("") }
+
+    val detectedVariants = remember(context, summary.installedVariants) {
+        val probed = VcBridgeClient.resolveInstalledVcVariants(context)
+        if (probed.isNotEmpty()) probed else summary.installedVariants
+    }
 
     var draftServerUrl by remember(config.serverUrl) { mutableStateOf(config.serverUrl) }
     var draftAuthToken by remember(config.authToken) { mutableStateOf(config.authToken) }
@@ -93,6 +101,32 @@ fun VcCommandCenterCard(
             ?: summary.activeAgents.firstOrNull { it.role.equals("general", ignoreCase = true) }
             ?: summary.activeAgents.firstOrNull()
     }
+
+    val approvalSession = remember(summary.sessions, summary.attentionItems) {
+        summary.sessions.firstOrNull {
+            it.needsApproval || it.state == VcRunState.AWAITING_APPROVAL
+        } ?: summary.attentionItems.firstOrNull { it.kind == VcAttentionKind.APPROVAL }?.let { item ->
+            VcAgentStatus(
+                sessionId = item.sessionId,
+                name = item.agentName,
+                project = item.projectName,
+                role = "worker",
+                status = "approval",
+                approvalCount = 1,
+                hasUnreadUpdate = true,
+                projectId = item.projectId
+            )
+        }
+    }
+
+    val approvalEvent = remember(summary.attentionItems, approvalSession) {
+        summary.attentionItems.firstOrNull {
+            it.kind == VcAttentionKind.APPROVAL &&
+                (approvalSession == null || it.sessionId == approvalSession.sessionId)
+        } ?: summary.attentionItems.firstOrNull { it.kind == VcAttentionKind.APPROVAL }
+    }
+
+    val hasPendingApprovalBanner = summary.pendingApprovals > 0 || approvalSession != null || approvalEvent != null
 
     val borderColor = when {
         summary.approvalCount > 0 -> FoldLauncherColors.AmberWarning
@@ -148,7 +182,7 @@ fun VcCommandCenterCard(
                 )
                 Column {
                     Text(
-                        text = "VC COMMAND CENTER · BG BRIDGE",
+                        text = "VC COMMAND CENTER · ${selectedVariant.shortBadge} · BG BRIDGE",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.ExtraBold,
                         color = FoldLauncherColors.CyanBright,
@@ -196,6 +230,111 @@ fun VcCommandCenterCard(
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 )
             }
+        }
+
+        // 1b. Multi-Instance VC Variant Selector Pill Bar (PROD | PREVIEW | COMPARE)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = "INSTANCE:",
+                fontSize = 9.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = FoldLauncherColors.TextMuted
+            )
+            VcVariant.entries.forEach { variant ->
+                val isSelected = selectedVariant == variant
+                val isInstalled = variant in detectedVariants ||
+                    (variant == VcVariant.PROD && summary.isVcInstalled)
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (isSelected) FoldLauncherColors.CyanGlow
+                            else FoldLauncherColors.GlassSurfaceHighlight
+                        )
+                        .border(
+                            1.dp,
+                            when {
+                                isSelected -> FoldLauncherColors.ElectricCyan
+                                isInstalled -> VcMintAccent.copy(alpha = 0.45f)
+                                else -> FoldLauncherColors.GlassBorder
+                            },
+                            RoundedCornerShape(10.dp)
+                        )
+                        .clickable {
+                            selectedVariant = variant
+                            try {
+                                VcBackgroundMonitor.getInstance(context).setSelectedVariant(variant)
+                            } catch (_: Throwable) {
+                            }
+                            onSelectVariant?.invoke(variant)
+                        }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(
+                                when {
+                                    isSelected -> FoldLauncherColors.ElectricCyan
+                                    isInstalled -> FoldLauncherColors.EmeraldSuccess
+                                    else -> FoldLauncherColors.TextMuted
+                                }
+                            )
+                    )
+                    Text(
+                        text = "${variant.shortBadge} (${variant.label.removePrefix("VC ")})",
+                        fontSize = 10.sp,
+                        fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                        color = if (isSelected) FoldLauncherColors.CyanBright else FoldLauncherColors.TextPrimary
+                    )
+                }
+            }
+        }
+
+        // 1c. High-Visibility Amber Pulse Pending Approval Action Banner
+        if (hasPendingApprovalBanner) {
+            VcPendingApprovalBanner(
+                approvalCount = maxOf(summary.pendingApprovals, 1),
+                session = approvalSession,
+                attentionItem = approvalEvent,
+                onOpenAndApprove = {
+                    val targetSid = approvalSession?.sessionId ?: approvalEvent?.sessionId ?: selectedAgent?.sessionId
+                    selectedSessionId = targetSid
+                    val openedPkg = VcBridgeClient.launchVcApp(
+                        context = context,
+                        config = config,
+                        sessionId = targetSid,
+                        projectId = approvalSession?.projectId ?: approvalEvent?.projectId,
+                        preferredPackage = selectedVariant.packageName
+                    )
+                    if (!openedPkg) {
+                        onOpenVc(targetSid)
+                    }
+                },
+                onSplitWithTermux = {
+                    val targetSid = approvalSession?.sessionId ?: approvalEvent?.sessionId ?: selectedAgent?.sessionId
+                    if (onSplitLaunch != null) {
+                        onSplitLaunch(VcPackages.TERMUX_PACKAGE)
+                    } else {
+                        VcBridgeClient.launchVcSplitScreen(
+                            context = context,
+                            config = config,
+                            preferredSecondaryPackage = VcPackages.TERMUX_PACKAGE,
+                            primaryPackage = selectedVariant.packageName,
+                            sessionId = targetSid
+                        )
+                    }
+                }
+            )
         }
 
         // 2. Live VC Agent Counters Strip (Working / Needs Approval / Unread / Failed)
@@ -255,12 +394,24 @@ fun VcCommandCenterCard(
             )
             VcActionPill(
                 text = if (summary.approvalCount > 0) {
-                    "⚡ Open VC (${summary.approvalCount} Approve)"
+                    "⚡ Open ${selectedVariant.shortBadge} (${summary.approvalCount} Approve)"
                 } else {
-                    "↗ Open VC"
+                    "↗ Open ${selectedVariant.label}"
                 },
                 emphasized = summary.approvalCount > 0,
-                onClick = { onOpenVc(selectedAgent?.sessionId) }
+                onClick = {
+                    val sid = selectedAgent?.sessionId
+                    val launched = VcBridgeClient.launchVcApp(
+                        context = context,
+                        config = config,
+                        sessionId = sid,
+                        projectId = selectedAgent?.projectId,
+                        preferredPackage = selectedVariant.packageName
+                    )
+                    if (!launched) {
+                        onOpenVc(sid)
+                    }
+                }
             )
             VcActionPill(
                 text = "◫ Split-Screen VC",
@@ -272,6 +423,91 @@ fun VcCommandCenterCard(
                     text = "✓ Mark All Read",
                     emphasized = false,
                     onClick = { onMarkAttentionRead(null, true) }
+                )
+            }
+        }
+
+        // 3b. Z Fold 8 Dual-Pane Quick-Stage Row (VC + Termux | Prod + Compare | Prod + Preview | VC + Chrome)
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Text(
+                text = "Z FOLD 8 DUAL-PANE QUICK-STAGE",
+                fontSize = 9.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = VcMintAccent
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                VcSplitComboChip(
+                    label = "Split: VC + Termux",
+                    onClick = {
+                        if (onSplitLaunch != null) {
+                            onSplitLaunch(VcPackages.TERMUX_PACKAGE)
+                        } else {
+                            VcBridgeClient.launchVcSplitScreen(
+                                context = context,
+                                config = config,
+                                preferredSecondaryPackage = VcPackages.TERMUX_PACKAGE,
+                                primaryPackage = selectedVariant.packageName,
+                                sessionId = selectedAgent?.sessionId
+                            )
+                        }
+                    }
+                )
+                VcSplitComboChip(
+                    label = "Split: Prod + Compare",
+                    onClick = {
+                        if (onSplitLaunch != null) {
+                            onSplitLaunch(VcPackages.COMPARE)
+                        } else {
+                            VcBridgeClient.launchVcSplitScreen(
+                                context = context,
+                                config = config,
+                                preferredSecondaryPackage = VcPackages.COMPARE,
+                                primaryPackage = VcPackages.RELEASE,
+                                sessionId = selectedAgent?.sessionId
+                            )
+                        }
+                    }
+                )
+                VcSplitComboChip(
+                    label = "Split: Prod + Preview",
+                    onClick = {
+                        if (onSplitLaunch != null) {
+                            onSplitLaunch(VcPackages.PREVIEW)
+                        } else {
+                            VcBridgeClient.launchVcSplitScreen(
+                                context = context,
+                                config = config,
+                                preferredSecondaryPackage = VcPackages.PREVIEW,
+                                primaryPackage = VcPackages.RELEASE,
+                                sessionId = selectedAgent?.sessionId
+                            )
+                        }
+                    }
+                )
+                VcSplitComboChip(
+                    label = "Split: VC + Chrome",
+                    onClick = {
+                        if (onSplitLaunch != null) {
+                            onSplitLaunch(VcPackages.CHROME_PACKAGE)
+                        } else {
+                            VcBridgeClient.launchVcSplitScreen(
+                                context = context,
+                                config = config,
+                                preferredSecondaryPackage = VcPackages.CHROME_PACKAGE,
+                                primaryPackage = selectedVariant.packageName,
+                                sessionId = selectedAgent?.sessionId
+                            )
+                        }
+                    }
                 )
             }
         }
@@ -601,6 +837,144 @@ fun VcCommandCenterCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun VcPendingApprovalBanner(
+    approvalCount: Int,
+    session: VcAgentStatus?,
+    attentionItem: VcAttentionItem?,
+    onOpenAndApprove: () -> Unit,
+    onSplitWithTermux: () -> Unit
+) {
+    val bannerShape = RoundedCornerShape(14.dp)
+    val sessionTitle = session?.title
+        ?: attentionItem?.let { "${it.agentName} · ${it.projectName}" }
+        ?: "Active VC Session"
+    val roleBadge = (session?.role ?: "worker").uppercase(Locale.ROOT)
+    val reasonText = attentionItem?.text?.takeIf { it.isNotBlank() }
+        ?: "Agent is awaiting tool/command approval to continue turn"
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(bannerShape)
+            .background(
+                Brush.horizontalGradient(
+                    colors = listOf(
+                        FoldLauncherColors.AmberWarning.copy(alpha = 0.24f),
+                        Color(0xFF281D0B).copy(alpha = 0.90f)
+                    )
+                )
+            )
+            .border(1.2.dp, FoldLauncherColors.AmberWarning, bannerShape)
+            .padding(horizontal = 11.dp, vertical = 9.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(FoldLauncherColors.AmberWarning)
+                )
+                Text(
+                    text = "APPROVAL REQUIRED ($approvalCount) · $roleBadge",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = FoldLauncherColors.AmberWarning,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Text(
+                text = sessionTitle,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                color = FoldLauncherColors.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        Text(
+            text = reasonText,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            color = FoldLauncherColors.TextPrimary,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(FoldLauncherColors.AmberWarning)
+                    .clickable(onClick = onOpenAndApprove)
+                    .padding(horizontal = 10.dp, vertical = 5.dp)
+            ) {
+                Text(
+                    text = "⚡ Open & Approve",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Color(0xFF1A1100)
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(FoldLauncherColors.GlassSurfaceHighlight)
+                    .border(1.dp, FoldLauncherColors.AmberWarning.copy(alpha = 0.65f), RoundedCornerShape(10.dp))
+                    .clickable(onClick = onSplitWithTermux)
+                    .padding(horizontal = 10.dp, vertical = 5.dp)
+            ) {
+                Text(
+                    text = "◫ Split w/ Termux",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = FoldLauncherColors.TextPrimary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun VcSplitComboChip(
+    label: String,
+    onClick: () -> Unit
+) {
+    val chipShape = RoundedCornerShape(10.dp)
+    Box(
+        modifier = Modifier
+            .clip(chipShape)
+            .background(VcOpSurface.copy(alpha = 0.92f))
+            .border(1.dp, VcMintAccent.copy(alpha = 0.42f), chipShape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 9.dp, vertical = 5.dp)
+    ) {
+        Text(
+            text = label,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            color = VcMintAccent,
+            maxLines = 1
+        )
     }
 }
 

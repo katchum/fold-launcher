@@ -1,6 +1,7 @@
 package com.xsun.foldlauncher.service
 
 import android.annotation.SuppressLint
+import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -9,8 +10,19 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.view.Surface
 import android.view.inputmethod.InputMethodManager
 import androidx.core.content.ContextCompat
+
+data class LockScreenStatus(
+    val isKeyguardLocked: Boolean,
+    val rotationAllowed: Boolean,
+    val faceUnlockInstantBypass: Boolean,
+    val foldCloseStayAwake: Boolean,
+    val lockShortcutsConfiguredForVc: Boolean,
+    val lockScreenHudOverlayEnabled: Boolean,
+    val autoCockpitOnWakeEnabled: Boolean
+)
 
 object SystemTweaker {
 
@@ -23,8 +35,18 @@ object SystemTweaker {
     const val VC_TALK_ACTION = "dev.agentconversation.widget.TALK"
     const val DEFAULT_VC_HOST_URL = "http://100.96.188.90:8080"
 
+    const val EXTRA_LOCK_SCREEN_COCKPIT = "com.xsun.foldlauncher.EXTRA_LOCK_SCREEN_COCKPIT"
+
     private const val KEY_LOCK_SCREEN_ALLOW_ROTATION = "lock_screen_allow_rotation"
+    private const val KEY_SUB_DISPLAY_ROTATION_LOCK = "sub_display_accelerometer_rotation"
     private const val KEY_DEX_ON_SCREEN_KEYBOARD_LOCATION = "dex_on_screen_keyboard_location"
+    private const val KEY_FACE_STAY_ON_LOCK_SCREEN = "face_stay_on_lock_screen"
+    private const val KEY_FOLD_LOCK_BEHAVIOR = "fold_lock_behavior_setting"
+    private const val KEY_LOCK_APPLICATION_SHORTCUT = "lock_application_shortcut"
+    private const val KEY_AOD_TAP_TO_SHOW_MODE = "aod_tap_to_show_mode"
+
+    const val FOLD_STAY_AWAKE_VALUE = "stay_awake_on_fold_key"
+    const val FOLD_SLEEP_VALUE = "sleep_on_fold_key"
 
     fun hasWriteSecureSettings(context: Context): Boolean {
         return ContextCompat.checkSelfPermission(
@@ -139,6 +161,198 @@ object SystemTweaker {
     }
 
     /**
+     * One UI 9.0 Face Unlock instant bypass (`face_stay_on_lock_screen = 0`).
+     * When `bypassSwipe == true`, unlocking with Face Recognition immediately enters the home screen
+     * or active app without requiring a manual swipe on the lock screen.
+     */
+    fun setFaceUnlockInstantBypass(context: Context, bypassSwipe: Boolean = true): Boolean {
+        if (!hasWriteSecureSettings(context)) return false
+        val stayOnLockValue = if (bypassSwipe) 0 else 1
+        return try {
+            Settings.Secure.putInt(context.contentResolver, KEY_FACE_STAY_ON_LOCK_SCREEN, stayOnLockValue)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun isFaceUnlockInstantBypassEnabled(context: Context): Boolean {
+        return try {
+            Settings.Secure.getInt(context.contentResolver, KEY_FACE_STAY_ON_LOCK_SCREEN, 1) == 0
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * One UI 9.0 Z Fold 8 fold-close continuity (`fold_lock_behavior_setting = stay_awake_on_fold_key`).
+     * Keeps the Cover Screen awake when folding the Z Fold 8 shut instead of locking immediately.
+     */
+    fun setFoldCloseStayAwake(context: Context, stayAwake: Boolean = true): Boolean {
+        val cr = context.contentResolver
+        val value = if (stayAwake) FOLD_STAY_AWAKE_VALUE else FOLD_SLEEP_VALUE
+        var updated = false
+        try {
+            if (Settings.System.canWrite(context) || hasWriteSecureSettings(context)) {
+                Settings.System.putString(cr, KEY_FOLD_LOCK_BEHAVIOR, value)
+                updated = true
+            }
+        } catch (_: Exception) {
+        }
+        try {
+            if (hasWriteSecureSettings(context)) {
+                Settings.Secure.putString(cr, KEY_FOLD_LOCK_BEHAVIOR, value)
+                Settings.Global.putString(cr, KEY_FOLD_LOCK_BEHAVIOR, value)
+                updated = true
+            }
+        } catch (_: Exception) {
+        }
+        return updated
+    }
+
+    fun isFoldCloseStayAwakeEnabled(context: Context): Boolean {
+        return try {
+            val cr = context.contentResolver
+            val sysVal = Settings.System.getString(cr, KEY_FOLD_LOCK_BEHAVIOR)
+                ?: Settings.Secure.getString(cr, KEY_FOLD_LOCK_BEHAVIOR)
+                ?: Settings.Global.getString(cr, KEY_FOLD_LOCK_BEHAVIOR)
+            sysVal == FOLD_STAY_AWAKE_VALUE
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Rebinds Samsung One UI's native bottom Lock Screen shortcuts (`lock_application_shortcut`)
+     * to VC (`dev.agentconversation.vci`) on the left and Fold8 Launcher on the right, plus enables
+     * Lock Screen landscape rotation and AOD tap-to-show.
+     */
+    fun setLockScreenShortcutsToVcAndLauncher(context: Context): Boolean {
+        val cr = context.contentResolver
+        val vcPkg = findInstalledVcPackage(context) ?: VC_PROD_PACKAGE
+        val shortcutSpec = "1;$vcPkg/dev.agentconversation.MainActivity;1;${context.packageName}/com.xsun.foldlauncher.MainActivity;"
+        var updated = false
+        try {
+            if (Settings.System.canWrite(context) || hasWriteSecureSettings(context)) {
+                Settings.System.putString(cr, KEY_LOCK_APPLICATION_SHORTCUT, shortcutSpec)
+                Settings.System.putInt(cr, KEY_AOD_TAP_TO_SHOW_MODE, 1)
+                updated = true
+            }
+        } catch (_: Exception) {
+        }
+        try {
+            if (hasWriteSecureSettings(context)) {
+                Settings.Secure.putString(cr, KEY_LOCK_APPLICATION_SHORTCUT, shortcutSpec)
+                updated = true
+            }
+        } catch (_: Exception) {
+        }
+        setLockScreenRotation(context, true)
+        return updated
+    }
+
+    fun isLockScreenShortcutsConfiguredForVc(context: Context): Boolean {
+        return try {
+            val cr = context.contentResolver
+            val raw = Settings.System.getString(cr, KEY_LOCK_APPLICATION_SHORTCUT)
+                ?: Settings.Secure.getString(cr, KEY_LOCK_APPLICATION_SHORTCUT)
+                ?: ""
+            raw.contains("agentconversation") || raw.contains(context.packageName)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun getLockScreenStatus(context: Context): LockScreenStatus {
+        val km = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+        return LockScreenStatus(
+            isKeyguardLocked = km?.isKeyguardLocked == true,
+            rotationAllowed = isLockScreenRotationEnabled(context),
+            faceUnlockInstantBypass = isFaceUnlockInstantBypassEnabled(context),
+            foldCloseStayAwake = isFoldCloseStayAwakeEnabled(context),
+            lockShortcutsConfiguredForVc = isLockScreenShortcutsConfiguredForVc(context),
+            lockScreenHudOverlayEnabled = FoldAccessibilityService.lockScreenHudEnabled.value,
+            autoCockpitOnWakeEnabled = FoldAccessibilityService.autoCockpitOnWake.value
+        )
+    }
+
+    /**
+     * Applies all Z Fold 8 Lock Screen & Continuity power-user overrides in one call:
+     * 1. Instant Face Unlock bypass (`face_stay_on_lock_screen = 0`)
+     * 2. Keep Cover Screen awake when folding shut (`stay_awake_on_fold_key`)
+     * 3. Lock Screen landscape auto-rotation (`lock_screen_allow_rotation = 1`)
+     * 4. Native Lock Screen corner shortcuts bound to VC + Fold8 Launcher
+     * 5. Enables the Lock-Screen HUD Overlay pill (`TYPE_ACCESSIBILITY_OVERLAY` + `FLAG_SHOW_WHEN_LOCKED`)
+     */
+    fun applyLockScreenPowerPreset(context: Context): Boolean {
+        val r1 = setFaceUnlockInstantBypass(context, true)
+        val r2 = setFoldCloseStayAwake(context, true)
+        val r3 = setLockScreenRotation(context, true)
+        val r4 = setLockScreenShortcutsToVcAndLauncher(context)
+        FoldAccessibilityService.setLockScreenHudEnabled(context, true)
+        return r1 || r2 || r3 || r4
+    }
+
+    /**
+     * Applies all recommended Z Fold 8 One UI 9.0 system tweaks (Gboard in DeX + Lock Screen Power Preset).
+     */
+    fun applyRecommendedFold8Tweaks(context: Context): Boolean {
+        val imeOk = enforcePreferredIme(context)
+        val lockOk = applyLockScreenPowerPreset(context)
+        return imeOk || lockOk
+    }
+
+    /**
+     * Launches `MainActivity` in Show-When-Locked Cockpit Mode right on top of the Lock Screen.
+     */
+    fun launchLockScreenCockpit(context: Context): Boolean {
+        return try {
+            val intent = Intent().apply {
+                setClassName(context.packageName, "com.xsun.foldlauncher.MainActivity")
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP
+                )
+                putExtra(EXTRA_LOCK_SCREEN_COCKPIT, true)
+            }
+            context.startActivity(intent)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Controls Cover Screen (`sub_display`) orientation lock on Galaxy Z Fold 8 (`SM-F971U1`)
+     * independently of the Inner Display when supported by One UI 9.0.
+     */
+    fun setCoverScreenRotationLock(context: Context, lockedToPortrait: Boolean): Boolean {
+        val cr = context.contentResolver
+        val autoRotateValue = if (lockedToPortrait) 0 else 1
+        var updated = false
+        try {
+            if (Settings.System.canWrite(context) || hasWriteSecureSettings(context)) {
+                Settings.System.putInt(cr, KEY_SUB_DISPLAY_ROTATION_LOCK, autoRotateValue)
+                if (lockedToPortrait) {
+                    Settings.System.putInt(cr, Settings.System.USER_ROTATION, Surface.ROTATION_0)
+                }
+                updated = true
+            }
+        } catch (_: Exception) {
+        }
+        return updated
+    }
+
+    fun isCoverScreenRotationLocked(context: Context): Boolean {
+        return try {
+            Settings.System.getInt(context.contentResolver, KEY_SUB_DISPLAY_ROTATION_LOCK, 1) == 0
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
      * Expands the system notification shade when swiping down anywhere on the home screen.
      */
     @SuppressLint("WrongConstant", "PrivateApi")
@@ -206,6 +420,15 @@ object SystemTweaker {
             false
         }
     }
+
+    /**
+     * Alias for Z Fold 8 (`SM-F971U1`) dual-pane split-screen launching.
+     */
+    fun launchDualAppSplit(
+        context: Context,
+        primaryPackage: String,
+        secondaryPackage: String
+    ): Boolean = launchSplitScreenPair(context, primaryPackage, secondaryPackage)
 
     /**
      * Finds the installed VC package (`dev.agentconversation.vci` or `dev.agentconversation.preview`).

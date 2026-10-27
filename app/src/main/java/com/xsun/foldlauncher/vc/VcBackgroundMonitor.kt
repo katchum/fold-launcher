@@ -55,6 +55,9 @@ class VcBackgroundMonitor private constructor(context: Context) {
     )
     val config: StateFlow<VcConnectionConfig> = _config.asStateFlow()
 
+    private val _selectedVariant = MutableStateFlow(VcVariant.PROD)
+    val selectedVariant: StateFlow<VcVariant> = _selectedVariant.asStateFlow()
+
     private val _liveSummary = MutableStateFlow(
         VcLiveSummary(
             connectionState = if (_config.value.isConfigured) {
@@ -63,7 +66,9 @@ class VcBackgroundMonitor private constructor(context: Context) {
                 VcConnectionState.UNCONFIGURED
             },
             isVcInstalled = VcBridgeClient.resolveInstalledVcPackage(appContext) != null,
-            installedVcPackage = VcBridgeClient.resolveInstalledVcPackage(appContext)
+            installedVcPackage = VcBridgeClient.resolveInstalledVcPackage(appContext),
+            selectedVariant = _selectedVariant.value,
+            installedVariants = VcBridgeClient.resolveInstalledVcVariants(appContext)
         )
     )
     val liveSummary: StateFlow<VcLiveSummary> = _liveSummary.asStateFlow()
@@ -239,29 +244,57 @@ class VcBackgroundMonitor private constructor(context: Context) {
         }
     }
 
-    fun launchVc(sessionId: String? = null, startVoiceTalk: Boolean = false): Boolean {
+    fun setSelectedVariant(variant: VcVariant) {
+        _selectedVariant.value = variant
+        val resolvedPkg = VcBridgeClient.resolvePackageForVariant(appContext, variant)
+        _liveSummary.value = _liveSummary.value.copy(
+            selectedVariant = variant,
+            installedVcPackage = resolvedPkg ?: _liveSummary.value.installedVcPackage,
+            installedVariants = VcBridgeClient.resolveInstalledVcVariants(appContext)
+        )
+    }
+
+    fun launchVc(
+        sessionId: String? = null,
+        startVoiceTalk: Boolean = false,
+        preferredPackage: String? = null
+    ): Boolean {
+        val targetPackage = preferredPackage
+            ?: VcBridgeClient.resolvePackageForVariant(appContext, _selectedVariant.value)
         return VcBridgeClient.launchVcApp(
             context = appContext,
             config = _config.value,
             sessionId = sessionId,
-            startVoiceTalk = startVoiceTalk
+            startVoiceTalk = startVoiceTalk,
+            preferredPackage = targetPackage
         )
     }
 
-    fun launchVcVoiceTalk(sessionId: String? = null): Boolean {
+    fun launchVcVoiceTalk(sessionId: String? = null, preferredPackage: String? = null): Boolean {
+        val targetPackage = preferredPackage
+            ?: VcBridgeClient.resolvePackageForVariant(appContext, _selectedVariant.value)
         return VcBridgeClient.launchVcApp(
             context = appContext,
             config = _config.value,
             sessionId = sessionId,
-            startVoiceTalk = true
+            startVoiceTalk = true,
+            preferredPackage = targetPackage
         )
     }
 
-    fun launchVcSplitScreen(preferredSecondaryPackage: String? = null): Boolean {
+    fun launchVcSplitScreen(
+        preferredSecondaryPackage: String? = null,
+        primaryPackage: String? = null,
+        sessionId: String? = null
+    ): Boolean {
+        val resolvedPrimary = primaryPackage
+            ?: VcBridgeClient.resolvePackageForVariant(appContext, _selectedVariant.value)
         return VcBridgeClient.launchVcSplitScreenWorkspace(
             context = appContext,
             config = _config.value,
-            preferredSecondaryPackage = preferredSecondaryPackage
+            preferredSecondaryPackage = preferredSecondaryPackage,
+            primaryPackage = resolvedPrimary,
+            sessionId = sessionId
         )
     }
 
@@ -327,7 +360,9 @@ class VcBackgroundMonitor private constructor(context: Context) {
 
     private fun pollOnce() {
         val cfg = _config.value
-        val installedPkg = VcBridgeClient.resolveInstalledVcPackage(appContext)
+        val activeVariant = _selectedVariant.value
+        val installedVariants = VcBridgeClient.resolveInstalledVcVariants(appContext)
+        val installedPkg = VcBridgeClient.resolvePackageForVariant(appContext, activeVariant)
         val installed = installedPkg != null
 
         if (!cfg.isConfigured) {
@@ -336,7 +371,9 @@ class VcBackgroundMonitor private constructor(context: Context) {
                 statusMessage = "Configure VC host URL",
                 isVcInstalled = installed,
                 installedVcPackage = installedPkg,
-                isVcInForeground = isVcInForeground
+                isVcInForeground = isVcInForeground,
+                selectedVariant = activeVariant,
+                installedVariants = installedVariants
             )
             return
         }
@@ -347,6 +384,9 @@ class VcBackgroundMonitor private constructor(context: Context) {
             isVcInstalled = installed,
             installedVcPackage = installedPkg,
             isVcInForeground = isVcInForeground
+        ).copy(
+            selectedVariant = activeVariant,
+            installedVariants = installedVariants
         )
         _liveSummary.value = updatedSummary
 

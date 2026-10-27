@@ -26,10 +26,13 @@
     <queries>
         <package android:name="dev.agentconversation" />
         <package android:name="dev.agentconversation.preview" />
+        <package android:name="dev.agentconversation.compare" />
         <package android:name="dev.agentconversation.preview.preflight" />
         <package android:name="dev.agentconversation.vci" />
         <package android:name="com.example.agentconversation" />
         <package android:name="com.termux" />
+        <package android:name="com.termux.api" />
+        <package android:name="com.android.chrome" />
     </queries>
 
     <application

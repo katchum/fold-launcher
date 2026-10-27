@@ -5,9 +5,10 @@ package com.xsun.foldlauncher.vc
  * and legacy debug builds (`vc-host/android/app/build.gradle`).
  */
 object VcPackages {
-    const val VCI = "dev.agentconversation.vci"
-    const val PREVIEW = "dev.agentconversation.preview"
     const val RELEASE = "dev.agentconversation"
+    const val PREVIEW = "dev.agentconversation.preview"
+    const val COMPARE = "dev.agentconversation.compare"
+    const val VCI = "dev.agentconversation.vci"
     const val PREFLIGHT = "dev.agentconversation.preview.preflight"
     const val LEGACY = "com.example.agentconversation"
     const val TALK_ACTION = "dev.agentconversation.widget.TALK"
@@ -15,14 +16,16 @@ object VcPackages {
     const val EXTRA_PROJECT_ID = "dev.agentconversation.extra.PROJECT_ID"
 
     val ALL_VC_PACKAGES: List<String> = listOf(
-        VCI,
-        PREVIEW,
         RELEASE,
+        PREVIEW,
+        COMPARE,
+        VCI,
         PREFLIGHT,
         LEGACY
     )
 
     const val TERMUX_PACKAGE = "com.termux"
+    const val TERMUX_API_PACKAGE = "com.termux.api"
     const val CHROME_PACKAGE = "com.android.chrome"
     const val DEFAULT_LOCAL_SERVER_URL = "http://100.96.188.90:8080"
     const val LOOPBACK_SERVER_URL = "http://127.0.0.1:4327"
@@ -32,6 +35,37 @@ object VcPackages {
         if (packageName.isNullOrBlank()) return false
         return packageName in ALL_VC_PACKAGES || packageName.startsWith("dev.agentconversation")
     }
+}
+
+/**
+ * Multi-instance VC application variants installed side-by-side on the Z Fold 8 (`SM-F971U1`).
+ */
+enum class VcVariant(
+    val label: String,
+    val packageName: String,
+    val shortBadge: String
+) {
+    PROD("VC Prod", VcPackages.RELEASE, "PROD"),
+    PREVIEW("VC Preview", VcPackages.PREVIEW, "PREV"),
+    COMPARE("VC Compare", VcPackages.COMPARE, "CMP");
+
+    companion object {
+        fun fromPackageName(pkg: String?): VcVariant {
+            return when (pkg?.trim()) {
+                PREVIEW.packageName, VcPackages.PREFLIGHT -> PREVIEW
+                COMPARE.packageName -> COMPARE
+                else -> PROD
+            }
+        }
+    }
+}
+
+enum class VcRunState {
+    WORKING,
+    AWAITING_APPROVAL,
+    FAILED,
+    COMPLETED,
+    IDLE
 }
 
 enum class VcConnectionState {
@@ -132,6 +166,18 @@ data class VcAgentStatus(
     val needsApproval: Boolean
         get() = approvalCount > 0 || status.equals("approval", ignoreCase = true)
 
+    val state: VcRunState
+        get() = when {
+            needsApproval -> VcRunState.AWAITING_APPROVAL
+            isWorking -> VcRunState.WORKING
+            isFailed -> VcRunState.FAILED
+            hasUnreadUpdate || status.equals("completed", ignoreCase = true) -> VcRunState.COMPLETED
+            else -> VcRunState.IDLE
+        }
+
+    val title: String
+        get() = "$name · $project"
+
     val priorityOrder: Int
         get() = when {
             needsApproval -> 0
@@ -163,8 +209,16 @@ data class VcLiveSummary(
     val statusMessage: String = "Ready to connect to VC host",
     val isVcInstalled: Boolean = false,
     val installedVcPackage: String? = null,
-    val isVcInForeground: Boolean = false
+    val isVcInForeground: Boolean = false,
+    val selectedVariant: VcVariant = VcVariant.PROD,
+    val installedVariants: Set<VcVariant> = emptySet()
 ) {
+    val pendingApprovals: Int
+        get() = approvalCount
+
+    val sessions: List<VcAgentStatus>
+        get() = activeAgents
+
     val hasUrgentAttention: Boolean
         get() = approvalCount > 0 || failedCount > 0
 

@@ -104,6 +104,36 @@ class OmniCommandEngineTest {
     }
 
     @Test
+    fun parseSplitCommand_builtInFold8VcAliases_andPostureSimulatorCommands() {
+        val vcCompareSplit = OmniCommandEngine.parseSplitCommand("split: vc + compare", emptyList())
+        assertNotNull(vcCompareSplit)
+        assertEquals(OmniCommandEngine.VC_PROD_PACKAGE_Z_FOLD8, vcCompareSplit!!.primaryApp.packageName)
+        assertEquals(OmniCommandEngine.VC_COMPARE_PACKAGE_Z_FOLD8, vcCompareSplit.secondaryApp.packageName)
+
+        val vcTermuxSplit = OmniCommandEngine.parseSplitCommand("split: vc + termux", emptyList())
+        assertNotNull(vcTermuxSplit)
+        assertEquals(OmniCommandEngine.VC_PROD_PACKAGE_Z_FOLD8, vcTermuxSplit!!.primaryApp.packageName)
+        assertEquals(OmniCommandEngine.TERMUX_PACKAGE, vcTermuxSplit.secondaryApp.packageName)
+
+        val prodPreviewSplit = OmniCommandEngine.parseSplitCommand("split: prod + preview", emptyList())
+        assertNotNull(prodPreviewSplit)
+        assertEquals(OmniCommandEngine.VC_PROD_PACKAGE_Z_FOLD8, prodPreviewSplit!!.primaryApp.packageName)
+        assertEquals(OmniCommandEngine.VC_PREVIEW_PACKAGE_Z_FOLD8, prodPreviewSplit.secondaryApp.packageName)
+
+        val flexCmds = OmniCommandEngine.parseSystemCommands("> posture flex")
+        assertEquals(1, flexCmds.size)
+        assertEquals(SystemToggleTarget.POSTURE_FLEX, flexCmds.first().target)
+
+        val tentCmds = OmniCommandEngine.parseSystemCommands("> tent")
+        assertEquals(1, tentCmds.size)
+        assertEquals(SystemToggleTarget.POSTURE_TENT, tentCmds.first().target)
+
+        val innerCmds = OmniCommandEngine.parseSystemCommands("posture: inner")
+        assertEquals(1, innerCmds.size)
+        assertEquals(SystemToggleTarget.POSTURE_INNER, innerCmds.first().target)
+    }
+
+    @Test
     fun parseVcCommand_standardVoiceAndSplitModifiers_parsesPromptAndFlags() {
         val standard = OmniCommandEngine.parseVcCommand("vc: check fold8 build status")
         assertNotNull(standard)
@@ -164,6 +194,11 @@ class OmniCommandEngineTest {
         val atSignPx = OmniCommandEngine.evaluateDeveloperQuery("144px @ 480dpi")
         assertNotNull(atSignPx)
         assertEquals("48dp", atSignPx!!.primaryOutput)
+
+        val fold8Res = OmniCommandEngine.evaluateDeveloperQuery("2448x1848 @ 420dpi")
+        assertNotNull(fold8Res)
+        assertEquals("ANDROID DPI", fold8Res!!.category)
+        assertEquals("932.57x704dp", fold8Res.primaryOutput)
     }
 
     @Test

@@ -673,12 +673,25 @@ object VcBridgeClient {
     }
 
     /**
-     * Resolves whichever VC Android package (`dev.agentconversation.preview`, `dev.agentconversation`,
-     * `com.example.agentconversation`, etc.) is currently installed on the device.
+     * Resolves whichever VC Android package (`dev.agentconversation`, `dev.agentconversation.preview`,
+     * `dev.agentconversation.compare`, `dev.agentconversation.vci`, etc.) is currently installed.
      */
-    fun resolveInstalledVcPackage(context: Context): String? {
+    fun resolveInstalledVcPackage(
+        context: Context,
+        preferredPackage: String? = null
+    ): String? {
         val pm = context.packageManager
-        for (pkg in VcPackages.ALL_VC_PACKAGES) {
+        val candidates = if (!preferredPackage.isNullOrBlank()) {
+            val fallbacks = if (preferredPackage == VcPackages.RELEASE) {
+                listOf(preferredPackage, VcPackages.VCI) + VcPackages.ALL_VC_PACKAGES
+            } else {
+                listOf(preferredPackage) + VcPackages.ALL_VC_PACKAGES
+            }
+            fallbacks.distinct()
+        } else {
+            VcPackages.ALL_VC_PACKAGES
+        }
+        for (pkg in candidates) {
             try {
                 if (pm.getLaunchIntentForPackage(pkg) != null) {
                     return pkg
@@ -690,38 +703,77 @@ object VcBridgeClient {
     }
 
     /**
-     * Opens the VC Android app (`dev.agentconversation.vci` or `dev.agentconversation.preview`
-     * via `SystemTweaker.launchVc` or package launch intent, optionally starting voice Talk mode
-     * via `dev.agentconversation.widget.TALK`, or falls back to opening the VC web UI in browser).
+     * Detects which `VcVariant` instances (`PROD`, `PREVIEW`, `COMPARE`) are installed on the device.
+     */
+    fun resolveInstalledVcVariants(context: Context): Set<VcVariant> {
+        val pm = context.packageManager
+        val installed = LinkedHashSet<VcVariant>()
+        for (variant in VcVariant.entries) {
+            val candidatePackages = when (variant) {
+                VcVariant.PROD -> listOf(VcPackages.RELEASE, VcPackages.VCI, VcPackages.LEGACY)
+                VcVariant.PREVIEW -> listOf(VcPackages.PREVIEW, VcPackages.PREFLIGHT)
+                VcVariant.COMPARE -> listOf(VcPackages.COMPARE)
+            }
+            val found = candidatePackages.any { pkg ->
+                try {
+                    pm.getLaunchIntentForPackage(pkg) != null
+                } catch (_: Exception) {
+                    false
+                }
+            }
+            if (found) {
+                installed.add(variant)
+            }
+        }
+        return installed
+    }
+
+    /**
+     * Resolves the concrete installed package name for a requested [VcVariant], or falls back to
+     * any installed VC package.
+     */
+    fun resolvePackageForVariant(context: Context, variant: VcVariant): String? {
+        val pm = context.packageManager
+        val primaryCandidates = when (variant) {
+            VcVariant.PROD -> listOf(VcPackages.RELEASE, VcPackages.VCI, VcPackages.LEGACY)
+            VcVariant.PREVIEW -> listOf(VcPackages.PREVIEW, VcPackages.PREFLIGHT)
+            VcVariant.COMPARE -> listOf(VcPackages.COMPARE)
+        }
+        for (pkg in primaryCandidates) {
+            try {
+                if (pm.getLaunchIntentForPackage(pkg) != null) {
+                    return pkg
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return resolveInstalledVcPackage(context)
+    }
+
+    /**
+     * Opens the VC Android app (`dev.agentconversation`, `dev.agentconversation.preview`,
+     * `dev.agentconversation.compare`, or `dev.agentconversation.vci`), optionally starting voice
+     * Talk mode via `dev.agentconversation.widget.TALK`, or falls back to opening the VC web UI.
      */
     fun launchVcApp(
         context: Context,
         config: VcConnectionConfig,
         sessionId: String? = null,
         projectId: String? = null,
-        startVoiceTalk: Boolean = false
+        startVoiceTalk: Boolean = false,
+        preferredPackage: String? = null
     ): Boolean {
-        if (SystemTweaker.launchVc(
-                context = context,
-                sessionId = sessionId,
-                projectId = projectId,
-                startVoiceTalk = startVoiceTalk,
-                adjacentSplitScreen = false
-            )
-        ) {
-            return true
-        }
-
-        val pkg = resolveInstalledVcPackage(context)
-        if (pkg != null) {
+        val resolvedPkg = resolveInstalledVcPackage(context, preferredPackage)
+        if (resolvedPkg != null) {
             try {
-                val launchIntent = context.packageManager.getLaunchIntentForPackage(pkg)?.apply {
+                val launchIntent = context.packageManager.getLaunchIntentForPackage(resolvedPkg)?.apply {
                     if (startVoiceTalk) {
                         action = VcPackages.TALK_ACTION
                     }
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
                     if (!sessionId.isNullOrBlank()) {
                         putExtra("sessionId", sessionId)
+                        putExtra("focusSession", sessionId)
                         putExtra(VcPackages.EXTRA_SESSION_ID, sessionId)
                     }
                     if (!projectId.isNullOrBlank()) {
@@ -735,6 +787,18 @@ object VcBridgeClient {
                 }
             } catch (_: Exception) {
             }
+        }
+
+        if (preferredPackage.isNullOrBlank() &&
+            SystemTweaker.launchVc(
+                context = context,
+                sessionId = sessionId,
+                projectId = projectId,
+                startVoiceTalk = startVoiceTalk,
+                adjacentSplitScreen = false
+            )
+        ) {
+            return true
         }
 
         // Fallback: open VC Web UI in browser
@@ -753,23 +817,56 @@ object VcBridgeClient {
     }
 
     /**
+     * Convenience entry point for launching a Z Fold 8 Dual-Pane Split-Screen pair (`VC + Termux`,
+     * `VC Prod + VC Compare`, `VC Prod + VC Preview`, `VC + Chrome`).
+     */
+    fun launchVcSplitScreen(
+        context: Context,
+        config: VcConnectionConfig = VcConnectionConfig(),
+        preferredSecondaryPackage: String? = null,
+        primaryPackage: String? = null,
+        sessionId: String? = null
+    ): Boolean {
+        return launchVcSplitScreenWorkspace(
+            context = context,
+            config = config,
+            preferredSecondaryPackage = preferredSecondaryPackage,
+            primaryPackage = primaryPackage,
+            sessionId = sessionId
+        )
+    }
+
+    /**
      * Launches a 1-tap Z Fold 8 Split-Screen workspace pairing VC (`dev.agentconversation*`) on one
-     * half of the inner display with Termux (`com.termux`) or Chrome/Browser on the adjacent half.
+     * half of the inner display with a second VC instance (`dev.agentconversation.compare` /
+     * `dev.agentconversation.preview`), Termux (`com.termux`), or Chrome (`com.android.chrome`) on
+     * the adjacent half.
      */
     fun launchVcSplitScreenWorkspace(
         context: Context,
         config: VcConnectionConfig,
-        preferredSecondaryPackage: String? = null
+        preferredSecondaryPackage: String? = null,
+        primaryPackage: String? = null,
+        sessionId: String? = null
     ): Boolean {
-        val primaryLaunched = launchVcApp(context, config)
+        val resolvedPrimary = resolveInstalledVcPackage(context, primaryPackage)
+        val primaryLaunched = launchVcApp(
+            context = context,
+            config = config,
+            sessionId = sessionId,
+            preferredPackage = resolvedPrimary ?: primaryPackage
+        )
         val pm = context.packageManager
 
         val secondaryCandidates = listOfNotNull(
             preferredSecondaryPackage,
             VcPackages.TERMUX_PACKAGE,
+            VcPackages.COMPARE,
+            VcPackages.PREVIEW,
             VcPackages.CHROME_PACKAGE,
             "com.sec.android.app.sbrowser"
-        )
+        ).filter { it != resolvedPrimary }
+
         var secondaryIntent: Intent? = null
         for (candidate in secondaryCandidates) {
             try {
@@ -781,6 +878,11 @@ object VcBridgeClient {
                                 Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or
                                 Intent.FLAG_ACTIVITY_MULTIPLE_TASK
                         )
+                        if (!sessionId.isNullOrBlank() && VcPackages.isVcPackage(candidate)) {
+                            putExtra("sessionId", sessionId)
+                            putExtra("focusSession", sessionId)
+                            putExtra(VcPackages.EXTRA_SESSION_ID, sessionId)
+                        }
                     }
                     break
                 }

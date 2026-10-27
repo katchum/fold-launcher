@@ -16,8 +16,13 @@ import android.graphics.PixelFormat
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.net.Uri
 import android.os.BatteryManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.text.format.DateFormat
@@ -29,6 +34,7 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.view.animation.LinearInterpolator
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -64,6 +70,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -101,25 +108,30 @@ import kotlin.math.roundToInt
  * =================================================================================================
  *
  * ### Why this is IMPOSSIBLE on Stock Samsung One UI Home:
- * 1. **Stock Launchers Disappear Inside Apps & Samsung DeX**: When you open any full-screen app,
- *    browser, terminal, or game on Galaxy Z Fold 8, stock One UI Home is pushed to the background.
- *    You are left with Samsung's tiny status-bar clock (or no status bar at all in immersive apps),
- *    zero battery thermal visibility, and no live indicator of your background VC coding agents.
- * 2. **Zero-Latency Anywhere-Spotlight Trigger**: On stock One UI Home, searching for an app,
- *    evaluating inline math, or switching to a VC agent requires swiping home, waiting for the
- *    launcher transition animation, and tapping the finder bar. Our `TYPE_ACCESSIBILITY_OVERLAY`
- *    Micro-HUD Pill floats persistently at the top-right edge across *every* app and DeX window:
+ * 1. **Stock Launchers Disappear Inside Apps, Samsung DeX & Lock Screen**: When you open any
+ *    full-screen app, browser, terminal, or game on Galaxy Z Fold 8 (`SM-F971U1`)—or when the
+ *    device is on the Lock Screen—stock One UI Home is pushed to the background. You are left with
+ *    Samsung's tiny status-bar clock, zero battery thermal or hinge angle visibility, and no live
+ *    indicator of your background VC coding agents.
+ * 2. **Lock-Screen & System-Wide `TYPE_ACCESSIBILITY_OVERLAY` + `FLAG_SHOW_WHEN_LOCKED`**:
+ *    Because `TYPE_ACCESSIBILITY_OVERLAY` combined with `FLAG_SHOW_WHEN_LOCKED` is permitted by
+ *    Android's `WindowManagerService` over the Keyguard, our Floating Micro-HUD Pill (with
+ *    oversized Clock, Battery/Temp, live Z Fold 8 Hinge Angle, and Live VC Agent status dot)
+ *    renders **right on top of the Samsung Z Fold 8 Lock Screen** in both Portrait and Landscape
+ *    as well as over every app and DeX workspace!
+ * 3. **Zero-Latency Anywhere-Spotlight & Multi-VC Split Trigger**:
  *    - **Single Tap**: Immediately brings `MainActivity` to the front with
  *      `EXTRA_OPEN_SPOTLIGHT = true` for **0ms Anywhere-Spotlight Search** from inside any app!
+ *    - **Expand Chevron / Expanded HUD Card**: Expands the HUD Pill in-place to reveal live Z Fold 8
+ *      hinge posture telemetry (`180°` / `118° FLEX`) and the **Z Fold 8 Power Split Row** with
+ *      1-tap buttons:
+ *      - `VC + Termux` (launches `dev.agentconversation` + `com.termux` in split-screen)
+ *      - `Prod + Compare` (launches `dev.agentconversation` + `dev.agentconversation.compare` in split-screen)
  *    - **Long Press**: Launches/switches directly to the VC Agent app
- *      (`dev.agentconversation.vci` / `com.example.agentconversation` / VC web UI) or triggers
- *      instant Split-Screen (`FoldAccessibilityService.instance?.toggleSplitScreen()`).
+ *      (`dev.agentconversation` / `dev.agentconversation.compare` / `com.example.agentconversation`)
+ *      or triggers instant Split-Screen (`FoldAccessibilityService.instance?.toggleSplitScreen()`).
  *    - **Horizontal Drag**: Smoothly slides the Micro-HUD Pill along the top screen edge and
  *      persists its exact X offset in `SharedPreferences`.
- * 3. **Zero-Overhead Custom `Canvas` View**: Built as a hardware-accelerated custom `View` attached
- *    directly to `FoldAccessibilityService`'s `WindowManager` (`TYPE_ACCESSIBILITY_OVERLAY`),
- *    requiring zero `Activity` lifecycle overhead or extra permissions beyond the companion
- *    accessibility service.
  */
 
 const val EXTRA_OPEN_SPOTLIGHT = "EXTRA_OPEN_SPOTLIGHT"
@@ -183,9 +195,13 @@ enum class HudLongPressAction(val label: String, val description: String) {
 }
 
 /**
- * Snapshot of live telemetry & user configuration for the System-Wide Micro-HUD Pill.
+ * Snapshot of live telemetry & user configuration for the System-Wide Micro-HUD Pill (`v0.2.0`).
+ *
+ * Includes optional [hingeAngleDegrees] and [postureLabel] (defaulting to `null` so all existing
+ * `v0.1.0` callers compile unchanged) populated on the Samsung Galaxy Z Fold 8 via
+ * `Sensor.TYPE_HINGE_ANGLE`.
  */
-data class FloatingHudUiState(
+data class HudTelemetryState(
     val isEnabled: Boolean = false,
     val isOverlayAttached: Boolean = false,
     val opacity: Float = 0.92f,
@@ -196,15 +212,50 @@ data class FloatingHudUiState(
     val batteryTempCelsius: Float = 31.0f,
     val isCharging: Boolean = false,
     val vcStatus: VcHudAgentStatus = VcHudAgentStatus.WORKING,
-    val longPressAction: HudLongPressAction = HudLongPressAction.LAUNCH_VC_OR_SPLIT
-)
+    val longPressAction: HudLongPressAction = HudLongPressAction.LAUNCH_VC_OR_SPLIT,
+    val hingeAngleDegrees: Float? = null,
+    val postureLabel: String? = null
+) {
+    /**
+     * Formatted compact hinge angle badge for the collapsed and expanded Micro-HUD Pill
+     * (e.g., `"180°"`, `"118° FLEX"`, `"0° COVER"`), or `null` when no hinge sensor is present.
+     */
+    val formattedHingeBadge: String?
+        get() = formatHingeReadout(hingeAngleDegrees, postureLabel)
+
+    companion object {
+        fun formatHingeReadout(hingeAngleDegrees: Float?, postureLabel: String? = null): String? {
+            val angle = hingeAngleDegrees ?: return null
+            val degInt = angle.roundToInt().coerceIn(0, 180)
+            val explicitLabel = postureLabel?.trim()?.uppercase(Locale.US).orEmpty()
+            val resolvedPosture = when {
+                explicitLabel.isNotEmpty() -> explicitLabel
+                degInt in 75..155 -> "FLEX"
+                degInt <= 25 -> "COVER"
+                else -> ""
+            }
+            return if (resolvedPosture.isNotEmpty() && resolvedPosture != "FLAT" && resolvedPosture != "180°") {
+                "${degInt}° $resolvedPosture"
+            } else {
+                "${degInt}°"
+            }
+        }
+    }
+}
+
+/**
+ * Backward-compatible typealias so all `v0.1.0` callers referencing `FloatingHudUiState`
+ * continue to compile and interoperate seamlessly with `HudTelemetryState`.
+ */
+typealias FloatingHudUiState = HudTelemetryState
 
 /**
  * System-Wide `TYPE_ACCESSIBILITY_OVERLAY` Micro-HUD Controller (`FloatingHudController`).
  *
  * Attaches a sleek, compact, draggable top-right pill view (`FloatingMicroHudPillView`) using
  * `WindowManager` from `FoldAccessibilityService` (`WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY`,
- * `FLAG_NOT_FOCUSABLE`, `FLAG_LAYOUT_IN_SCREEN`, `PixelFormat.TRANSLUCENT`, `Gravity.TOP or Gravity.END`).
+ * `FLAG_NOT_FOCUSABLE`, `FLAG_LAYOUT_IN_SCREEN`, `FLAG_NOT_TOUCH_MODAL`, `FLAG_SHOW_WHEN_LOCKED`,
+ * `PixelFormat.TRANSLUCENT`, `Gravity.TOP or Gravity.END`).
  */
 object FloatingHudController {
 
@@ -219,6 +270,13 @@ object FloatingHudController {
 
     private const val DEFAULT_VC_WEB_URL = "http://127.0.0.1:8080"
 
+    const val PKG_VC_PROD = "dev.agentconversation"
+    const val PKG_VC_PREVIEW = "dev.agentconversation.preview"
+    const val PKG_VC_COMPARE = "dev.agentconversation.compare"
+    const val PKG_VC_VCI = "dev.agentconversation.vci"
+    const val PKG_VC_LEGACY = "com.example.agentconversation"
+    const val PKG_TERMUX = "com.termux"
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private var prefs: SharedPreferences? = null
 
@@ -230,11 +288,15 @@ object FloatingHudController {
     private var telemetryRegistered = false
     private var telemetryContext: Context? = null
 
-    private val _state = MutableStateFlow(FloatingHudUiState())
-    val state: StateFlow<FloatingHudUiState> = _state.asStateFlow()
+    private var hingeSensorRegistered = false
+    private var sensorManager: SensorManager? = null
+
+    private val _state = MutableStateFlow(HudTelemetryState())
+    val state: StateFlow<HudTelemetryState> = _state.asStateFlow()
 
     private val clockTickRunnable = object : Runnable {
         override fun run() {
+            syncServiceHingeAngleIfPresent()
             pillView?.invalidate()
             mainHandler.postDelayed(this, 10_000L)
         }
@@ -271,13 +333,51 @@ object FloatingHudController {
             pillView?.updateTelemetry(
                 batteryPct = pct,
                 tempCelsius = tempC,
-                isCharging = charging
+                isCharging = charging,
+                hingeAngleDegrees = _state.value.hingeAngleDegrees,
+                postureLabel = _state.value.postureLabel
+            )
+        }
+    }
+
+    private val hingeSensorListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent?) {
+            val values = event?.values ?: return
+            if (values.isEmpty()) return
+            val rawAngle = values[0].coerceIn(0f, 180f)
+            val derivedLabel = derivePostureLabel(rawAngle)
+            updateHingeTelemetry(
+                hingeAngleDegrees = rawAngle,
+                postureLabel = derivedLabel
+            )
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+            // No-op
+        }
+    }
+
+    private fun derivePostureLabel(angleDegrees: Float): String? {
+        return when {
+            angleDegrees in 75f..155f -> "FLEX"
+            angleDegrees < 25f -> "COVER"
+            else -> null
+        }
+    }
+
+    private fun syncServiceHingeAngleIfPresent() {
+        val serviceAngle = FoldAccessibilityService.hingeAngleFlow.value ?: return
+        if (_state.value.hingeAngleDegrees == null) {
+            updateHingeTelemetry(
+                hingeAngleDegrees = serviceAngle,
+                postureLabel = derivePostureLabel(serviceAngle)
             )
         }
     }
 
     /**
-     * Initializes preferences and battery/thermal telemetry readers. Safe to call multiple times.
+     * Initializes preferences, battery/thermal telemetry, and Z Fold 8 `Sensor.TYPE_HINGE_ANGLE`
+     * listener. Safe to call multiple times.
      */
     fun ensureInitialized(context: Context) {
         val appCtx = context.applicationContext
@@ -328,9 +428,59 @@ object FloatingHudController {
             }
         }
 
+        registerHingeAngleSensorIfAvailable(appCtx)
+        syncServiceHingeAngleIfPresent()
+
         if (_state.value.isEnabled && pillView == null) {
             syncOverlayWithService()
         }
+    }
+
+    private fun registerHingeAngleSensorIfAvailable(context: Context) {
+        if (hingeSensorRegistered) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        try {
+            val sm = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager ?: return
+            val hingeSensor = sm.getDefaultSensor(Sensor.TYPE_HINGE_ANGLE) ?: return
+            val ok = sm.registerListener(
+                hingeSensorListener,
+                hingeSensor,
+                SensorManager.SENSOR_DELAY_NORMAL
+            )
+            if (ok) {
+                sensorManager = sm
+                hingeSensorRegistered = true
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Updates the live Z Fold 8 hinge angle telemetry (`hingeAngleDegrees` and optional
+     * `postureLabel`, e.g., `180°` or `118° FLEX`) on both the state flow and the overlay pill.
+     */
+    fun updateHingeTelemetry(
+        hingeAngleDegrees: Float?,
+        postureLabel: String? = null
+    ) {
+        val current = _state.value
+        val previousRounded = current.hingeAngleDegrees?.roundToInt()
+        val nextRounded = hingeAngleDegrees?.roundToInt()
+        if (previousRounded == nextRounded && current.postureLabel == postureLabel) {
+            return
+        }
+        _state.value = current.copy(
+            hingeAngleDegrees = hingeAngleDegrees,
+            postureLabel = postureLabel
+        )
+        pillView?.updateTelemetry(
+            batteryPct = _state.value.batteryPct,
+            tempCelsius = _state.value.batteryTempCelsius,
+            isCharging = _state.value.isCharging,
+            hingeAngleDegrees = hingeAngleDegrees,
+            postureLabel = postureLabel
+        )
+        updateWindowLayoutIfAttached()
     }
 
     /**
@@ -414,6 +564,35 @@ object FloatingHudController {
     }
 
     /**
+     * Builds the `WindowManager.LayoutParams` for the System-Wide `TYPE_ACCESSIBILITY_OVERLAY`
+     * Micro-HUD Pill, including `FLAG_SHOW_WHEN_LOCKED` so the pill renders right on top of the
+     * Samsung Galaxy Z Fold 8 Lock Screen in both Portrait and Landscape as well as over any app.
+     */
+    @Suppress("DEPRECATION")
+    internal fun createOverlayLayoutParams(
+        offsetXPx: Int,
+        offsetYPx: Int
+    ): WindowManager.LayoutParams {
+        val overlayFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+
+        return WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            overlayFlags,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.END
+            x = offsetXPx
+            y = offsetYPx
+            title = "Fold8FloatingMicroHudPill"
+        }
+    }
+
+    /**
      * Attaches the `TYPE_ACCESSIBILITY_OVERLAY` window to `FoldAccessibilityService`'s `WindowManager`.
      */
     @SuppressLint("ClickableViewAccessibility")
@@ -438,20 +617,10 @@ object FloatingHudController {
             val wm = hostService.getSystemService(Context.WINDOW_SERVICE) as WindowManager
             val current = _state.value
 
-            val lp = WindowManager.LayoutParams(
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-                PixelFormat.TRANSLUCENT
-            ).apply {
-                gravity = Gravity.TOP or Gravity.END
-                x = current.offsetXPx
-                y = current.offsetYPx
-                title = "Fold8FloatingMicroHudPill"
-            }
+            val lp = createOverlayLayoutParams(
+                offsetXPx = current.offsetXPx,
+                offsetYPx = current.offsetYPx
+            )
 
             val view = FloatingMicroHudPillView(
                 context = hostService,
@@ -461,6 +630,15 @@ object FloatingHudController {
                 },
                 onLongPress = {
                     triggerLongPressAction(hostService)
+                },
+                onLaunchVcPlusTermux = {
+                    launchVcPlusTermuxSplit(hostService)
+                },
+                onLaunchProdPlusCompare = {
+                    launchProdPlusCompareSplit(hostService)
+                },
+                onExpandedChanged = {
+                    updateWindowLayoutIfAttached()
                 },
                 onHorizontalDrag = { deltaXPx ->
                     // With Gravity.END, x is distance from right edge: dragging left increases x
@@ -545,9 +723,9 @@ object FloatingHudController {
 
     /**
      * **Long Press on System-Wide Pill**:
-     * Launches or switches directly to the VC app (`com.example.agentconversation` /
-     * `dev.agentconversation.vci` / `dev.agentconversation.preview` / VC web UI) or toggles
-     * Split-Screen (`FoldAccessibilityService.instance?.toggleSplitScreen()`).
+     * Launches or switches directly to the VC app (`dev.agentconversation` /
+     * `com.example.agentconversation` / `dev.agentconversation.vci` / `dev.agentconversation.preview`
+     * / VC web UI) or toggles Split-Screen (`FoldAccessibilityService.instance?.toggleSplitScreen()`).
      */
     fun triggerLongPressAction(context: Context) {
         when (_state.value.longPressAction) {
@@ -580,16 +758,19 @@ object FloatingHudController {
     }
 
     /**
-     * Attempts to launch installed VC Agent packages (`com.example.agentconversation`,
-     * `dev.agentconversation.vci`, `dev.agentconversation.preview`), or falls back to opening
+     * Attempts to launch installed VC Agent packages (`dev.agentconversation`,
+     * `dev.agentconversation.preview`, `dev.agentconversation.compare`,
+     * `com.example.agentconversation`, `dev.agentconversation.vci`), or falls back to opening
      * the VC Web UI (`http://127.0.0.1:8080`).
      */
     fun launchOrSwitchToVcApp(context: Context): Boolean {
         val pm = context.packageManager
         val candidatePackages = listOf(
-            "com.example.agentconversation",
-            "dev.agentconversation.vci",
-            "dev.agentconversation.preview"
+            PKG_VC_PROD,
+            PKG_VC_PREVIEW,
+            PKG_VC_COMPARE,
+            PKG_VC_LEGACY,
+            PKG_VC_VCI
         )
         for (pkg in candidatePackages) {
             val launchIntent = pm.getLaunchIntentForPackage(pkg)
@@ -618,6 +799,118 @@ object FloatingHudController {
         } catch (_: Exception) {
             false
         }
+    }
+
+    /**
+     * **Z Fold 8 Power Split Action 1 (`VC + Termux`)**:
+     * Launches `dev.agentconversation` (falling back to any installed VC package) + `com.termux`
+     * side-by-side in split-screen multi-window mode on the Z Fold 8 inner display.
+     */
+    fun launchVcPlusTermuxSplit(context: Context): Boolean {
+        return launchSplitScreenPair(
+            context = context,
+            primaryCandidates = listOf(
+                PKG_VC_PROD,
+                PKG_VC_PREVIEW,
+                PKG_VC_COMPARE,
+                PKG_VC_VCI,
+                PKG_VC_LEGACY
+            ),
+            secondaryCandidates = listOf(
+                PKG_TERMUX,
+                "com.termux.api",
+                "com.android.chrome"
+            )
+        )
+    }
+
+    /**
+     * **Z Fold 8 Power Split Action 2 (`Prod + Compare`)**:
+     * Launches `dev.agentconversation` (VC Prod) + `dev.agentconversation.compare` (VC Compare,
+     * falling back to `dev.agentconversation.preview`) side-by-side in split-screen mode on the
+     * Z Fold 8 inner display.
+     */
+    fun launchProdPlusCompareSplit(context: Context): Boolean {
+        return launchSplitScreenPair(
+            context = context,
+            primaryCandidates = listOf(
+                PKG_VC_PROD,
+                PKG_VC_VCI,
+                PKG_VC_LEGACY
+            ),
+            secondaryCandidates = listOf(
+                PKG_VC_COMPARE,
+                PKG_VC_PREVIEW,
+                PKG_TERMUX
+            )
+        )
+    }
+
+    /**
+     * Launches a primary app followed 140ms later by an adjacent split-screen secondary app
+     * (`FLAG_ACTIVITY_LAUNCH_ADJACENT or FLAG_ACTIVITY_MULTIPLE_TASK`).
+     */
+    fun launchSplitScreenPair(
+        context: Context,
+        primaryCandidates: List<String>,
+        secondaryCandidates: List<String>
+    ): Boolean {
+        val pm = context.packageManager
+        var chosenPrimaryPkg: String? = null
+        var primaryIntent: Intent? = null
+
+        for (pkg in primaryCandidates) {
+            val intent = runCatching { pm.getLaunchIntentForPackage(pkg) }.getOrNull()
+            if (intent != null) {
+                chosenPrimaryPkg = pkg
+                primaryIntent = intent.apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                }
+                break
+            }
+        }
+
+        var secondaryIntent: Intent? = null
+        for (pkg in secondaryCandidates) {
+            if (pkg == chosenPrimaryPkg) continue
+            val intent = runCatching { pm.getLaunchIntentForPackage(pkg) }.getOrNull()
+            if (intent != null) {
+                secondaryIntent = intent.apply {
+                    addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or
+                            Intent.FLAG_ACTIVITY_MULTIPLE_TASK
+                    )
+                }
+                break
+            }
+        }
+
+        val primaryLaunched = if (primaryIntent != null) {
+            try {
+                context.startActivity(primaryIntent)
+                true
+            } catch (_: Exception) {
+                false
+            }
+        } else {
+            launchOrSwitchToVcApp(context)
+        }
+
+        if (secondaryIntent != null) {
+            mainHandler.postDelayed({
+                try {
+                    context.startActivity(secondaryIntent)
+                } catch (_: Exception) {
+                }
+            }, 140L)
+            return true
+        } else {
+            // If only one app is installed, also trigger accessibility split-screen toggle if available
+            FoldAccessibilityService.instance?.toggleSplitScreen()
+        }
+
+        return primaryLaunched
     }
 
     private fun savePillOffsets(xPx: Int, yPx: Int) {
@@ -650,20 +943,29 @@ object FloatingHudController {
 
 /**
  * Zero-overhead custom `Canvas`/`View` that renders the System-Wide Top-Right Micro-HUD Pill
- * inside `FoldAccessibilityService` without requiring an `Activity` or `LifecycleOwner`.
+ * (both Collapsed Pill and Expanded HUD Card with **Z Fold 8 Power Split Row**) inside
+ * `FoldAccessibilityService` without requiring an `Activity` or `LifecycleOwner`.
  *
  * Displays:
  * - **Live VC Agent Status Dot** (pulsing Cyan when VC agents are working, Amber when approval
  *   is needed, Red on error, Emerald when idle/ready)
  * - **High-Contrast Tabular Clock** (e.g., `18:40`)
  * - **Live Battery & Thermal Readout** (e.g., `88% · 31°C`)
- * - **Subtle Spotlight Search Magnifier Glyph** indicating 1-tap Anywhere-Spotlight
+ * - **Live Z Fold 8 Hinge Angle Readout** when `hingeAngleDegrees != null` (e.g., `180°` or `118° FLEX`)
+ * - **Spotlight Search Magnifier Glyph** & **Expand/Collapse Toggle**
+ * - **Expanded HUD Card (`isExpanded = true`)**:
+ *   - Live Z Fold 8 Hinge Angle & Posture Telemetry Header
+ *   - **Z Fold 8 Power Split Row**: 1-tap `VC + Termux` (`dev.agentconversation` + `com.termux`)
+ *     and `Prod + Compare` (`dev.agentconversation` + `dev.agentconversation.compare`) buttons
  */
 internal class FloatingMicroHudPillView(
     context: Context,
-    initialState: FloatingHudUiState,
+    initialState: HudTelemetryState,
     private val onSingleTap: () -> Unit,
     private val onLongPress: () -> Unit,
+    private val onLaunchVcPlusTermux: () -> Unit = {},
+    private val onLaunchProdPlusCompare: () -> Unit = {},
+    private val onExpandedChanged: (Boolean) -> Unit = {},
     private val onHorizontalDrag: (deltaXPx: Float) -> Unit
 ) : View(context) {
 
@@ -673,6 +975,9 @@ internal class FloatingMicroHudPillView(
     private var tempCelsius: Float = initialState.batteryTempCelsius
     private var isCharging: Boolean = initialState.isCharging
     private var vcStatus: VcHudAgentStatus = initialState.vcStatus
+    private var hingeAngleDegrees: Float? = initialState.hingeAngleDegrees
+    private var postureLabel: String? = initialState.postureLabel
+    private var isExpanded: Boolean = false
 
     // Pulse animation phase [0f..1f] for the VC Agent Status Dot
     private var pulsePhase: Float = 0.5f
@@ -685,6 +990,9 @@ internal class FloatingMicroHudPillView(
 
     private val pillRect = RectF()
     private val borderRect = RectF()
+    private val expandHitRect = RectF()
+    private val vcTermuxBtnRect = RectF()
+    private val prodCompareBtnRect = RectF()
 
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
@@ -722,6 +1030,29 @@ internal class FloatingMicroHudPillView(
         fontFeatureSettings = "tnum"
     }
 
+    private val hingePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFF67E8F9.toInt()
+        typeface = Typeface.create("sans-serif", Typeface.BOLD)
+        fontFeatureSettings = "tnum"
+    }
+
+    private val buttonBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = 0x2E38BDF8
+    }
+
+    private val buttonBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 1.0f * density
+        color = 0x6638BDF8
+    }
+
+    private val buttonTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFF67E8F9.toInt()
+        typeface = Typeface.create("sans-serif", Typeface.BOLD)
+        textAlign = Paint.Align.CENTER
+    }
+
     private val magnifierPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFF38BDF8.toInt()
         style = Paint.Style.STROKE
@@ -730,6 +1061,8 @@ internal class FloatingMicroHudPillView(
 
     private var downRawX = 0f
     private var downRawY = 0f
+    private var downLocalX = 0f
+    private var downLocalY = 0f
     private var lastRawX = 0f
     private var isDragging = false
     private var longPressTriggered = false
@@ -757,10 +1090,18 @@ internal class FloatingMicroHudPillView(
         invalidate()
     }
 
-    fun updateTelemetry(batteryPct: Int, tempCelsius: Float, isCharging: Boolean) {
+    fun updateTelemetry(
+        batteryPct: Int,
+        tempCelsius: Float,
+        isCharging: Boolean,
+        hingeAngleDegrees: Float? = this.hingeAngleDegrees,
+        postureLabel: String? = this.postureLabel
+    ) {
         this.batteryPct = batteryPct
         this.tempCelsius = tempCelsius
         this.isCharging = isCharging
+        this.hingeAngleDegrees = hingeAngleDegrees
+        this.postureLabel = postureLabel
         requestLayout()
         invalidate()
     }
@@ -779,8 +1120,11 @@ internal class FloatingMicroHudPillView(
     private fun updatePaintsForScale() {
         clockPaint.textSize = 13.5f * scaledDensity * pillScale
         telemetryPaint.textSize = 11.5f * scaledDensity * pillScale
+        hingePaint.textSize = 11.0f * scaledDensity * pillScale
+        buttonTextPaint.textSize = 10.5f * scaledDensity * pillScale
         magnifierPaint.strokeWidth = 1.6f * density * pillScale
         borderPaint.strokeWidth = 1.15f * density * pillScale
+        buttonBorderPaint.strokeWidth = 1.0f * density * pillScale
     }
 
     private fun syncPulseAnimator() {
@@ -814,10 +1158,15 @@ internal class FloatingMicroHudPillView(
         return "$chargePrefix${batteryPct}% · ${tempInt}°C"
     }
 
+    private fun formatHingeText(): String? {
+        return HudTelemetryState.formatHingeReadout(hingeAngleDegrees, postureLabel)
+    }
+
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         updatePaintsForScale()
         val clockStr = formatClockText()
         val telemetryStr = formatTelemetryText()
+        val hingeStr = formatHingeText()
 
         val padH = 11f * density * pillScale
         val padV = 6f * density * pillScale
@@ -825,18 +1174,34 @@ internal class FloatingMicroHudPillView(
         val gap = 7f * density * pillScale
         val dividerGap = 8f * density * pillScale
         val searchIconW = 13f * density * pillScale
+        val chevronW = 14f * density * pillScale
 
         val clockW = clockPaint.measureText(clockStr)
         val telemetryW = telemetryPaint.measureText(telemetryStr)
+        val hingeW = if (hingeStr != null) {
+            dividerGap + hingePaint.measureText(hingeStr)
+        } else {
+            0f
+        }
 
-        val totalWidth = (padH * 2f + dotRegionW + gap + clockW + dividerGap + telemetryW + gap + searchIconW)
-            .roundToInt()
-            .coerceAtLeast((136f * density * pillScale).roundToInt())
-        val totalHeight = (padV * 2f + 16f * density * pillScale)
+        val collapsedWidth = (
+            padH * 2f + dotRegionW + gap + clockW + dividerGap +
+                telemetryW + hingeW + gap + searchIconW + gap * 0.6f + chevronW
+            ).roundToInt().coerceAtLeast((152f * density * pillScale).roundToInt())
+
+        val collapsedHeight = (padV * 2f + 16f * density * pillScale)
             .roundToInt()
             .coerceAtLeast((28f * density * pillScale).roundToInt())
 
-        setMeasuredDimension(totalWidth, totalHeight)
+        if (!isExpanded) {
+            setMeasuredDimension(collapsedWidth, collapsedHeight)
+        } else {
+            val minExpandedW = (242f * density * pillScale).roundToInt()
+            val expandedWidth = maxOf(collapsedWidth, minExpandedW)
+            val splitRowHeight = (32f * density * pillScale).roundToInt()
+            val expandedHeight = collapsedHeight + splitRowHeight + (8f * density * pillScale).roundToInt()
+            setMeasuredDimension(expandedWidth, expandedHeight)
+        }
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -865,24 +1230,24 @@ internal class FloatingMicroHudPillView(
         val h = height.toFloat()
         if (w <= 0f || h <= 0f) return
 
-        val cornerRadius = h * 0.5f
+        val padH = 11f * density * pillScale
+        val padV = 6f * density * pillScale
+        val topRowHeight = (padV * 2f + 16f * density * pillScale).coerceAtLeast(28f * density * pillScale)
+        val cornerRadius = if (isExpanded) 16f * density * pillScale else h * 0.5f
         val alphaInt = (pillOpacity * 255f).roundToInt().coerceIn(100, 255)
 
         bgPaint.alpha = alphaInt
         canvas.drawRoundRect(pillRect, cornerRadius, cornerRadius, bgPaint)
 
-        borderPaint.color = if (vcStatus == VcHudAgentStatus.ERROR) {
-            0x88F87171.toInt()
-        } else if (vcStatus == VcHudAgentStatus.APPROVAL_NEEDED) {
-            0x88FBBF24.toInt()
-        } else {
-            0x6638BDF8
+        borderPaint.color = when (vcStatus) {
+            VcHudAgentStatus.ERROR -> 0x88F87171.toInt()
+            VcHudAgentStatus.APPROVAL_NEEDED -> 0x88FBBF24.toInt()
+            else -> 0x6638BDF8
         }
         borderPaint.alpha = alphaInt
         canvas.drawRoundRect(borderRect, cornerRadius, cornerRadius, borderPaint)
 
-        val centerY = h * 0.5f
-        val padH = 11f * density * pillScale
+        val centerY = if (isExpanded) topRowHeight * 0.5f else h * 0.5f
         val gap = 7f * density * pillScale
         val dividerGap = 8f * density * pillScale
 
@@ -910,8 +1275,8 @@ internal class FloatingMicroHudPillView(
         cursorX += clockPaint.measureText(clockStr) + dividerGap * 0.5f
 
         // Subtle vertical divider
-        val divTop = h * 0.26f
-        val divBottom = h * 0.74f
+        val divTop = centerY - 6f * density * pillScale
+        val divBottom = centerY + 6f * density * pillScale
         dividerPaint.alpha = (alphaInt * 0.45f).roundToInt()
         canvas.drawLine(cursorX, divTop, cursorX, divBottom, dividerPaint)
         cursorX += dividerGap * 0.5f
@@ -928,11 +1293,37 @@ internal class FloatingMicroHudPillView(
         val teleMetrics = telemetryPaint.fontMetrics
         val teleBaseline = centerY - (teleMetrics.ascent + teleMetrics.descent) * 0.5f
         canvas.drawText(telemetryStr, cursorX, teleBaseline, telemetryPaint)
-        cursorX += telemetryPaint.measureText(telemetryStr) + gap
+        cursorX += telemetryPaint.measureText(telemetryStr)
 
-        // 4. Mini Spotlight Magnifier Glyph on the right edge
+        // 4. Live Z Fold 8 Hinge Angle Readout when hingeAngleDegrees != null (e.g., "180°" or "118° FLEX")
+        val hingeStr = formatHingeText()
+        if (hingeStr != null) {
+            cursorX += dividerGap * 0.5f
+            canvas.drawLine(cursorX, divTop, cursorX, divBottom, dividerPaint)
+            cursorX += dividerGap * 0.5f
+
+            val deg = hingeAngleDegrees?.roundToInt() ?: 180
+            hingePaint.color = if (deg in 75..155) {
+                0xFFFBBF24.toInt() // Amber highlight in Flex mode
+            } else {
+                0xFF67E8F9.toInt() // CyanBright when flat/cover
+            }
+            hingePaint.alpha = alphaInt
+            val hingeMetrics = hingePaint.fontMetrics
+            val hingeBaseline = centerY - (hingeMetrics.ascent + hingeMetrics.descent) * 0.5f
+            canvas.drawText(hingeStr, cursorX, hingeBaseline, hingePaint)
+            cursorX += hingePaint.measureText(hingeStr)
+        }
+
+        cursorX += gap
+
+        // 5. Mini Spotlight Magnifier Glyph + Expand/Collapse Chevron on right edge
+        val chevronW = 14f * density * pillScale
+        val chevronCenterX = w - padH - chevronW * 0.35f
+        expandHitRect.set(w - padH - chevronW * 1.4f, 0f, w, topRowHeight)
+
         val iconRadius = 3.8f * density * pillScale
-        val iconCenterX = (w - padH - iconRadius * 1.1f).coerceAtLeast(cursorX + iconRadius)
+        val iconCenterX = (chevronCenterX - chevronW * 0.85f - iconRadius).coerceAtLeast(cursorX + iconRadius)
         val iconCenterY = centerY - 0.8f * density * pillScale
         magnifierPaint.color = AndroidColor.argb(alphaInt, 0x38, 0xBD, 0xF8)
         canvas.drawCircle(iconCenterX, iconCenterY, iconRadius, magnifierPaint)
@@ -945,6 +1336,72 @@ internal class FloatingMicroHudPillView(
             iconCenterY + handleEndOffset,
             magnifierPaint
         )
+
+        // Draw subtle chevron (▾ when collapsed, ▴ when expanded)
+        val chevHalfW = 3.2f * density * pillScale
+        val chevHalfH = 2.0f * density * pillScale
+        if (isExpanded) {
+            canvas.drawLine(
+                chevronCenterX - chevHalfW,
+                centerY + chevHalfH,
+                chevronCenterX,
+                centerY - chevHalfH,
+                magnifierPaint
+            )
+            canvas.drawLine(
+                chevronCenterX,
+                centerY - chevHalfH,
+                chevronCenterX + chevHalfW,
+                centerY + chevHalfH,
+                magnifierPaint
+            )
+        } else {
+            canvas.drawLine(
+                chevronCenterX - chevHalfW,
+                centerY - chevHalfH,
+                chevronCenterX,
+                centerY + chevHalfH,
+                magnifierPaint
+            )
+            canvas.drawLine(
+                chevronCenterX,
+                centerY + chevHalfH,
+                chevronCenterX + chevHalfW,
+                centerY - chevHalfH,
+                magnifierPaint
+            )
+        }
+
+        // 6. Expanded HUD Card: Z Fold 8 Power Split Row (`VC + Termux` & `Prod + Compare`)
+        if (isExpanded) {
+            val rowTop = topRowHeight + 2f * density * pillScale
+            val rowBottom = h - 6f * density * pillScale
+            val btnGap = 6f * density * pillScale
+            val btnWidth = (w - padH * 2f - btnGap) * 0.5f
+            val btnRadius = 9f * density * pillScale
+
+            vcTermuxBtnRect.set(padH, rowTop, padH + btnWidth, rowBottom)
+            prodCompareBtnRect.set(padH + btnWidth + btnGap, rowTop, w - padH, rowBottom)
+
+            buttonBgPaint.alpha = (alphaInt * 0.35f).roundToInt()
+            buttonBorderPaint.alpha = (alphaInt * 0.75f).roundToInt()
+            buttonTextPaint.alpha = alphaInt
+
+            canvas.drawRoundRect(vcTermuxBtnRect, btnRadius, btnRadius, buttonBgPaint)
+            canvas.drawRoundRect(vcTermuxBtnRect, btnRadius, btnRadius, buttonBorderPaint)
+
+            canvas.drawRoundRect(prodCompareBtnRect, btnRadius, btnRadius, buttonBgPaint)
+            canvas.drawRoundRect(prodCompareBtnRect, btnRadius, btnRadius, buttonBorderPaint)
+
+            val btnMetrics = buttonTextPaint.fontMetrics
+            val btnTextY = (rowTop + rowBottom) * 0.5f - (btnMetrics.ascent + btnMetrics.descent) * 0.5f
+
+            canvas.drawText("⚡ VC + Termux", vcTermuxBtnRect.centerX(), btnTextY, buttonTextPaint)
+            canvas.drawText("⊞ Prod + Compare", prodCompareBtnRect.centerX(), btnTextY, buttonTextPaint)
+        } else {
+            vcTermuxBtnRect.setEmpty()
+            prodCompareBtnRect.setEmpty()
+        }
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -953,6 +1410,8 @@ internal class FloatingMicroHudPillView(
             MotionEvent.ACTION_DOWN -> {
                 downRawX = event.rawX
                 downRawY = event.rawY
+                downLocalX = event.x
+                downLocalY = event.y
                 lastRawX = event.rawX
                 isDragging = false
                 longPressTriggered = false
@@ -979,7 +1438,34 @@ internal class FloatingMicroHudPillView(
                 handler?.removeCallbacks(longPressRunnable)
                 if (!isDragging && !longPressTriggered) {
                     performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    onSingleTap()
+                    when {
+                        isExpanded && vcTermuxBtnRect.contains(downLocalX, downLocalY) -> {
+                            isExpanded = false
+                            requestLayout()
+                            invalidate()
+                            onExpandedChanged(false)
+                            onLaunchVcPlusTermux()
+                        }
+
+                        isExpanded && prodCompareBtnRect.contains(downLocalX, downLocalY) -> {
+                            isExpanded = false
+                            requestLayout()
+                            invalidate()
+                            onExpandedChanged(false)
+                            onLaunchProdPlusCompare()
+                        }
+
+                        expandHitRect.contains(downLocalX, downLocalY) -> {
+                            isExpanded = !isExpanded
+                            requestLayout()
+                            invalidate()
+                            onExpandedChanged(isExpanded)
+                        }
+
+                        else -> {
+                            onSingleTap()
+                        }
+                    }
                 }
                 isDragging = false
                 return true
@@ -1004,24 +1490,51 @@ internal class FloatingMicroHudPillView(
 
 /**
  * =================================================================================================
- * IN-LAUNCHER PREVIEW & CONTROL CARD (`@Composable fun FloatingHudControlCard(...)`)
+ * IN-LAUNCHER & EXPANDED HUD PREVIEW / CONTROL CARD
+ * (`@Composable fun FloatingHudControlCard(...)` & `@Composable fun FloatingHudComposeCard(...)`)
  * =================================================================================================
  *
- * A Jetpack Compose card that can be rendered inside our Launcher's dashboard or settings sheet to:
- * 1. Toggle the System-Wide Floating Micro-HUD Pill (`TYPE_ACCESSIBILITY_OVERLAY`) on/off.
- * 2. Preview how the Top-Right Micro-HUD Pill looks with live tabular clock, battery/thermal
- *    telemetry (`88% · 31°C`), and pulsing VC Agent status dot.
- * 3. Configure pill opacity (`45%–100%`), scale (`80%–135%`), VC agent status simulation, and
- *    long-press behavior.
- * 4. Test the **0ms Anywhere-Spotlight Trigger** and **VC / Split-Screen** trigger right from the card.
+ * A Jetpack Compose card that can be rendered inside our Launcher's dashboard, settings sheet, or
+ * expanded HUD overlay to:
+ * 1. Toggle the System-Wide Floating Micro-HUD Pill (`TYPE_ACCESSIBILITY_OVERLAY` +
+ *    `FLAG_SHOW_WHEN_LOCKED`) on/off.
+ * 2. Preview how the Top-Right Micro-HUD Pill looks in both **collapsed** and **expanded** modes
+ *    with live tabular clock, battery/thermal telemetry (`88% · 31°C`), live Z Fold 8 Hinge Angle
+ *    (`180°` / `118° FLEX`), and pulsing VC Agent status dot.
+ * 3. Launch **Z Fold 8 Power Split Row** 1-tap multi-window pairs:
+ *    - `VC + Termux` (`dev.agentconversation` + `com.termux`)
+ *    - `Prod + Compare` (`dev.agentconversation` + `dev.agentconversation.compare`)
+ * 4. Configure pill opacity (`45%–100%`), scale (`80%–135%`), VC agent status simulation, hinge
+ *    angle preview, and test the **0ms Anywhere-Spotlight Trigger**.
  */
+@Composable
+fun FloatingHudComposeCard(
+    modifier: Modifier = Modifier,
+    isAccessibilityServiceActive: Boolean = FoldAccessibilityService.instance != null,
+    onOpenAccessibilitySettings: (() -> Unit)? = null,
+    onTestAnywhereSpotlight: (() -> Unit)? = null,
+    onLaunchVcPlusTermux: (() -> Unit)? = null,
+    onLaunchProdPlusCompare: (() -> Unit)? = null
+) {
+    FloatingHudControlCard(
+        modifier = modifier,
+        isAccessibilityServiceActive = isAccessibilityServiceActive,
+        onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+        onTestAnywhereSpotlight = onTestAnywhereSpotlight,
+        onLaunchVcPlusTermux = onLaunchVcPlusTermux,
+        onLaunchProdPlusCompare = onLaunchProdPlusCompare
+    )
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun FloatingHudControlCard(
     modifier: Modifier = Modifier,
     isAccessibilityServiceActive: Boolean = FoldAccessibilityService.instance != null,
     onOpenAccessibilitySettings: (() -> Unit)? = null,
-    onTestAnywhereSpotlight: (() -> Unit)? = null
+    onTestAnywhereSpotlight: (() -> Unit)? = null,
+    onLaunchVcPlusTermux: (() -> Unit)? = null,
+    onLaunchProdPlusCompare: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
 
@@ -1037,7 +1550,22 @@ fun FloatingHudControlCard(
     }
 
     val hudState by FloatingHudController.state.collectAsState()
+    val serviceHingeAngle by FoldAccessibilityService.hingeAngleFlow.collectAsState()
+
+    LaunchedEffect(serviceHingeAngle) {
+        if (serviceHingeAngle != null) {
+            val deg = serviceHingeAngle!!
+            val posture = when {
+                deg in 75f..155f -> "FLEX"
+                deg < 25f -> "COVER"
+                else -> null
+            }
+            FloatingHudController.updateHingeTelemetry(deg, posture)
+        }
+    }
+
     val serviceConnected = isAccessibilityServiceActive || FoldAccessibilityService.instance != null
+    var previewExpanded by remember { mutableStateOf(true) }
 
     val cardShape = RoundedCornerShape(22.dp)
 
@@ -1057,7 +1585,7 @@ fun FloatingHudControlCard(
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Header Row: Title, Impossible-on-OneUI badge, and Master Toggle Switch
+        // Header Row: Title, Impossible-on-OneUI / Lock-Screen badge, and Master Toggle Switch
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -1069,7 +1597,7 @@ fun FloatingHudControlCard(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "SYSTEM-WIDE FLOATING MICRO-HUD PILL",
+                        text = "SYSTEM-WIDE & LOCK-SCREEN MICRO-HUD",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.ExtraBold,
                         color = FoldLauncherColors.ElectricCyan
@@ -1087,7 +1615,7 @@ fun FloatingHudControlCard(
                             .padding(horizontal = 7.dp, vertical = 2.dp)
                     ) {
                         Text(
-                            text = if (hudState.isOverlayAttached) "LIVE OVERLAY" else "A11Y OVERLAY",
+                            text = if (hudState.isOverlayAttached) "LIVE + LOCK SCREEN" else "A11Y + KEYGUARD",
                             fontSize = 9.sp,
                             fontWeight = FontWeight.ExtraBold,
                             color = if (hudState.isOverlayAttached) {
@@ -1100,7 +1628,7 @@ fun FloatingHudControlCard(
                 }
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "Impossible on Stock One UI: Persistent top-right clock, battery thermal & VC agent status dot + 1-tap 0ms Spotlight inside ANY app or DeX.",
+                    text = "Impossible on Stock One UI: Persistent top-right clock, battery/thermal, Z Fold 8 hinge angle & VC status dot over Lock Screen, apps & DeX.",
                     fontSize = 12.sp,
                     color = FoldLauncherColors.TextSecondary,
                     maxLines = 3,
@@ -1147,7 +1675,7 @@ fun FloatingHudControlCard(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "Enable FoldAccessibilityService to project the TYPE_ACCESSIBILITY_OVERLAY pill over other apps & DeX.",
+                    text = "Enable FoldAccessibilityService to project the TYPE_ACCESSIBILITY_OVERLAY + FLAG_SHOW_WHEN_LOCKED pill over Lock Screen, apps & DeX.",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,
                     color = FoldLauncherColors.AmberWarning,
@@ -1165,7 +1693,7 @@ fun FloatingHudControlCard(
             }
         }
 
-        // Live Interactive In-Launcher Preview of the Top-Right Micro-HUD Pill
+        // Live Interactive In-Launcher Preview of the Top-Right Micro-HUD Pill (Collapsed + Expanded)
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1186,8 +1714,13 @@ fun FloatingHudControlCard(
                     fontWeight = FontWeight.Bold,
                     color = FoldLauncherColors.TextMuted
                 )
+                val hingeBadge = hudState.formattedHingeBadge
                 Text(
-                    text = "Tap pill: Spotlight · Long-press: VC / Split",
+                    text = if (hingeBadge != null) {
+                        "Hinge: $hingeBadge · Tap: Spotlight"
+                    } else {
+                        "Tap pill: Spotlight · Long-press: VC / Split"
+                    },
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Medium,
                     color = FoldLauncherColors.CyanBright
@@ -1202,11 +1735,114 @@ fun FloatingHudControlCard(
             ) {
                 FloatingHudPillComposePreview(
                     state = hudState,
+                    isExpanded = previewExpanded,
+                    onToggleExpand = { previewExpanded = !previewExpanded },
                     onClick = {
                         if (onTestAnywhereSpotlight != null) {
                             onTestAnywhereSpotlight()
                         } else {
                             FloatingHudController.triggerAnywhereSpotlight(context)
+                        }
+                    }
+                )
+            }
+
+            // Z Fold 8 Hinge Angle Telemetry Simulation / Status Strip inside Expanded HUD Card
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Z Fold 8 Hinge Sensor:",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = FoldLauncherColors.TextSecondary
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    HingePresetChip(
+                        label = "180°",
+                        selected = hudState.hingeAngleDegrees?.roundToInt() == 180,
+                        onClick = {
+                            FloatingHudController.updateHingeTelemetry(180f, null)
+                        }
+                    )
+                    HingePresetChip(
+                        label = "118° FLEX",
+                        selected = hudState.hingeAngleDegrees?.roundToInt() == 118,
+                        onClick = {
+                            FloatingHudController.updateHingeTelemetry(118f, "FLEX")
+                        }
+                    )
+                    HingePresetChip(
+                        label = "Auto",
+                        selected = hudState.hingeAngleDegrees == null,
+                        onClick = {
+                            FloatingHudController.updateHingeTelemetry(null, null)
+                        }
+                    )
+                }
+            }
+        }
+
+        // Z Fold 8 Power Split Row (Multi-VC & Termux Quick-Split Actions)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(FoldLauncherColors.DeepVoid.copy(alpha = 0.68f))
+                .border(1.dp, FoldLauncherColors.GlassBorderStrong, RoundedCornerShape(16.dp))
+                .padding(horizontal = 14.dp, vertical = 11.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Z FOLD 8 POWER SPLIT ROW · 1-TAP MULTI-WINDOW",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = FoldLauncherColors.CyanBright
+                )
+                Text(
+                    text = hudState.formattedHingeBadge?.let { "Posture: $it" } ?: "Inner 120Hz Split",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = FoldLauncherColors.TextMuted
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                HudActionPillButton(
+                    label = "⚡ VC + Termux",
+                    accent = true,
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        if (onLaunchVcPlusTermux != null) {
+                            onLaunchVcPlusTermux()
+                        } else {
+                            FloatingHudController.launchVcPlusTermuxSplit(context)
+                        }
+                    }
+                )
+                HudActionPillButton(
+                    label = "⊞ Prod + Compare",
+                    accent = true,
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        if (onLaunchProdPlusCompare != null) {
+                            onLaunchProdPlusCompare()
+                        } else {
+                            FloatingHudController.launchProdPlusCompareSplit(context)
                         }
                     }
                 )
@@ -1370,8 +2006,40 @@ fun FloatingHudControlCard(
 }
 
 @Composable
+private fun HingePresetChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val shape = RoundedCornerShape(10.dp)
+    Box(
+        modifier = Modifier
+            .clip(shape)
+            .background(
+                if (selected) FoldLauncherColors.CyanGlow else FoldLauncherColors.GlassSurfaceHighlight
+            )
+            .border(
+                1.dp,
+                if (selected) FoldLauncherColors.ElectricCyan else FoldLauncherColors.GlassBorder,
+                shape
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    ) {
+        Text(
+            text = label,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (selected) FoldLauncherColors.CyanBright else FoldLauncherColors.TextSecondary
+        )
+    }
+}
+
+@Composable
 private fun FloatingHudPillComposePreview(
-    state: FloatingHudUiState,
+    state: HudTelemetryState,
+    isExpanded: Boolean,
+    onToggleExpand: () -> Unit,
     onClick: () -> Unit
 ) {
     val context = LocalContext.current
@@ -1403,107 +2071,174 @@ private fun FloatingHudPillComposePreview(
 
     val tempInt = state.batteryTempCelsius.roundToInt()
     val telemetryText = "${if (state.isCharging) "⚡" else ""}${state.batteryPct}% · ${tempInt}°C"
+    val hingeBadge = state.formattedHingeBadge
 
-    Row(
-        modifier = Modifier
-            .scale(state.scaleFactor)
-            .alpha(state.opacity)
-            .clip(RoundedCornerShape(50))
-            .background(
-                Brush.horizontalGradient(
-                    colors = listOf(
-                        Color(0xEE0B101D),
-                        Color(0xE6141C2E)
+    Column(
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .scale(state.scaleFactor)
+                .alpha(state.opacity)
+                .clip(RoundedCornerShape(50))
+                .background(
+                    Brush.horizontalGradient(
+                        colors = listOf(
+                            Color(0xEE0B101D),
+                            Color(0xE6141C2E)
+                        )
                     )
                 )
-            )
-            .border(
-                width = 1.dp,
-                color = when (state.vcStatus) {
-                    VcHudAgentStatus.ERROR -> FoldLauncherColors.CoralDanger.copy(alpha = 0.65f)
-                    VcHudAgentStatus.APPROVAL_NEEDED -> FoldLauncherColors.AmberWarning.copy(alpha = 0.65f)
-                    else -> FoldLauncherColors.ElectricCyan.copy(alpha = 0.48f)
-                },
-                shape = RoundedCornerShape(50)
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(7.dp)
-    ) {
-        // Live VC Agent Status Dot
-        Box(
-            modifier = Modifier.size(12.dp),
-            contentAlignment = Alignment.Center
+                .border(
+                    width = 1.dp,
+                    color = when (state.vcStatus) {
+                        VcHudAgentStatus.ERROR -> FoldLauncherColors.CoralDanger.copy(alpha = 0.65f)
+                        VcHudAgentStatus.APPROVAL_NEEDED -> FoldLauncherColors.AmberWarning.copy(alpha = 0.65f)
+                        else -> FoldLauncherColors.ElectricCyan.copy(alpha = 0.48f)
+                    },
+                    shape = RoundedCornerShape(50)
+                )
+                .clickable(onClick = onClick)
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(7.dp)
         ) {
+            // Live VC Agent Status Dot
             Box(
-                modifier = Modifier
-                    .size(11.dp)
-                    .scale(pulseScale)
-                    .clip(CircleShape)
-                    .background(state.vcStatus.composeColor.copy(alpha = 0.32f))
+                modifier = Modifier.size(12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(11.dp)
+                        .scale(pulseScale)
+                        .clip(CircleShape)
+                        .background(state.vcStatus.composeColor.copy(alpha = 0.32f))
+                )
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(state.vcStatus.composeColor)
+                )
+            }
+
+            // High-Contrast Tabular Clock
+            Text(
+                text = clockString,
+                style = TextStyle(
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = FoldLauncherColors.TextPrimary,
+                    fontFeatureSettings = "tnum"
+                )
             )
+
+            // Subtle Divider
             Box(
                 modifier = Modifier
-                    .size(7.dp)
-                    .clip(CircleShape)
-                    .background(state.vcStatus.composeColor)
+                    .width(1.dp)
+                    .height(12.dp)
+                    .background(FoldLauncherColors.TextSecondary.copy(alpha = 0.30f))
+            )
+
+            // Live Battery & Thermal Readout
+            Text(
+                text = telemetryText,
+                style = TextStyle(
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = when {
+                        tempInt >= 41 || state.batteryPct <= 15 -> FoldLauncherColors.CoralDanger
+                        tempInt >= 38 || state.batteryPct <= 25 -> FoldLauncherColors.AmberWarning
+                        state.isCharging -> FoldLauncherColors.EmeraldSuccess
+                        else -> FoldLauncherColors.TextSecondary
+                    },
+                    fontFeatureSettings = "tnum"
+                )
+            )
+
+            // Live Z Fold 8 Hinge Angle Readout (when hingeAngleDegrees != null)
+            if (hingeBadge != null) {
+                Box(
+                    modifier = Modifier
+                        .width(1.dp)
+                        .height(12.dp)
+                        .background(FoldLauncherColors.TextSecondary.copy(alpha = 0.30f))
+                )
+                val deg = state.hingeAngleDegrees?.roundToInt() ?: 180
+                Text(
+                    text = hingeBadge,
+                    style = TextStyle(
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = if (deg in 75..155) {
+                            FoldLauncherColors.AmberWarning
+                        } else {
+                            FoldLauncherColors.CyanBright
+                        },
+                        fontFeatureSettings = "tnum"
+                    )
+                )
+            }
+
+            // Mini Spotlight Magnifier Glyph
+            ComposeCanvas(modifier = Modifier.size(12.dp)) {
+                val strokePx = 1.6.dp.toPx()
+                val r = size.minDimension * 0.35f
+                val center = Offset(size.width * 0.42f, size.height * 0.42f)
+                drawCircle(
+                    color = FoldLauncherColors.ElectricCyan,
+                    radius = r,
+                    center = center,
+                    style = Stroke(width = strokePx)
+                )
+                drawLine(
+                    color = FoldLauncherColors.ElectricCyan,
+                    start = Offset(center.x + r * 0.72f, center.y + r * 0.72f),
+                    end = Offset(size.width * 0.90f, size.height * 0.90f),
+                    strokeWidth = strokePx,
+                    cap = StrokeCap.Round
+                )
+            }
+
+            // Expand / Collapse Pill Preview Toggle
+            Text(
+                text = if (isExpanded) "▴" else "▾",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = FoldLauncherColors.CyanBright,
+                modifier = Modifier
+                    .clickable(onClick = onToggleExpand)
+                    .padding(horizontal = 2.dp)
             )
         }
 
-        // High-Contrast Tabular Clock
-        Text(
-            text = clockString,
-            style = TextStyle(
-                fontSize = 13.5.sp,
-                fontWeight = FontWeight.ExtraBold,
-                color = FoldLauncherColors.TextPrimary,
-                fontFeatureSettings = "tnum"
-            )
-        )
-
-        // Subtle Divider
-        Box(
-            modifier = Modifier
-                .width(1.dp)
-                .height(12.dp)
-                .background(FoldLauncherColors.TextSecondary.copy(alpha = 0.30f))
-        )
-
-        // Live Battery & Thermal Readout
-        Text(
-            text = telemetryText,
-            style = TextStyle(
-                fontSize = 11.5.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = when {
-                    tempInt >= 41 || state.batteryPct <= 15 -> FoldLauncherColors.CoralDanger
-                    tempInt >= 38 || state.batteryPct <= 25 -> FoldLauncherColors.AmberWarning
-                    state.isCharging -> FoldLauncherColors.EmeraldSuccess
-                    else -> FoldLauncherColors.TextSecondary
-                },
-                fontFeatureSettings = "tnum"
-            )
-        )
-
-        // Mini Spotlight Magnifier Glyph
-        ComposeCanvas(modifier = Modifier.size(12.dp)) {
-            val strokePx = 1.6.dp.toPx()
-            val r = size.minDimension * 0.35f
-            val center = Offset(size.width * 0.42f, size.height * 0.42f)
-            drawCircle(
-                color = FoldLauncherColors.ElectricCyan,
-                radius = r,
-                center = center,
-                style = Stroke(width = strokePx)
-            )
-            drawLine(
-                color = FoldLauncherColors.ElectricCyan,
-                start = Offset(center.x + r * 0.72f, center.y + r * 0.72f),
-                end = Offset(size.width * 0.90f, size.height * 0.90f),
-                strokeWidth = strokePx,
-                cap = StrokeCap.Round
-            )
+        AnimatedVisibility(visible = isExpanded) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (hingeBadge != null) {
+                    Text(
+                        text = "Expanded HUD · $hingeBadge",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = FoldLauncherColors.CyanBright
+                    )
+                }
+                HingePresetChip(
+                    label = "⚡ VC + Termux",
+                    selected = true,
+                    onClick = { FloatingHudController.launchVcPlusTermuxSplit(context) }
+                )
+                HingePresetChip(
+                    label = "⊞ Prod + Compare",
+                    selected = true,
+                    onClick = { FloatingHudController.launchProdPlusCompareSplit(context) }
+                )
+            }
         }
     }
 }
@@ -1512,11 +2247,12 @@ private fun FloatingHudPillComposePreview(
 private fun HudActionPillButton(
     label: String,
     accent: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val shape = RoundedCornerShape(14.dp)
     Box(
-        modifier = Modifier
+        modifier = modifier
             .clip(shape)
             .background(
                 if (accent) FoldLauncherColors.CyanGlow else FoldLauncherColors.GlassSurfaceHighlight
@@ -1527,13 +2263,16 @@ private fun HudActionPillButton(
                 shape
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 11.dp, vertical = 7.dp)
+            .padding(horizontal = 11.dp, vertical = 7.dp),
+        contentAlignment = Alignment.Center
     ) {
         Text(
             text = label,
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
-            color = if (accent) FoldLauncherColors.CyanBright else FoldLauncherColors.TextPrimary
+            color = if (accent) FoldLauncherColors.CyanBright else FoldLauncherColors.TextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }

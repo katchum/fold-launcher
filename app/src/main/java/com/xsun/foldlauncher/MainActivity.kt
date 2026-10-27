@@ -27,7 +27,9 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.xsun.foldlauncher.hud.EXTRA_OPEN_SPOTLIGHT
 import com.xsun.foldlauncher.posture.DevicePosture
-import com.xsun.foldlauncher.posture.rememberDevicePosture
+import com.xsun.foldlauncher.posture.PostureOverride
+import com.xsun.foldlauncher.posture.rememberPostureState
+import com.xsun.foldlauncher.service.SystemTweaker
 import com.xsun.foldlauncher.ui.animation.PostureAnimatedContainer
 import com.xsun.foldlauncher.ui.components.AppContextMenuSheet
 import com.xsun.foldlauncher.ui.components.SpotlightSearchOverlay
@@ -52,6 +54,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+        }
 
         WindowCompat.setDecorFitsSystemWindows(window, false)
         onBackPressedDispatcher.addCallback(this, backPressedCallback)
@@ -81,6 +87,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            val isLockScreenCockpit =
+                intent?.getBooleanExtra("com.xsun.foldlauncher.extra.LOCK_SCREEN_COCKPIT", false) == true ||
+                    intent?.getBooleanExtra(SystemTweaker.EXTRA_LOCK_SCREEN_COCKPIT, false) == true
+            if (isLockScreenCockpit) {
+                setTurnScreenOn(true)
+            }
+        }
+
         if (intent?.getBooleanExtra(EXTRA_OPEN_SPOTLIGHT, false) == true ||
             intent?.getBooleanExtra("EXTRA_OPEN_SPOTLIGHT", false) == true
         ) {
@@ -135,7 +151,8 @@ private fun FoldLauncherRoot(
     activity: MainActivity,
     viewModel: LauncherViewModel
 ) {
-    val postureState = rememberDevicePosture(activity)
+    val postureOverride by viewModel.postureOverride.collectAsState()
+    val postureState = rememberPostureState(activity = activity, overrideMode = postureOverride)
 
     val allApps by viewModel.allApps.collectAsState()
     val hiddenApps by viewModel.hiddenApps.collectAsState()
@@ -189,6 +206,9 @@ private fun FoldLauncherRoot(
                 DevicePosture.COMPACT -> {
                     CoverOrSlabHomeScreen(
                         postureState = currentPosture,
+                        postureOverride = postureOverride,
+                        onCyclePostureOverride = viewModel::cyclePostureOverride,
+                        onSetPostureOverride = viewModel::setPostureOverride,
                         allApps = allApps,
                         pinnedCoverApps = pinnedCoverApps,
                         dockApps = dockApps,
@@ -227,6 +247,9 @@ private fun FoldLauncherRoot(
                 DevicePosture.FLEX_TABLETOP -> {
                     FlexTabletopHomeScreen(
                         postureState = currentPosture,
+                        postureOverride = postureOverride,
+                        onCyclePostureOverride = viewModel::cyclePostureOverride,
+                        onSetPostureOverride = viewModel::setPostureOverride,
                         allApps = allApps,
                         favoriteApps = pinnedInnerApps,
                         dockApps = dockApps,
@@ -264,6 +287,9 @@ private fun FoldLauncherRoot(
                 DevicePosture.EXPANDED -> {
                     UnfoldedInnerDashboardScreen(
                         postureState = currentPosture,
+                        postureOverride = postureOverride,
+                        onCyclePostureOverride = viewModel::cyclePostureOverride,
+                        onSetPostureOverride = viewModel::setPostureOverride,
                         allApps = allApps,
                         pinnedInnerApps = pinnedInnerApps,
                         dockApps = dockApps,

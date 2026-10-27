@@ -5,14 +5,13 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.media.AudioManager
+import android.os.SystemClock
+import android.view.KeyEvent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -20,11 +19,13 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -38,6 +39,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -51,6 +54,7 @@ import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
@@ -78,6 +82,12 @@ import com.xsun.foldlauncher.ui.animation.RadialTriggerCorner
 import com.xsun.foldlauncher.ui.theme.FoldLauncherColors
 import com.xsun.foldlauncher.ui.theme.IconShapePreset
 import com.xsun.foldlauncher.ui.theme.iconShapeForPreset
+import com.xsun.foldlauncher.vc.VcBackgroundMonitor
+import com.xsun.foldlauncher.vc.VcLiveSummary
+import kotlinx.coroutines.delay
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -87,20 +97,23 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
- * Normalized 120Hz spatial device tilt state derived from [Sensor.TYPE_GAME_ROTATION_VECTOR]
- * (or [Sensor.TYPE_ACCELEROMETER] fallback) with low-pass exponential smoothing.
+ * Normalized 120Hz spatial device tilt & hinge state derived from [Sensor.TYPE_GAME_ROTATION_VECTOR]
+ * (or [Sensor.TYPE_ACCELEROMETER] fallback) and hardware [Sensor.TYPE_HINGE_ANGLE] (`36`)
+ * with low-pass exponential smoothing.
  *
  * @property pitch Front-to-back tilt normalized to `-1f..1f`
  * @property roll Left-to-right tilt normalized to `-1f..1f`
  * @property hingeAngleFactor Optional Z Fold 8 hinge posture depth factor (`0f..1f`)
  * @property isSensorActive True when hardware motion sensors are actively streaming
+ * @property hingeAngleDegrees Continuous physical hinge angle (`0f..180f`) from `Sensor.TYPE_HINGE_ANGLE` when available
  */
 @Immutable
 data class SpatialTiltState(
     val pitch: Float = 0f,
     val roll: Float = 0f,
     val hingeAngleFactor: Float = 0f,
-    val isSensorActive: Boolean = false
+    val isSensorActive: Boolean = false,
+    val hingeAngleDegrees: Float? = null
 ) {
     val magnitude: Float
         get() = hypot(pitch, roll).coerceIn(0f, 1f)
@@ -115,7 +128,9 @@ data class ParallaxOffset(
     val rotationYDeg: Float,
     val translationXPx: Float,
     val translationYPx: Float,
-    val specularShift: Float
+    val specularShift: Float,
+    val hingeAngleDegrees: Float? = null,
+    val hingeSpecularShift: Float = 0f
 ) {
     val offsetX: Float get() = translationXPx
     val offsetY: Float get() = translationYPx
@@ -137,12 +152,15 @@ data class ArcItemPosition(
 }
 
 /**
- * Pure mathematical helper functions for 120Hz Spatial Depth Parallax, Radial Thumb Arc geometry,
- * and Flex-Mode Virtual Trackpad cursor projection.
+ * Pure mathematical helper functions for 120Hz Spatial Depth Parallax, Hardware Hinge-Angle
+ * Specular Shift, Radial Thumb Arc geometry, and Flex-Mode Virtual Trackpad cursor projection.
  *
  * Designed with zero Android runtime dependencies so all math can be unit-tested directly on JVM.
  */
 object SpatialMath {
+
+    /** Hardware `android.sensor.hinge_angle` (`Sensor.TYPE_HINGE_ANGLE`) constant (`36`). */
+    const val TYPE_HINGE_ANGLE_SENSOR: Int = 36
 
     /**
      * Exponential low-pass filter to eliminate high-frequency MEMS sensor noise while keeping
@@ -162,32 +180,65 @@ object SpatialMath {
     }
 
     /**
+     * Computes a normalized specular light shift (`-0.35f..0.35f`) driven by the physical
+     * Z Fold 8 hinge angle (`0°..180°`). Sweeps smoothly across `90°` half-folded Flex posture.
+     */
+    fun computeHingeSpecularShift(hingeAngleDegrees: Float?): Float {
+        if (hingeAngleDegrees == null) return 0f
+        val clamped = hingeAngleDegrees.coerceIn(0f, 180f)
+        return (((clamped - 90f) / 90f) * 0.35f).coerceIn(-0.35f, 0.35f)
+    }
+
+    /**
+     * Formats a live hinge angle (`0°..180°`) into a concise hardware posture telemetry badge
+     * (e.g., `"48° TENT"`, `"115° FLEX"`, `"178° FLAT"`, `"0° CLOSED"`).
+     */
+    fun formatHingePostureBadge(hingeAngleDegrees: Float): String {
+        val coerced = hingeAngleDegrees.coerceIn(0f, 180f)
+        val rounded = coerced.roundToInt()
+        val modeLabel = when {
+            coerced < 15f -> "CLOSED"
+            coerced <= 65f -> "TENT"
+            coerced <= 150f -> "FLEX"
+            else -> "FLAT"
+        }
+        return "${rounded}° $modeLabel"
+    }
+
+    /**
      * Computes 3D rotation angles (degrees), pixel translations, and specular highlight shift
-     * from normalized [pitch] (`-1f..1f`), [roll] (`-1f..1f`), and [depthLayer].
+     * from normalized [pitch] (`-1f..1f`), [roll] (`-1f..1f`), [depthLayer], and optional
+     * physical [hingeAngleDegrees] (`0°..180°`).
      */
     fun computeParallaxOffset(
         pitch: Float,
         roll: Float,
         depthLayer: Float = 1f,
         maxTranslationPx: Float = 14f,
-        maxRotationDeg: Float = 4.5f
+        maxRotationDeg: Float = 4.5f,
+        hingeAngleDegrees: Float? = null
     ): ParallaxOffset {
         val clampedPitch = pitch.coerceIn(-1f, 1f)
         val clampedRoll = roll.coerceIn(-1f, 1f)
         val clampedDepth = depthLayer.coerceIn(0f, 3f)
+        val coercedHinge = hingeAngleDegrees?.coerceIn(0f, 180f)
+        val hingeShift = computeHingeSpecularShift(coercedHinge)
 
         val rotationXDeg = -clampedPitch * maxRotationDeg * clampedDepth
         val rotationYDeg = clampedRoll * maxRotationDeg * clampedDepth
         val translationXPx = clampedRoll * maxTranslationPx * clampedDepth
         val translationYPx = clampedPitch * maxTranslationPx * clampedDepth
-        val specularShift = ((clampedRoll - clampedPitch) * 0.5f).coerceIn(-1f, 1f)
+        val baseSpecular = (clampedRoll - clampedPitch) * 0.5f
+        val specularShift = (baseSpecular + hingeShift).coerceIn(-1f, 1f)
 
         return ParallaxOffset(
             rotationXDeg = rotationXDeg,
             rotationYDeg = rotationYDeg,
             translationXPx = translationXPx,
             translationYPx = translationYPx,
-            specularShift = specularShift
+            specularShift = specularShift,
+            hingeAngleDegrees = coercedHinge,
+            hingeSpecularShift = hingeShift
         )
     }
 
@@ -196,10 +247,10 @@ object SpatialMath {
      * out of [totalCount] apps on the One-Handed Radial Thumb Arc ("Arc Deck").
      *
      * - For Right-Handed mode (`isRightHanded = true`), the anchor is at the bottom-right corner
-     *   and items fan out across the upper-left quadrant (`192°..258°` in screen coordinates where
+     *   and items fan out across the upper-left quadrant (`190°..260°` in screen coordinates where
      *   `0°` is right, `90°` is down, `180°` is left, `270°` is up).
      * - For Left-Handed mode (`isRightHanded = false`), the anchor is at the bottom-left corner
-     *   and items fan out across the upper-right quadrant (`282°..348°`).
+     *   and items fan out across the upper-right quadrant (`350°..280°`).
      */
     fun computeArcItemPosition(
         index: Int,
@@ -309,8 +360,9 @@ object SpatialMath {
 }
 
 /**
- * Subscribes to Android's [SensorManager] (`TYPE_GAME_ROTATION_VECTOR` or `TYPE_ACCELEROMETER` fallback)
- * at 120Hz-friendly `SENSOR_DELAY_GAME` and returns a smoothed [SpatialTiltState].
+ * Subscribes to Android's [SensorManager] (`TYPE_GAME_ROTATION_VECTOR` or `TYPE_ACCELEROMETER` fallback,
+ * plus hardware `Sensor.TYPE_HINGE_ANGLE = 36` on Galaxy Z Fold 8) at 120Hz-friendly `SENSOR_DELAY_GAME`
+ * and returns a smoothed [SpatialTiltState].
  */
 @Composable
 fun rememberSpatialTiltState(
@@ -321,6 +373,7 @@ fun rememberSpatialTiltState(
     val context = LocalContext.current
     var pitch by remember { mutableFloatStateOf(0f) }
     var roll by remember { mutableFloatStateOf(0f) }
+    var hardwareHingeDegrees by remember { mutableStateOf<Float?>(null) }
     var sensorActive by remember { mutableStateOf(false) }
 
     DisposableEffect(context, enabled, smoothingAlpha) {
@@ -330,16 +383,22 @@ fun rememberSpatialTiltState(
         }
 
         val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
-        val rotationSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
-            ?: sensorManager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+        if (sensorManager == null) {
+            sensorActive = false
+            return@DisposableEffect onDispose {}
+        }
+
+        val rotationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
+            ?: sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
         val accelSensor = if (rotationSensor == null) {
-            sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+            sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         } else {
             null
         }
-        val activeSensor = rotationSensor ?: accelSensor
+        val activeMotionSensor = rotationSensor ?: accelSensor
+        val hingeSensor = sensorManager.getDefaultSensor(SpatialMath.TYPE_HINGE_ANGLE_SENSOR)
 
-        if (sensorManager == null || activeSensor == null) {
+        if (activeMotionSensor == null && hingeSensor == null) {
             sensorActive = false
             return@DisposableEffect onDispose {}
         }
@@ -375,36 +434,100 @@ fun rememberSpatialTiltState(
                             roll = SpatialMath.lowPassFilter(roll, targetRoll, smoothingAlpha)
                         }
                     }
+
+                    SpatialMath.TYPE_HINGE_ANGLE_SENSOR -> {
+                        val rawDeg = event.values.firstOrNull()?.coerceIn(0f, 180f) ?: return
+                        val currentDeg = hardwareHingeDegrees
+                        hardwareHingeDegrees = if (currentDeg == null) {
+                            rawDeg
+                        } else {
+                            SpatialMath.lowPassFilter(currentDeg, rawDeg, alpha = 0.35f)
+                        }
+                    }
                 }
             }
 
             override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
         }
 
-        val registered = sensorManager.registerListener(
-            listener,
-            activeSensor,
-            SensorManager.SENSOR_DELAY_GAME
-        )
-        sensorActive = registered
+        var anyRegistered = false
+        if (activeMotionSensor != null) {
+            try {
+                anyRegistered = sensorManager.registerListener(
+                    listener,
+                    activeMotionSensor,
+                    SensorManager.SENSOR_DELAY_GAME
+                ) || anyRegistered
+            } catch (_: Exception) {
+            }
+        }
+        if (hingeSensor != null) {
+            try {
+                anyRegistered = sensorManager.registerListener(
+                    listener,
+                    hingeSensor,
+                    SensorManager.SENSOR_DELAY_GAME
+                ) || anyRegistered
+            } catch (_: Exception) {
+            }
+        }
+        sensorActive = anyRegistered
 
         onDispose {
-            sensorManager.unregisterListener(listener)
+            try {
+                sensorManager.unregisterListener(listener)
+            } catch (_: Exception) {
+            }
         }
     }
+
+    val dynamicHingeFactor = hardwareHingeDegrees?.let { deg ->
+        ((180f - deg.coerceIn(0f, 180f)) / 180f).coerceIn(0f, 1f)
+    } ?: hingeAngleFactor.coerceIn(0f, 1f)
 
     return SpatialTiltState(
         pitch = pitch,
         roll = roll,
-        hingeAngleFactor = hingeAngleFactor.coerceIn(0f, 1f),
-        isSensorActive = sensorActive
+        hingeAngleFactor = dynamicHingeFactor,
+        isSensorActive = sensorActive,
+        hingeAngleDegrees = hardwareHingeDegrees
     )
 }
 
 /**
+ * Convenience Composable that subscribes to 120Hz gyroscope + hardware hinge angle (`Sensor.TYPE_HINGE_ANGLE = 36`)
+ * and returns a ready-to-render [ParallaxOffset] (including `hingeAngleDegrees` and `hingeSpecularShift`).
+ */
+@Composable
+fun rememberGyroParallaxOffset(
+    enabled: Boolean = true,
+    depthLayer: Float = 1f,
+    smoothingAlpha: Float = 0.18f
+): ParallaxOffset {
+    val tilt = rememberSpatialTiltState(
+        enabled = enabled,
+        smoothingAlpha = smoothingAlpha
+    )
+    val density = LocalDensity.current
+    val maxTranslationPx = remember(density) { with(density) { 10.dp.toPx() } }
+
+    return remember(tilt.pitch, tilt.roll, tilt.hingeAngleFactor, tilt.hingeAngleDegrees, depthLayer, maxTranslationPx) {
+        val effectivePitch = (tilt.pitch + tilt.hingeAngleFactor * 0.2f).coerceIn(-1f, 1f)
+        SpatialMath.computeParallaxOffset(
+            pitch = effectivePitch,
+            roll = tilt.roll,
+            depthLayer = depthLayer,
+            maxTranslationPx = maxTranslationPx,
+            maxRotationDeg = 4.2f,
+            hingeAngleDegrees = tilt.hingeAngleDegrees
+        )
+    }
+}
+
+/**
  * Applies 120Hz 3D depth parallax (`rotationX`, `rotationY`, `translationX`, `translationY`)
- * and a dynamic specular glass edge sheen that reacts in real time as you tilt or unfold
- * the Galaxy Z Fold 8 or S23 Ultra.
+ * and a dynamic specular glass edge sheen (including hardware Z Fold 8 hinge-angle specular sweep)
+ * that reacts in real time as you tilt or fold/unfold the Galaxy Z Fold 8 or S23 Ultra.
  */
 fun Modifier.spatialParallaxCard(
     tilt: SpatialTiltState,
@@ -415,14 +538,22 @@ fun Modifier.spatialParallaxCard(
     val density = LocalDensity.current
     val maxTranslationPx = remember(density) { with(density) { 10.dp.toPx() } }
 
-    val transform = remember(tilt.pitch, tilt.roll, tilt.hingeAngleFactor, depthLayer, maxTranslationPx) {
+    val transform = remember(
+        tilt.pitch,
+        tilt.roll,
+        tilt.hingeAngleFactor,
+        tilt.hingeAngleDegrees,
+        depthLayer,
+        maxTranslationPx
+    ) {
         val effectivePitch = (tilt.pitch + tilt.hingeAngleFactor * 0.2f).coerceIn(-1f, 1f)
         SpatialMath.computeParallaxOffset(
             pitch = effectivePitch,
             roll = tilt.roll,
             depthLayer = depthLayer,
             maxTranslationPx = maxTranslationPx,
-            maxRotationDeg = 4.2f
+            maxRotationDeg = 4.2f,
+            hingeAngleDegrees = tilt.hingeAngleDegrees
         )
     }
 
@@ -457,7 +588,10 @@ fun Modifier.spatialParallaxCard(
         }
         .drawWithContent {
             drawContent()
-            if (enableSpecularSheen && (abs(tilt.roll) > 0.01f || abs(tilt.pitch) > 0.01f)) {
+            val hasTiltOrHinge = abs(tilt.roll) > 0.01f ||
+                abs(tilt.pitch) > 0.01f ||
+                tilt.hingeAngleDegrees != null
+            if (enableSpecularSheen && hasTiltOrHinge) {
                 val shift = transform.specularShift
                 val sheenStart = Offset(
                     x = size.width * (0.2f + shift * 0.35f),
@@ -467,7 +601,8 @@ fun Modifier.spatialParallaxCard(
                     x = size.width * (0.8f + shift * 0.35f),
                     y = size.height
                 )
-                val sheenAlpha = (0.04f + tilt.magnitude * 0.10f).coerceIn(0.03f, 0.14f)
+                val hingeBoost = abs(transform.hingeSpecularShift) * 0.12f
+                val sheenAlpha = (0.04f + tilt.magnitude * 0.10f + hingeBoost).coerceIn(0.03f, 0.16f)
                 drawRect(
                     brush = Brush.linearGradient(
                         colors = listOf(
@@ -482,6 +617,325 @@ fun Modifier.spatialParallaxCard(
                 )
             }
         }
+}
+
+/**
+ * Z Fold 8 Tent Mode Standby HUD (`hingeAngle in 15°..65°` or manual `PostureOverride.TENT_MODE`).
+ *
+ * When the Galaxy Z Fold 8 (`SM-F971U1`) is propped up on a desk like a tent or bedside/desk display,
+ * renders a low-power, high-contrast OLED Ambient Desk HUD featuring:
+ * - Oversized OLED Desk Clock & Date
+ * - Live Hardware Hinge Angle Gauge (`e.g. 48° TENT` / `115° FLEX`)
+ * - Live VC Agent Telemetry Ticker (active agents, pending approvals, 1-tap `Talk to VC`)
+ * - Quick Media Transport & `Exit Tent Mode` controls
+ */
+@Composable
+fun TentModeStandbyHud(
+    hingeAngleDegrees: Float? = null,
+    batteryPct: Int = 100,
+    isCharging: Boolean = false,
+    nextEventText: String = "",
+    vcSummary: VcLiveSummary? = null,
+    onTalkToVc: (() -> Unit)? = null,
+    onOpenVcApp: (() -> Unit)? = null,
+    onMediaPrev: (() -> Unit)? = null,
+    onMediaPlayPause: (() -> Unit)? = null,
+    onMediaNext: (() -> Unit)? = null,
+    onExitTentMode: () -> Unit = {},
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
+    val vcMonitor = remember(context) { VcBackgroundMonitor.getInstance(context) }
+    val monitorSummary by vcMonitor.liveSummary.collectAsState()
+    val effectiveSummary = vcSummary ?: monitorSummary
+
+    val spatialTilt = rememberSpatialTiltState(enabled = true)
+    val effectiveHingeDeg = hingeAngleDegrees ?: spatialTilt.hingeAngleDegrees ?: 48f
+    val hingeBadgeText = remember(effectiveHingeDeg) {
+        SpatialMath.formatHingePostureBadge(effectiveHingeDeg)
+    }
+
+    var currentTimeMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            currentTimeMillis = System.currentTimeMillis()
+            delay(10_000L)
+        }
+    }
+
+    val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+    val dateFormat = remember { SimpleDateFormat("EEE, MMM d", Locale.getDefault()) }
+    val formattedTime = remember(currentTimeMillis) { timeFormat.format(Date(currentTimeMillis)) }
+    val formattedDate = remember(currentTimeMillis) { dateFormat.format(Date(currentTimeMillis)).uppercase() }
+
+    fun dispatchSystemMediaKey(keyCode: Int) {
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        val now = SystemClock.uptimeMillis()
+        try {
+            audioManager.dispatchMediaKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0))
+            audioManager.dispatchMediaKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0))
+        } catch (_: Exception) {
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.75f)
+            .clip(RoundedCornerShape(28.dp))
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        FoldLauncherColors.OledBlack,
+                        FoldLauncherColors.DeepVoid,
+                        FoldLauncherColors.GlassSurface
+                    )
+                )
+            )
+            .border(1.5.dp, FoldLauncherColors.GlassBorderStrong, RoundedCornerShape(28.dp))
+            .padding(horizontal = 20.dp, vertical = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        // 1. Top Row: Live Hinge Angle Gauge Pill + Battery & Standby Telemetry
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Mini Radial Hinge Angle Arc Gauge
+                Canvas(modifier = Modifier.size(28.dp)) {
+                    val strokeWidth = 3.dp.toPx()
+                    drawArc(
+                        color = FoldLauncherColors.GlassBorder,
+                        startAngle = 180f,
+                        sweepAngle = 180f,
+                        useCenter = false,
+                        style = Stroke(width = strokeWidth, cap = StrokeCap.Round),
+                        size = Size(size.width, size.height)
+                    )
+                    val normalizedSweep = (effectiveHingeDeg.coerceIn(0f, 180f) / 180f) * 180f
+                    drawArc(
+                        color = FoldLauncherColors.ElectricCyan,
+                        startAngle = 180f,
+                        sweepAngle = normalizedSweep,
+                        useCenter = false,
+                        style = Stroke(width = strokeWidth, cap = StrokeCap.Round),
+                        size = Size(size.width, size.height)
+                    )
+                }
+
+                Column {
+                    Text(
+                        text = "Z FOLD 8 TENT STANDBY HUD",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = FoldLauncherColors.ElectricCyan
+                    )
+                    Text(
+                        text = "$hingeBadgeText · 120Hz OLED LOW-POWER DECK",
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = FoldLauncherColors.CyanBright
+                    )
+                }
+            }
+
+            // Battery & Charging Pill
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(FoldLauncherColors.GlassSurfaceElevated)
+                    .border(1.dp, FoldLauncherColors.GlassBorder, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 10.dp, vertical = 5.dp)
+            ) {
+                Text(
+                    text = if (isCharging) "⚡ $batteryPct%" else "🔋 $batteryPct%",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isCharging) FoldLauncherColors.EmeraldSuccess else FoldLauncherColors.TextPrimary
+                )
+            }
+        }
+
+        // 2. Center Row: Ultra-Crisp OLED Desk Clock & Date + Next Calendar Event
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    text = formattedTime,
+                    fontSize = 48.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = FoldLauncherColors.TextPrimary,
+                    letterSpacing = (-1.5).sp
+                )
+                Text(
+                    text = formattedDate + if (nextEventText.isNotBlank()) " · $nextEventText" else "",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = FoldLauncherColors.CyanBright,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            // 1-Tap Talk to VC Voice Button
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(FoldLauncherColors.CyanGlow)
+                    .border(1.2.dp, FoldLauncherColors.ElectricCyan, RoundedCornerShape(18.dp))
+                    .clickable {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        if (onTalkToVc != null) {
+                            onTalkToVc()
+                        } else {
+                            vcMonitor.launchVcVoiceTalk()
+                        }
+                    }
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "🎙 Talk to VC",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = FoldLauncherColors.CyanBright
+                    )
+                    Text(
+                        text = "Instant Voice Turn",
+                        fontSize = 10.sp,
+                        color = FoldLauncherColors.TextSecondary
+                    )
+                }
+            }
+        }
+
+        // 3. Live VC Agent Telemetry Ticker
+        val workingCount = effectiveSummary.workingCount
+        val approvalCount = effectiveSummary.approvalCount
+        val activeAgents = effectiveSummary.activeAgents
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(18.dp))
+                .background(FoldLauncherColors.GlassSurfaceElevated)
+                .border(
+                    width = 1.dp,
+                    color = if (approvalCount > 0) FoldLauncherColors.AmberWarning else FoldLauncherColors.GlassBorder,
+                    shape = RoundedCornerShape(18.dp)
+                )
+                .clickable {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    if (onOpenVcApp != null) {
+                        onOpenVcApp()
+                    } else {
+                        vcMonitor.launchVc(null)
+                    }
+                }
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "LIVE VC AGENT TELEMETRY TICKER",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = FoldLauncherColors.ElectricCyan
+                )
+                Text(
+                    text = when {
+                        approvalCount > 0 -> "⚠ $approvalCount APPROVAL NEEDED"
+                        workingCount > 0 -> "● $workingCount WORKING"
+                        else -> "✓ ${activeAgents.size} AGENTS READY"
+                    },
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = when {
+                        approvalCount > 0 -> FoldLauncherColors.AmberWarning
+                        workingCount > 0 -> FoldLauncherColors.EmeraldSuccess
+                        else -> FoldLauncherColors.CyanBright
+                    }
+                )
+            }
+
+            val tickerDetails = remember(effectiveSummary) {
+                if (activeAgents.isNotEmpty()) {
+                    activeAgents.take(4).joinToString("  •  ") { agent ->
+                        "${agent.name} (${agent.status.uppercase()})"
+                    }
+                } else {
+                    effectiveSummary.headlineSummary
+                }
+            }
+            Text(
+                text = tickerDetails,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = FoldLauncherColors.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        // 4. Quick Media Transport & Exit Tent Mode Controls
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TrackpadDeckButton(
+                label = "⏮ Prev",
+                accent = FoldLauncherColors.TextPrimary,
+                onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    if (onMediaPrev != null) onMediaPrev() else dispatchSystemMediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS)
+                },
+                modifier = Modifier.weight(1f)
+            )
+            TrackpadDeckButton(
+                label = "⏯ Play/Pause",
+                accent = FoldLauncherColors.CyanBright,
+                onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    if (onMediaPlayPause != null) onMediaPlayPause() else dispatchSystemMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+                },
+                modifier = Modifier.weight(1.25f)
+            )
+            TrackpadDeckButton(
+                label = "⏭ Next",
+                accent = FoldLauncherColors.TextPrimary,
+                onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    if (onMediaNext != null) onMediaNext() else dispatchSystemMediaKey(KeyEvent.KEYCODE_MEDIA_NEXT)
+                },
+                modifier = Modifier.weight(1f)
+            )
+            TrackpadDeckButton(
+                label = "✕ Exit Tent",
+                accent = FoldLauncherColors.CoralDanger,
+                onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onExitTentMode()
+                },
+                modifier = Modifier.weight(1.15f)
+            )
+        }
+    }
 }
 
 /**
@@ -905,34 +1359,79 @@ fun RadialThumbArcOverlay(
 }
 
 /**
- * Z Fold 8 Half-Folded Flex-Mode Virtual Trackpad & Laser Cursor Deck.
+ * Z Fold 8 Half-Folded Flex-Mode Virtual Trackpad & Laser Cursor Deck (`FlexTrackpadPanel` / `FlexVirtualTrackpadCard`).
  *
  * Designed for `FLEX_TABLETOP` posture (or toggled on as a split control deck): renders a
- * multi-touch 120Hz glassmorphic trackpad surface on the bottom half with simulated cursor
- * coordinates, laser crosshair HUD, 1-tap Left/Right click buttons, Spotlight trigger,
- * VC / favorite app quick-launch target bar, and Split-Screen trigger.
+ * multi-touch 120Hz glassmorphic trackpad surface on the bottom half with:
+ * - Live Hinge Angle Telemetry Badge (`e.g. 118° HINGE`) in the header when non-null
+ * - Simulated cursor coordinates & 120Hz laser crosshair HUD
+ * - Right-edge **2-Finger Scroll / Page Up / Page Down Quick Strip** for effortless navigation of
+ *   long VC agent transcripts or Termux logs on the top half of the Z Fold 8 screen
+ * - 1-tap Left/Right click buttons, Spotlight trigger, VC Deck quick-launch, and Split-Screen trigger.
  */
 @Composable
-fun FlexVirtualTrackpadCard(
+fun FlexTrackpadPanel(
     favoriteApps: List<AppEntry> = emptyList(),
+    hingeAngleDegrees: Float? = null,
     onLaunchApp: (AppEntry) -> Unit = {},
     onContextApp: (AppEntry) -> Unit = {},
     onOpenSearch: () -> Unit = {},
     onTriggerSplitScreen: () -> Unit = {},
     onQuickLaunchVc: (() -> Unit)? = null,
     onCursorPositionChanged: ((Float, Float) -> Unit)? = null,
+    onScrollDelta: ((Float) -> Unit)? = null,
+    onPageUp: (() -> Unit)? = null,
+    onPageDown: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    FlexVirtualTrackpadCard(
+        favoriteApps = favoriteApps,
+        hingeAngleDegrees = hingeAngleDegrees,
+        onLaunchApp = onLaunchApp,
+        onContextApp = onContextApp,
+        onOpenSearch = onOpenSearch,
+        onTriggerSplitScreen = onTriggerSplitScreen,
+        onQuickLaunchVc = onQuickLaunchVc,
+        onCursorPositionChanged = onCursorPositionChanged,
+        onScrollDelta = onScrollDelta,
+        onPageUp = onPageUp,
+        onPageDown = onPageDown,
+        modifier = modifier
+    )
+}
+
+@Composable
+fun FlexVirtualTrackpadCard(
+    favoriteApps: List<AppEntry> = emptyList(),
+    hingeAngleDegrees: Float? = null,
+    onLaunchApp: (AppEntry) -> Unit = {},
+    onContextApp: (AppEntry) -> Unit = {},
+    onOpenSearch: () -> Unit = {},
+    onTriggerSplitScreen: () -> Unit = {},
+    onQuickLaunchVc: (() -> Unit)? = null,
+    onCursorPositionChanged: ((Float, Float) -> Unit)? = null,
+    onScrollDelta: ((Float) -> Unit)? = null,
+    onPageUp: (() -> Unit)? = null,
+    onPageDown: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val haptics = LocalHapticFeedback.current
+    val spatialTilt = rememberSpatialTiltState(enabled = hingeAngleDegrees == null)
+    val effectiveHingeDegrees = hingeAngleDegrees ?: spatialTilt.hingeAngleDegrees
+
     val currentOnLaunchApp by rememberUpdatedState(onLaunchApp)
     val currentOnContextApp by rememberUpdatedState(onContextApp)
     val currentOnOpenSearch by rememberUpdatedState(onOpenSearch)
     val currentOnTriggerSplit by rememberUpdatedState(onTriggerSplitScreen)
     val currentOnQuickVc by rememberUpdatedState(onQuickLaunchVc)
     val currentOnCursorChanged by rememberUpdatedState(onCursorPositionChanged)
+    val currentOnScrollDelta by rememberUpdatedState(onScrollDelta)
+    val currentOnPageUp by rememberUpdatedState(onPageUp)
+    val currentOnPageDown by rememberUpdatedState(onPageDown)
 
     var cursorNormX by remember { mutableFloatStateOf(0.5f) }
     var cursorNormY by remember { mutableFloatStateOf(0.5f) }
+    var scrollThumbNormY by remember { mutableFloatStateOf(0.5f) }
     val animatedCursorX by animateFloatAsState(
         targetValue = cursorNormX,
         animationSpec = LauncherSpringSpecs.TrackpadCursorSpring,
@@ -947,7 +1446,7 @@ fun FlexVirtualTrackpadCard(
     var padHeightPx by remember { mutableFloatStateOf(1f) }
     var isTouchingPad by remember { mutableStateOf(false) }
     var highSensitivity by remember { mutableStateOf(true) }
-    var lastActionStatus by remember { mutableStateOf("120Hz Laser Cursor Ready") }
+    var lastActionStatus by remember { mutableStateOf("120Hz Laser Cursor & 2F Scroll Ready") }
 
     val targetApps = remember(favoriteApps) { favoriteApps.take(5) }
     val targetedAppIndex = remember(cursorNormX, targetApps.size) {
@@ -979,6 +1478,24 @@ fun FlexVirtualTrackpadCard(
         }
     }
 
+    fun triggerPageUp() {
+        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        scrollThumbNormY = (scrollThumbNormY - 0.25f).coerceIn(0f, 1f)
+        cursorNormY = (cursorNormY - 0.20f).coerceIn(0f, 1f)
+        lastActionStatus = "▲ Page Up · Top Hemisphere Scroll"
+        currentOnPageUp?.invoke()
+        currentOnScrollDelta?.invoke(-1f)
+    }
+
+    fun triggerPageDown() {
+        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        scrollThumbNormY = (scrollThumbNormY + 0.25f).coerceIn(0f, 1f)
+        cursorNormY = (cursorNormY + 0.20f).coerceIn(0f, 1f)
+        lastActionStatus = "▼ Page Down · Top Hemisphere Scroll"
+        currentOnPageDown?.invoke()
+        currentOnScrollDelta?.invoke(1f)
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -988,7 +1505,7 @@ fun FlexVirtualTrackpadCard(
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // Header Row: Trackpad Title + Coordinate Telemetry + Sensitivity Pill
+        // Header Row: Trackpad Title + Hinge Angle Telemetry Badge + Coordinate Telemetry + Sensitivity Pill
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1014,6 +1531,24 @@ fun FlexVirtualTrackpadCard(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                if (effectiveHingeDegrees != null) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(FoldLauncherColors.CyanGlow)
+                            .border(1.dp, FoldLauncherColors.ElectricCyan, RoundedCornerShape(10.dp))
+                            .padding(horizontal = 7.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = "${effectiveHingeDegrees.roundToInt()}° HINGE",
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = FoldLauncherColors.CyanBright
+                        )
+                    }
+                }
+
                 Text(
                     text = "X:${(cursorNormX * 100).roundToInt()}% Y:${(cursorNormY * 100).roundToInt()}%",
                     fontSize = 10.sp,
@@ -1080,138 +1615,238 @@ fun FlexVirtualTrackpadCard(
             }
         }
 
-        // Interactive Multi-Touch Glassmorphic Trackpad Surface
+        // Interactive Multi-Touch Trackpad Surface + Right-Edge 2-Finger Scroll / PgUp / PgDn Strip
         val sensitivity = if (highSensitivity) 1.6f else 1.0f
-        Box(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(116.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(FoldLauncherColors.DeepVoid.copy(alpha = 0.85f))
-                .border(
-                    width = if (isTouchingPad) 1.5.dp else 1.dp,
-                    color = if (isTouchingPad) FoldLauncherColors.ElectricCyan else FoldLauncherColors.GlassBorder,
-                    shape = RoundedCornerShape(18.dp)
-                )
-                .onSizeChanged { size ->
-                    padWidthPx = size.width.coerceAtLeast(1).toFloat()
-                    padHeightPx = size.height.coerceAtLeast(1).toFloat()
-                }
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onTap = { performLeftClick() },
-                        onDoubleTap = {
-                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                            currentOnOpenSearch()
-                        },
-                        onLongPress = { performRightClick() }
-                    )
-                }
-                .pointerInput(sensitivity) {
-                    detectDragGestures(
-                        onDragStart = {
-                            isTouchingPad = true
-                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        },
-                        onDragEnd = {
-                            isTouchingPad = false
-                        },
-                        onDragCancel = {
-                            isTouchingPad = false
-                        },
-                        onDrag = { change, dragAmount ->
-                            change.consume()
-                            val (nextX, nextY) = SpatialMath.updateTrackpadCursor(
-                                currentNormalizedX = cursorNormX,
-                                currentNormalizedY = cursorNormY,
-                                deltaXPx = dragAmount.x,
-                                deltaYPx = dragAmount.y,
-                                padWidthPx = padWidthPx,
-                                padHeightPx = padHeightPx,
-                                sensitivity = sensitivity
-                            )
-                            cursorNormX = nextX
-                            cursorNormY = nextY
-                            currentOnCursorChanged?.invoke(nextX, nextY)
-                        }
-                    )
-                }
+                .height(116.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                // Subtle precision grid lines
-                val cols = 6
-                val rows = 3
-                for (c in 1 until cols) {
-                    val x = size.width * (c.toFloat() / cols)
-                    drawLine(
-                        color = FoldLauncherColors.GlassBorder.copy(alpha = 0.14f),
-                        start = Offset(x, 0f),
-                        end = Offset(x, size.height),
-                        strokeWidth = 1.dp.toPx()
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(FoldLauncherColors.DeepVoid.copy(alpha = 0.85f))
+                    .border(
+                        width = if (isTouchingPad) 1.5.dp else 1.dp,
+                        color = if (isTouchingPad) FoldLauncherColors.ElectricCyan else FoldLauncherColors.GlassBorder,
+                        shape = RoundedCornerShape(18.dp)
                     )
-                }
-                for (r in 1 until rows) {
-                    val y = size.height * (r.toFloat() / rows)
-                    drawLine(
-                        color = FoldLauncherColors.GlassBorder.copy(alpha = 0.14f),
-                        start = Offset(0f, y),
-                        end = Offset(size.width, y),
-                        strokeWidth = 1.dp.toPx()
+                    .onSizeChanged { size ->
+                        padWidthPx = size.width.coerceAtLeast(1).toFloat()
+                        padHeightPx = size.height.coerceAtLeast(1).toFloat()
+                    }
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = { performLeftClick() },
+                            onDoubleTap = {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                currentOnOpenSearch()
+                            },
+                            onLongPress = { performRightClick() }
+                        )
+                    }
+                    .pointerInput(sensitivity) {
+                        detectDragGestures(
+                            onDragStart = {
+                                isTouchingPad = true
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            },
+                            onDragEnd = {
+                                isTouchingPad = false
+                            },
+                            onDragCancel = {
+                                isTouchingPad = false
+                            },
+                            onDrag = { change, dragAmount ->
+                                change.consume()
+                                val (nextX, nextY) = SpatialMath.updateTrackpadCursor(
+                                    currentNormalizedX = cursorNormX,
+                                    currentNormalizedY = cursorNormY,
+                                    deltaXPx = dragAmount.x,
+                                    deltaYPx = dragAmount.y,
+                                    padWidthPx = padWidthPx,
+                                    padHeightPx = padHeightPx,
+                                    sensitivity = sensitivity
+                                )
+                                cursorNormX = nextX
+                                cursorNormY = nextY
+                                currentOnCursorChanged?.invoke(nextX, nextY)
+                            }
+                        )
+                    }
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    // Subtle precision grid lines
+                    val cols = 6
+                    val rows = 3
+                    for (c in 1 until cols) {
+                        val x = size.width * (c.toFloat() / cols)
+                        drawLine(
+                            color = FoldLauncherColors.GlassBorder.copy(alpha = 0.14f),
+                            start = Offset(x, 0f),
+                            end = Offset(x, size.height),
+                            strokeWidth = 1.dp.toPx()
+                        )
+                    }
+                    for (r in 1 until rows) {
+                        val y = size.height * (r.toFloat() / rows)
+                        drawLine(
+                            color = FoldLauncherColors.GlassBorder.copy(alpha = 0.14f),
+                            start = Offset(0f, y),
+                            end = Offset(size.width, y),
+                            strokeWidth = 1.dp.toPx()
+                        )
+                    }
+
+                    // Laser Cursor Crosshairs & Glowing Reticle
+                    val cursorOffset = Offset(
+                        x = (animatedCursorX * size.width).coerceIn(10f, (size.width - 10f).coerceAtLeast(10f)),
+                        y = (animatedCursorY * size.height).coerceIn(10f, (size.height - 10f).coerceAtLeast(10f))
                     )
-                }
 
-                // Laser Cursor Crosshairs & Glowing Reticle
-                val cursorOffset = Offset(
-                    x = (animatedCursorX * size.width).coerceIn(10f, (size.width - 10f).coerceAtLeast(10f)),
-                    y = (animatedCursorY * size.height).coerceIn(10f, (size.height - 10f).coerceAtLeast(10f))
-                )
+                    drawLine(
+                        color = FoldLauncherColors.ElectricCyan.copy(alpha = if (isTouchingPad) 0.42f else 0.20f),
+                        start = Offset(cursorOffset.x, 0f),
+                        end = Offset(cursorOffset.x, size.height),
+                        strokeWidth = 1.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+                    drawLine(
+                        color = FoldLauncherColors.ElectricCyan.copy(alpha = if (isTouchingPad) 0.42f else 0.20f),
+                        start = Offset(0f, cursorOffset.y),
+                        end = Offset(size.width, cursorOffset.y),
+                        strokeWidth = 1.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
 
-                drawLine(
-                    color = FoldLauncherColors.ElectricCyan.copy(alpha = if (isTouchingPad) 0.42f else 0.20f),
-                    start = Offset(cursorOffset.x, 0f),
-                    end = Offset(cursorOffset.x, size.height),
-                    strokeWidth = 1.dp.toPx(),
-                    cap = StrokeCap.Round
-                )
-                drawLine(
-                    color = FoldLauncherColors.ElectricCyan.copy(alpha = if (isTouchingPad) 0.42f else 0.20f),
-                    start = Offset(0f, cursorOffset.y),
-                    end = Offset(size.width, cursorOffset.y),
-                    strokeWidth = 1.dp.toPx(),
-                    cap = StrokeCap.Round
-                )
-
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            FoldLauncherColors.CyanBright.copy(alpha = 0.55f),
-                            FoldLauncherColors.ElectricCyan.copy(alpha = 0.18f),
-                            Color.Transparent
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                FoldLauncherColors.CyanBright.copy(alpha = 0.55f),
+                                FoldLauncherColors.ElectricCyan.copy(alpha = 0.18f),
+                                Color.Transparent
+                            ),
+                            center = cursorOffset,
+                            radius = 22.dp.toPx()
                         ),
                         center = cursorOffset,
                         radius = 22.dp.toPx()
-                    ),
-                    center = cursorOffset,
-                    radius = 22.dp.toPx()
-                )
+                    )
 
-                drawCircle(
-                    color = FoldLauncherColors.CyanBright,
-                    center = cursorOffset,
-                    radius = if (isTouchingPad) 6.dp.toPx() else 4.5.dp.toPx()
-                )
+                    drawCircle(
+                        color = FoldLauncherColors.CyanBright,
+                        center = cursorOffset,
+                        radius = if (isTouchingPad) 6.dp.toPx() else 4.5.dp.toPx()
+                    )
+                }
+
+                if (targetedApp != null) {
+                    Text(
+                        text = "Target: ${targetedApp.label}",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = FoldLauncherColors.CyanBright.copy(alpha = 0.85f),
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
             }
 
-            if (targetedApp != null) {
-                Text(
-                    text = "Target: ${targetedApp.label}",
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = FoldLauncherColors.CyanBright.copy(alpha = 0.85f),
+            // Right-Edge 2-Finger Scroll / Page Up / Page Down Quick Strip
+            Column(
+                modifier = Modifier
+                    .width(54.dp)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(FoldLauncherColors.GlassSurfaceElevated)
+                    .border(1.dp, FoldLauncherColors.GlassBorderStrong, RoundedCornerShape(16.dp))
+                    .padding(vertical = 4.dp, horizontal = 4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.SpaceBetween
+            ) {
+                Box(
                     modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                )
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(FoldLauncherColors.GlassSurfaceHighlight)
+                        .clickable { triggerPageUp() }
+                        .padding(vertical = 4.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "▲ PgUp",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = FoldLauncherColors.CyanBright
+                    )
+                }
+
+                // Continuous 2-Finger / Thumb Vertical Scroll Rail
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(vertical = 3.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(FoldLauncherColors.DeepVoid.copy(alpha = 0.7f))
+                        .pointerInput(Unit) {
+                            detectVerticalDragGestures(
+                                onDragStart = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                },
+                                onVerticalDrag = { change, dragAmount ->
+                                    change.consume()
+                                    val h = size.height.coerceAtLeast(1).toFloat()
+                                    val normDelta = dragAmount / h
+                                    scrollThumbNormY = (scrollThumbNormY + normDelta).coerceIn(0f, 1f)
+                                    lastActionStatus = "2F Scroll · ${(scrollThumbNormY * 100).roundToInt()}%"
+                                    currentOnScrollDelta?.invoke(normDelta)
+                                }
+                            )
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val tickCount = 5
+                        for (i in 1..tickCount) {
+                            val y = size.height * (i.toFloat() / (tickCount + 1))
+                            drawLine(
+                                color = FoldLauncherColors.GlassBorder,
+                                start = Offset(size.width * 0.25f, y),
+                                end = Offset(size.width * 0.75f, y),
+                                strokeWidth = 1.dp.toPx()
+                            )
+                        }
+                        val thumbY = (scrollThumbNormY * size.height)
+                            .coerceIn(6.dp.toPx(), (size.height - 6.dp.toPx()).coerceAtLeast(6.dp.toPx()))
+                        drawCircle(
+                            color = FoldLauncherColors.ElectricCyan,
+                            center = Offset(size.width * 0.5f, thumbY),
+                            radius = 4.dp.toPx()
+                        )
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(FoldLauncherColors.GlassSurfaceHighlight)
+                        .clickable { triggerPageDown() }
+                        .padding(vertical = 4.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "▼ PgDn",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = FoldLauncherColors.CyanBright
+                    )
+                }
             }
         }
 

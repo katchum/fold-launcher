@@ -1,5 +1,11 @@
 package com.xsun.foldlauncher.ui.components
 
+import android.content.Context
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.os.Build
 import android.text.format.DateFormat
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -11,7 +17,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -19,9 +24,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -34,7 +42,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -47,6 +57,55 @@ import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
+
+private val POSTURE_CYCLE_MODES = listOf("AUTO", "FLEX", "INNER", "COVER", "TENT")
+
+/**
+ * Reads the physical Galaxy Z Fold 8 hinge angle sensor (`Sensor.TYPE_HINGE_ANGLE` = 36)
+ * when available, returning `null` on slab devices or when no hinge sensor is present.
+ */
+@Composable
+internal fun rememberHardwareHingeAngleDegrees(): Float? {
+    val context = LocalContext.current
+    var angleDeg by remember { mutableStateOf<Float?>(null) }
+
+    DisposableEffect(context) {
+        val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+        val hingeSensor = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            sensorManager?.getDefaultSensor(Sensor.TYPE_HINGE_ANGLE)
+        } else {
+            sensorManager?.getDefaultSensor(36)
+        }
+
+        if (sensorManager == null || hingeSensor == null) {
+            return@DisposableEffect onDispose {}
+        }
+
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent?) {
+                val raw = event?.values?.firstOrNull() ?: return
+                if (!raw.isNaN() && raw in 0f..180f) {
+                    angleDeg = raw
+                }
+            }
+
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+        }
+
+        sensorManager.registerListener(
+            listener,
+            hingeSensor,
+            SensorManager.SENSOR_DELAY_UI
+        )
+
+        onDispose {
+            sensorManager.unregisterListener(listener)
+        }
+    }
+
+    return angleDeg
+}
 
 @Composable
 fun TopStatusBar(
@@ -58,10 +117,18 @@ fun TopStatusBar(
     onClockClick: () -> Unit,
     onSearchPillClick: () -> Unit,
     onSettingsClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    hingeAngleDegrees: Float? = null,
+    postureOverrideLabel: String? = null,
+    onCyclePostureOverride: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
     var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var localCycleIndex by remember { mutableIntStateOf(0) }
+
+    val sensorHingeAngle = rememberHardwareHingeAngleDegrees()
+    val effectiveHingeAngle = hingeAngleDegrees ?: sensorHingeAngle
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -82,14 +149,29 @@ fun TopStatusBar(
         SimpleDateFormat("EEE, MMM d", Locale.getDefault()).format(Date(nowMillis))
     }
 
-    val postureLabel = when {
-        isDeXConnected -> "DeX READY"
-        postureState.posture == DevicePosture.EXPANDED && postureState.isBookPosture -> "BOOK POSTURE"
-        postureState.posture == DevicePosture.EXPANDED -> "INNER 120Hz"
-        postureState.posture == DevicePosture.FLEX_TABLETOP -> "FLEX MODE"
-        else -> "COVER / SLAB"
+    val activeOverrideTag = postureOverrideLabel ?: POSTURE_CYCLE_MODES[localCycleIndex]
+    val isManualOverrideActive = !activeOverrideTag.equals("AUTO", ignoreCase = true)
+
+    val anglePrefix = effectiveHingeAngle?.let { "${it.roundToInt()}° " } ?: when (postureState.posture) {
+        DevicePosture.EXPANDED -> if (postureState.isBookPosture) "135° " else "180° "
+        DevicePosture.FLEX_TABLETOP -> "118° "
+        DevicePosture.COMPACT -> ""
     }
 
+    val basePostureLabel = when {
+        isDeXConnected -> "DeX READY"
+        activeOverrideTag.equals("TENT", ignoreCase = true) -> "${ effectiveHingeAngle?.roundToInt() ?: 48 }° TENT"
+        activeOverrideTag.equals("FLEX", ignoreCase = true) -> "${ effectiveHingeAngle?.roundToInt() ?: 118 }° FLEX"
+        activeOverrideTag.equals("INNER", ignoreCase = true) -> "${ effectiveHingeAngle?.roundToInt() ?: 180 }° UNFOLDED"
+        activeOverrideTag.equals("COVER", ignoreCase = true) -> "COVER"
+        effectiveHingeAngle != null && effectiveHingeAngle in 25f..75f -> "${effectiveHingeAngle.roundToInt()}° TENT"
+        postureState.posture == DevicePosture.EXPANDED && postureState.isBookPosture -> "${anglePrefix}BOOK"
+        postureState.posture == DevicePosture.EXPANDED -> "${anglePrefix}UNFOLDED"
+        postureState.posture == DevicePosture.FLEX_TABLETOP -> "${anglePrefix}FLEX"
+        else -> "COVER"
+    }
+
+    val switcherHint = "$activeOverrideTag ↻"
     val pillShape = RoundedCornerShape(18.dp)
 
     Row(
@@ -109,28 +191,41 @@ fun TopStatusBar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        // Left cluster: Posture/DeX status chip, Spotlight pill, Settings button, and next event
+        // Left cluster: Interactive Hinge Angle & Posture Switcher Pill, Spotlight pill, Settings button
         Row(
             modifier = Modifier.weight(1f, fill = false),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Posture / DeX Indicator Chip
+            // Interactive Z Fold 8 Hinge Angle & Posture Switcher Pill
             Box(
                 modifier = Modifier
                     .clip(pillShape)
                     .background(
-                        if (isDeXConnected) {
-                            FoldLauncherColors.IndigoAccent.copy(alpha = 0.28f)
-                        } else {
-                            FoldLauncherColors.CyanGlow
+                        when {
+                            isDeXConnected -> FoldLauncherColors.IndigoAccent.copy(alpha = 0.28f)
+                            isManualOverrideActive -> FoldLauncherColors.AmberWarning.copy(alpha = 0.20f)
+                            else -> FoldLauncherColors.CyanGlow
                         }
                     )
                     .border(
-                        1.dp,
-                        if (isDeXConnected) FoldLauncherColors.IndigoAccent else FoldLauncherColors.GlassBorderStrong,
-                        pillShape
+                        width = 1.dp,
+                        color = when {
+                            isDeXConnected -> FoldLauncherColors.IndigoAccent
+                            isManualOverrideActive -> FoldLauncherColors.AmberWarning
+                            onCyclePostureOverride != null -> FoldLauncherColors.ElectricCyan
+                            else -> FoldLauncherColors.GlassBorderStrong
+                        },
+                        shape = pillShape
                     )
+                    .clickable {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        if (onCyclePostureOverride != null) {
+                            onCyclePostureOverride()
+                        } else {
+                            localCycleIndex = (localCycleIndex + 1) % POSTURE_CYCLE_MODES.size
+                        }
+                    }
                     .padding(horizontal = 10.dp, vertical = 5.dp)
             ) {
                 Row(
@@ -142,15 +237,29 @@ fun TopStatusBar(
                             .size(6.dp)
                             .clip(CircleShape)
                             .background(
-                                if (isDeXConnected) FoldLauncherColors.EmeraldSuccess
-                                else FoldLauncherColors.ElectricCyan
+                                when {
+                                    isDeXConnected -> FoldLauncherColors.EmeraldSuccess
+                                    isManualOverrideActive -> FoldLauncherColors.AmberWarning
+                                    else -> FoldLauncherColors.ElectricCyan
+                                }
                             )
                     )
                     Text(
-                        text = postureLabel,
+                        text = basePostureLabel,
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.ExtraBold,
                         color = FoldLauncherColors.TextPrimary,
+                        maxLines = 1
+                    )
+                    Text(
+                        text = switcherHint,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isManualOverrideActive) {
+                            FoldLauncherColors.AmberWarning
+                        } else {
+                            FoldLauncherColors.CyanBright
+                        },
                         maxLines = 1
                     )
                 }

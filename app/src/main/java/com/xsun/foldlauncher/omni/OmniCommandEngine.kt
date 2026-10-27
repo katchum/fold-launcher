@@ -49,6 +49,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Base64
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -57,16 +58,21 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Target system or launcher toggle triggered by a `> ...` Omni-Command.
+ * Target system, posture simulator, or launcher toggle triggered by a `> ...` or `posture: ...` Omni-Command.
  */
-enum class SystemToggleTarget {
-    DEX_GBOARD,
-    ROTATION_ON,
-    ROTATION_OFF,
-    LOCK_SCREEN,
-    FLOATING_HUD,
-    THUMB_ARC,
-    NOTIFICATIONS
+enum class SystemToggleTarget(val defaultActionId: String) {
+    DEX_GBOARD("dex_gboard"),
+    ROTATION_ON("rotation_on"),
+    ROTATION_OFF("rotation_off"),
+    LOCK_SCREEN("lock_screen"),
+    FLOATING_HUD("floating_hud"),
+    THUMB_ARC("thumb_arc"),
+    NOTIFICATIONS("notifications"),
+    POSTURE_FLEX("posture_flex"),
+    POSTURE_INNER("posture_inner"),
+    POSTURE_COVER("posture_cover"),
+    POSTURE_TENT("posture_tent"),
+    POSTURE_AUTO("posture_auto")
 }
 
 /**
@@ -89,10 +95,13 @@ sealed class OmniAction {
     abstract val subtitle: String
     abstract val badge: String
     open val copyText: String? = null
+    open val actionId: String = ""
+    val id: String get() = actionId
+    val commandId: String get() = actionId
 
     /**
      * Launches two apps side-by-side in multi-window split-screen mode on the fly
-     * without requiring a pre-saved App Pair (`split: yt + chrome` or `youtube | settings`).
+     * without requiring a pre-saved App Pair (`split: yt + chrome`, `split: vc + compare`, or `youtube | settings`).
      */
     data class LaunchAdHocSplit(
         val primaryApp: AppEntry,
@@ -104,17 +113,20 @@ sealed class OmniAction {
         override val subtitle: String =
             "Ad-Hoc Split-Screen · ${primaryApp.packageName} | ${secondaryApp.packageName}"
         override val badge: String = "SPLIT 50/50"
+        override val actionId: String = "split_${primaryApp.packageName}_${secondaryApp.packageName}"
     }
 
     /**
-     * Executes a live system/DeX setting tweak or launcher overlay toggle (`> dex gboard`, `> rotation on`, `> lock`, `> hud`, `> arc`).
+     * Executes a live system/DeX setting tweak, Z Fold 8 posture simulator override,
+     * or launcher overlay toggle (`> dex gboard`, `> rotation on`, `> lock`, `> hud`, `> arc`, `> posture flex`, `posture: inner`).
      */
     data class SystemCommand(
         val target: SystemToggleTarget,
         val triggerCommand: String,
         override val title: String,
         override val subtitle: String,
-        override val badge: String = "SYSTEM"
+        override val badge: String = "SYSTEM",
+        override val actionId: String = target.defaultActionId
     ) : OmniAction()
 
     /**
@@ -128,9 +140,10 @@ sealed class OmniAction {
         override val title: String =
             if (prompt.isBlank()) "Open VC Agent Console" else "VC Dispatch: \"$prompt\""
         override val subtitle: String =
-            "Copy prompt & launch VC (${SystemTweaker.VC_PROD_PACKAGE})"
+            "Copy prompt & launch VC (${OmniCommandEngine.VC_PROD_PACKAGE_Z_FOLD8})"
         override val badge: String = "VC AGENT"
         override val copyText: String = prompt
+        override val actionId: String = "vc_dispatch"
     }
 
     /**
@@ -147,6 +160,7 @@ sealed class OmniAction {
         override val title: String = primaryOutput
         override val subtitle: String = secondaryDetails
         override val badge: String = category
+        override val actionId: String = "dev_eval"
     }
 
     /**
@@ -163,6 +177,7 @@ sealed class OmniAction {
             items.firstOrNull()?.text?.replace('\n', ' ')?.take(72) ?: "No matching snippets"
         override val badge: String = "VAULT"
         override val copyText: String? = items.firstOrNull()?.text
+        override val actionId: String = "clipboard_match"
     }
 }
 
@@ -170,6 +185,66 @@ sealed class OmniAction {
  * Pure, fast, unit-testable parser, evaluator, and executor for Fold8 Launcher's Omni-Command Palette.
  */
 object OmniCommandEngine {
+
+    /**
+     * Default display density (420 dpi) for the Samsung Galaxy Z Fold 8 (`SM-F971U1`).
+     */
+    const val DEFAULT_Z_FOLD8_DPI = 420.0
+
+    /**
+     * Built-in Z Fold 8 Multi-VC, Termux, and Chrome package constants.
+     */
+    const val VC_PROD_PACKAGE_Z_FOLD8 = "dev.agentconversation"
+    const val VC_PREVIEW_PACKAGE_Z_FOLD8 = "dev.agentconversation.preview"
+    const val VC_COMPARE_PACKAGE_Z_FOLD8 = "dev.agentconversation.compare"
+    const val TERMUX_PACKAGE = "com.termux"
+    const val CHROME_PACKAGE = "com.android.chrome"
+
+    private data class BuiltInAliasSpec(
+        val packageName: String,
+        val defaultLabel: String,
+        val defaultActivity: String,
+        val aliases: Set<String>,
+        val isFold8SpecialAlias: Boolean
+    )
+
+    private val BUILT_IN_ALIAS_SPECS = listOf(
+        BuiltInAliasSpec(
+            packageName = VC_PROD_PACKAGE_Z_FOLD8,
+            defaultLabel = "VC",
+            defaultActivity = ".MainActivity",
+            aliases = setOf("vc", "prod", "vcprod", "vc prod", "vci", "dev.agentconversation"),
+            isFold8SpecialAlias = true
+        ),
+        BuiltInAliasSpec(
+            packageName = VC_PREVIEW_PACKAGE_Z_FOLD8,
+            defaultLabel = "VC Preview",
+            defaultActivity = ".MainActivity",
+            aliases = setOf("vcprev", "preview", "vc preview", "vc-preview", "dev.agentconversation.preview"),
+            isFold8SpecialAlias = true
+        ),
+        BuiltInAliasSpec(
+            packageName = VC_COMPARE_PACKAGE_Z_FOLD8,
+            defaultLabel = "VC Compare",
+            defaultActivity = ".MainActivity",
+            aliases = setOf("vccomp", "compare", "vc compare", "vc-compare", "dev.agentconversation.compare"),
+            isFold8SpecialAlias = true
+        ),
+        BuiltInAliasSpec(
+            packageName = TERMUX_PACKAGE,
+            defaultLabel = "Termux",
+            defaultActivity = ".app.TermuxActivity",
+            aliases = setOf("termux", "tty", "sh", "com.termux"),
+            isFold8SpecialAlias = true
+        ),
+        BuiltInAliasSpec(
+            packageName = CHROME_PACKAGE,
+            defaultLabel = "Chrome",
+            defaultActivity = "com.google.android.apps.chrome.Main",
+            aliases = setOf("chrome", "web", "com.android.chrome"),
+            isFold8SpecialAlias = false
+        )
+    )
 
     private val ISO_UTC_FORMATTER: DateTimeFormatter =
         DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
@@ -183,6 +258,9 @@ object OmniCommandEngine {
 
     private val PIPE_SPLIT_REGEX =
         Regex("^([^|>]+?)\\s*\\|\\s*([^|>]+)$")
+
+    private val POSTURE_PREFIX_REGEX =
+        Regex("^posture(?:\\s*:\\s*|\\s+)(.*)$", RegexOption.IGNORE_CASE)
 
     private val VC_COMMAND_REGEX =
         Regex("^(?:vc\\s*:\\s*|@vc\\s*:?\\s*|vc\\s+)(.*)$", RegexOption.IGNORE_CASE)
@@ -209,7 +287,16 @@ object OmniCommandEngine {
         Regex("^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
 
     private val PX_AT_DPI_REGEX =
-        Regex("^(\\d+(?:\\.\\d+)?)\\s*(px|dp)\\s*(?:at|@)\\s*(\\d+(?:\\.\\d+)?)\\s*dpi$", RegexOption.IGNORE_CASE)
+        Regex(
+            "^(\\d+(?:\\.\\d+)?)\\s*(px|dp)(?:\\s*(?:at|@)\\s*(\\d+(?:\\.\\d+)?)\\s*dpi)?(?:\\s+(?:in|to|->)\\s*(dp|px))?(?:\\s*(?:at|@)\\s*(\\d+(?:\\.\\d+)?)\\s*dpi)?$",
+            RegexOption.IGNORE_CASE
+        )
+
+    private val RESOLUTION_AT_DPI_REGEX =
+        Regex(
+            "^(\\d+(?:\\.\\d+)?)\\s*[x×]\\s*(\\d+(?:\\.\\d+)?)\\s*(?:px)?(?:\\s*(?:at|@)\\s*(\\d+(?:\\.\\d+)?)\\s*dpi)?(?:\\s+(?:in|to|->)\\s*dp)?$",
+            RegexOption.IGNORE_CASE
+        )
 
     private val UNIT_CONVERSION_REGEX =
         Regex(
@@ -237,30 +324,32 @@ object OmniCommandEngine {
 
         val results = mutableListOf<OmniAction>()
 
-        // 1. Live System & DeX Tweaker Commands (`> ...`)
-        if (trimmed.startsWith(">")) {
+        // 1. Live System, DeX Tweaker & Z Fold 8 Posture Simulator Commands (`> ...` or `posture: ...`)
+        if (trimmed.startsWith(">") || POSTURE_PREFIX_REGEX.matches(trimmed)) {
             results.addAll(parseSystemCommands(trimmed))
             return results
         }
 
-        // 2. VC Agent Direct Dispatch (`vc: <prompt>` or `@vc <prompt>`)
+        // 2. Ad-Hoc Split-Screen App Pair Command (`split: <app1> + <app2>` or `<app1> | <app2>`)
+        // Checked before VC dispatch so `vc | compare` and `split: vc + compare` resolve as Split-Screen!
+        parseSplitCommand(trimmed, installedApps)?.let { splitAction ->
+            results.add(splitAction)
+            return results
+        }
+
+        // 3. VC Agent Direct Dispatch (`vc: <prompt>` or `@vc <prompt>`)
         parseVcCommand(trimmed)?.let { vcAction ->
             results.add(vcAction)
             return results
         }
 
-        // 3. Clipboard Vault Filter (`clip: <search>`)
+        // 4. Clipboard Vault Filter (`clip: <search>`)
         parseClipboardQuery(trimmed, clipboardItems)?.let { clipAction ->
             results.add(clipAction)
             return results
         }
 
-        // 4. Ad-Hoc Split-Screen App Pair Command (`split: <app1> + <app2>` or `<app1> | <app2>`)
-        parseSplitCommand(trimmed, installedApps)?.let { splitAction ->
-            results.add(splitAction)
-        }
-
-        // 5. Developer & Unit Conversions (Hex/Dec/Bin/RGB, Epoch, px@dpi, km/mi, kg/lb, C/F, Base64)
+        // 5. Developer & Unit Conversions (Hex/Dec/Bin/RGB, Epoch, px@dpi / 2448x1848@420dpi, km/mi, kg/lb, C/F, Base64)
         evaluateDeveloperQuery(trimmed, nowEpochMs)?.let { devAction ->
             results.add(devAction)
         }
@@ -279,12 +368,35 @@ object OmniCommandEngine {
     ): OmniAction? = evaluate(rawQuery, installedApps, clipboardItems, nowEpochMs).firstOrNull()
 
     /**
-     * Parses ad-hoc split-screen queries like `split: yt + chrome`, `split: youtube | settings`,
-     * or `youtube | chrome` against `apps`.
+     * Resolves built-in Z Fold 8 Multi-VC (`vc`/`prod`, `vcprev`/`preview`, `vccomp`/`compare`),
+     * Termux (`termux`/`tty`/`sh`), and Chrome (`chrome`/`web`) aliases, preferring an matching
+     * [AppEntry] from [installedApps] when present and synthesizing one when absent.
      */
-    fun parseSplitCommand(rawQuery: String, apps: List<AppEntry>): OmniAction.LaunchAdHocSplit? {
+    fun resolveAppAlias(query: String, installedApps: List<AppEntry> = emptyList()): AppEntry? {
+        val normalized = query.trim().lowercase(Locale.US)
+        if (normalized.isEmpty()) return null
+        val spec = BUILT_IN_ALIAS_SPECS.firstOrNull { normalized in it.aliases } ?: return null
+        return installedApps.firstOrNull { it.packageName.equals(spec.packageName, ignoreCase = true) }
+            ?: AppEntry(
+                label = spec.defaultLabel,
+                packageName = spec.packageName,
+                activityName = spec.defaultActivity
+            )
+    }
+
+    private fun isFold8SpecialAliasToken(query: String): Boolean {
+        val normalized = query.trim().lowercase(Locale.US)
+        return BUILT_IN_ALIAS_SPECS.any { it.isFold8SpecialAlias && normalized in it.aliases }
+    }
+
+    /**
+     * Parses ad-hoc split-screen queries like `split: yt + chrome`, `split: vc + compare`,
+     * `split: vc + preview`, `split: vc + termux`, `split: prod + preview`, or `youtube | settings`
+     * against `apps` + built-in Z Fold 8 Multi-VC/Termux package aliases.
+     */
+    fun parseSplitCommand(rawQuery: String, apps: List<AppEntry> = emptyList()): OmniAction.LaunchAdHocSplit? {
         val trimmed = rawQuery.trim()
-        if (trimmed.isEmpty() || apps.size < 2) return null
+        if (trimmed.isEmpty()) return null
 
         val pairTokens: Pair<String, String> = when {
             SPLIT_PREFIX_REGEX.matches(trimmed) -> {
@@ -302,13 +414,14 @@ object OmniCommandEngine {
         val rightQuery = pairTokens.second
         if (leftQuery.isEmpty() || rightQuery.isEmpty()) return null
 
-        val primaryCandidates = SearchEngine.rankApps(apps, leftQuery, limit = 5)
-        val primaryApp = primaryCandidates.firstOrNull() ?: return null
+        val hasFold8SpecialAlias = isFold8SpecialAliasToken(leftQuery) || isFold8SpecialAliasToken(rightQuery)
+        if (apps.size < 2 && !hasFold8SpecialAlias) return null
 
-        val secondaryCandidates = SearchEngine.rankApps(apps, rightQuery, limit = 5)
-        val secondaryApp = secondaryCandidates.firstOrNull { it.packageName != primaryApp.packageName }
-            ?: secondaryCandidates.firstOrNull()
+        val primaryApp = resolveSplitSideApp(leftQuery, apps, excludePackage = null) ?: return null
+        val secondaryApp = resolveSplitSideApp(rightQuery, apps, excludePackage = primaryApp.packageName)
             ?: return null
+
+        if (primaryApp.packageName == secondaryApp.packageName && apps.size < 2) return null
 
         return OmniAction.LaunchAdHocSplit(
             primaryApp = primaryApp,
@@ -318,97 +431,234 @@ object OmniCommandEngine {
         )
     }
 
+    private fun resolveSplitSideApp(
+        token: String,
+        apps: List<AppEntry>,
+        excludePackage: String?
+    ): AppEntry? {
+        // 1. Check built-in Z Fold 8 Multi-VC / Termux / Chrome aliases first
+        val aliasApp = resolveAppAlias(token, apps)
+        if (aliasApp != null && (excludePackage == null || aliasApp.packageName != excludePackage)) {
+            return aliasApp
+        }
+
+        // 2. Fuzzy-match against installedApps via SearchEngine
+        if (apps.isNotEmpty()) {
+            val candidates = SearchEngine.rankApps(apps, token, limit = 5)
+            val chosen = if (excludePackage != null) {
+                candidates.firstOrNull { it.packageName != excludePackage } ?: candidates.firstOrNull()
+            } else {
+                candidates.firstOrNull()
+            }
+            if (chosen != null) return chosen
+        }
+
+        return aliasApp
+    }
+
     /**
-     * Parses `> ...` live system & DeX tweaker commands.
+     * Parses `> ...` live system & DeX tweaker commands AND `> posture ...` / `posture: ...`
+     * Z Fold 8 posture simulator commands.
      */
     fun parseSystemCommands(rawQuery: String): List<OmniAction.SystemCommand> {
         val trimmed = rawQuery.trim()
-        if (!trimmed.startsWith(">")) return emptyList()
+        val isChevron = trimmed.startsWith(">")
+        val posturePrefixMatch = POSTURE_PREFIX_REGEX.matchEntire(trimmed)
+        if (!isChevron && posturePrefixMatch == null) return emptyList()
 
-        val body = trimmed.removePrefix(">").trim().lowercase(Locale.US)
-        val allSystemCommands = listOf(
+        val coreSystemCommands = listOf(
             OmniAction.SystemCommand(
                 target = SystemToggleTarget.DEX_GBOARD,
                 triggerCommand = "> dex gboard",
                 title = "Enforce Gboard in Samsung DeX",
                 subtitle = "Overrides Samsung Honeyboard & routes DeX IME via WRITE_SECURE_SETTINGS",
-                badge = "DEX IME"
+                badge = "DEX IME",
+                actionId = "dex_gboard"
             ),
             OmniAction.SystemCommand(
                 target = SystemToggleTarget.ROTATION_ON,
                 triggerCommand = "> rotation on",
                 title = "Enable Lock & Home Landscape Rotation",
                 subtitle = "Sets lock_screen_allow_rotation=1 & accelerometer_rotation=1",
-                badge = "ROTATE ON"
+                badge = "ROTATE ON",
+                actionId = "rotation_on"
             ),
             OmniAction.SystemCommand(
                 target = SystemToggleTarget.ROTATION_OFF,
                 triggerCommand = "> rotation off",
                 title = "Disable Lock & Home Landscape Rotation",
                 subtitle = "Locks orientation to portrait (lock_screen_allow_rotation=0)",
-                badge = "ROTATE OFF"
+                badge = "ROTATE OFF",
+                actionId = "rotation_off"
             ),
             OmniAction.SystemCommand(
                 target = SystemToggleTarget.LOCK_SCREEN,
                 triggerCommand = "> lock",
                 title = "Lock Screen Immediately",
                 subtitle = "Triggers Accessibility GLOBAL_ACTION_LOCK_SCREEN without power button wear",
-                badge = "LOCK"
+                badge = "LOCK",
+                actionId = "lock_screen"
             ),
             OmniAction.SystemCommand(
                 target = SystemToggleTarget.FLOATING_HUD,
                 triggerCommand = "> hud",
                 title = "Toggle Floating Top-Right Micro-HUD Pill",
                 subtitle = "Shows/hides system-wide battery, posture & DeX status pill",
-                badge = "HUD PILL"
+                badge = "HUD PILL",
+                actionId = "floating_hud"
             ),
             OmniAction.SystemCommand(
                 target = SystemToggleTarget.THUMB_ARC,
                 triggerCommand = "> arc",
                 title = "Toggle One-Handed Radial Thumb Arc",
                 subtitle = "Opens/closes quick thumb-zone radial launcher overlay",
-                badge = "THUMB ARC"
+                badge = "THUMB ARC",
+                actionId = "thumb_arc"
             ),
             OmniAction.SystemCommand(
                 target = SystemToggleTarget.NOTIFICATIONS,
                 triggerCommand = "> shade",
                 title = "Expand System Notification Shade",
                 subtitle = "Pulls down status bar notifications panel",
-                badge = "SHADE"
+                badge = "SHADE",
+                actionId = "notifications"
             )
         )
 
-        if (body.isEmpty()) return allSystemCommands
+        val postureCommands = listOf(
+            OmniAction.SystemCommand(
+                target = SystemToggleTarget.POSTURE_FLEX,
+                triggerCommand = "> posture flex",
+                title = "Switch Launcher to Flex / Tabletop Mode 115°",
+                subtitle = "Simulates half-opened Z Fold 8 Flex posture (action: posture_flex)",
+                badge = "POSTURE FLEX",
+                actionId = "posture_flex"
+            ),
+            OmniAction.SystemCommand(
+                target = SystemToggleTarget.POSTURE_INNER,
+                triggerCommand = "> posture inner",
+                title = "Force Z Fold 8 Inner 2-Column Canvas",
+                subtitle = "Overrides posture to unfolded 7.6\"+ EXPANDED tablet canvas (action: posture_inner)",
+                badge = "POSTURE INNER",
+                actionId = "posture_inner"
+            ),
+            OmniAction.SystemCommand(
+                target = SystemToggleTarget.POSTURE_COVER,
+                triggerCommand = "> posture cover",
+                title = "Force Z Fold 8 Cover Compact Mode",
+                subtitle = "Overrides posture to folded cover screen COMPACT layout (action: posture_cover)",
+                badge = "POSTURE COVER",
+                actionId = "posture_cover"
+            ),
+            OmniAction.SystemCommand(
+                target = SystemToggleTarget.POSTURE_TENT,
+                triggerCommand = "> posture tent",
+                title = "Enter Z Fold 8 Tent Mode Standby HUD",
+                subtitle = "Switches to low-power OLED Tent Mode Standby HUD (action: posture_tent)",
+                badge = "POSTURE TENT",
+                actionId = "posture_tent"
+            ),
+            OmniAction.SystemCommand(
+                target = SystemToggleTarget.POSTURE_AUTO,
+                triggerCommand = "> posture auto",
+                title = "Restore Hardware Sensor Auto-Posture",
+                subtitle = "Clears manual posture override & resumes live hinge sensor tracking (action: posture_auto)",
+                badge = "POSTURE AUTO",
+                actionId = "posture_auto"
+            )
+        )
 
-        // Exact or semantic matching first
+        if (posturePrefixMatch != null) {
+            val postureArg = posturePrefixMatch.groupValues[1].trim().lowercase(Locale.US)
+            if (postureArg.isEmpty()) return postureCommands
+            return matchPostureCommands(postureArg, postureCommands)
+        }
+
+        val body = trimmed.removePrefix(">").trim().lowercase(Locale.US)
+        if (body.isEmpty()) return coreSystemCommands
+
+        // Check posture simulator commands (`> posture ...`, `> flex`, `> unfold`, `> tent`, `> cover`)
+        if (body == "posture" || body == "posture:") {
+            return postureCommands
+        }
+        if (body.startsWith("posture ") || body.startsWith("posture:")) {
+            val sub = body.removePrefix("posture").removePrefix(":").trim()
+            if (sub.isEmpty()) return postureCommands
+            val matchedPosture = matchPostureCommands(sub, postureCommands)
+            if (matchedPosture.isNotEmpty()) return matchedPosture
+        }
+
+        val directPostureMatch = when (body) {
+            "flex", "tabletop" ->
+                postureCommands.filter { it.target == SystemToggleTarget.POSTURE_FLEX }
+            "unfold", "inner", "expanded" ->
+                postureCommands.filter { it.target == SystemToggleTarget.POSTURE_INNER }
+            "cover", "fold", "folded", "compact" ->
+                postureCommands.filter { it.target == SystemToggleTarget.POSTURE_COVER }
+            "tent" ->
+                postureCommands.filter { it.target == SystemToggleTarget.POSTURE_TENT }
+            "auto", "posture auto", "sensor" ->
+                postureCommands.filter { it.target == SystemToggleTarget.POSTURE_AUTO }
+            else -> emptyList()
+        }
+        if (directPostureMatch.isNotEmpty()) return directPostureMatch
+
+        // Exact or semantic matching on core system commands
         val exactFiltered = when {
             body == "dex gboard" || body == "gboard" || body == "dex ime" || body == "dex" || body == "ime" ->
-                allSystemCommands.filter { it.target == SystemToggleTarget.DEX_GBOARD }
+                coreSystemCommands.filter { it.target == SystemToggleTarget.DEX_GBOARD }
             body == "rotation on" || body == "rotate on" || body == "autorotate on" ->
-                allSystemCommands.filter { it.target == SystemToggleTarget.ROTATION_ON }
+                coreSystemCommands.filter { it.target == SystemToggleTarget.ROTATION_ON }
             body == "rotation off" || body == "rotate off" || body == "autorotate off" ->
-                allSystemCommands.filter { it.target == SystemToggleTarget.ROTATION_OFF }
+                coreSystemCommands.filter { it.target == SystemToggleTarget.ROTATION_OFF }
             body == "rotation" || body == "rotate" ->
-                allSystemCommands.filter {
+                coreSystemCommands.filter {
                     it.target == SystemToggleTarget.ROTATION_ON || it.target == SystemToggleTarget.ROTATION_OFF
                 }
             body == "lock" || body == "lock screen" || body == "sleep" ->
-                allSystemCommands.filter { it.target == SystemToggleTarget.LOCK_SCREEN }
+                coreSystemCommands.filter { it.target == SystemToggleTarget.LOCK_SCREEN }
             body == "hud" || body == "pill" || body == "micro hud" || body.startsWith("hud ") ->
-                allSystemCommands.filter { it.target == SystemToggleTarget.FLOATING_HUD }
+                coreSystemCommands.filter { it.target == SystemToggleTarget.FLOATING_HUD }
             body == "arc" || body == "thumb" || body == "thumb arc" || body == "radial" ->
-                allSystemCommands.filter { it.target == SystemToggleTarget.THUMB_ARC }
+                coreSystemCommands.filter { it.target == SystemToggleTarget.THUMB_ARC }
             body == "shade" || body == "notifications" || body == "notif" ->
-                allSystemCommands.filter { it.target == SystemToggleTarget.NOTIFICATIONS }
+                coreSystemCommands.filter { it.target == SystemToggleTarget.NOTIFICATIONS }
             else -> emptyList()
         }
 
         if (exactFiltered.isNotEmpty()) return exactFiltered
 
-        return allSystemCommands.filter { cmd ->
+        val allCommands = coreSystemCommands + postureCommands
+        return allCommands.filter { cmd ->
             cmd.triggerCommand.lowercase(Locale.US).contains(body) ||
                 cmd.title.lowercase(Locale.US).contains(body) ||
-                cmd.badge.lowercase(Locale.US).contains(body)
+                cmd.badge.lowercase(Locale.US).contains(body) ||
+                cmd.actionId.lowercase(Locale.US).contains(body)
+        }
+    }
+
+    private fun matchPostureCommands(
+        query: String,
+        postureCommands: List<OmniAction.SystemCommand>
+    ): List<OmniAction.SystemCommand> {
+        val exact = when (query) {
+            "flex", "tabletop", "115", "115°" ->
+                postureCommands.filter { it.target == SystemToggleTarget.POSTURE_FLEX }
+            "inner", "unfold", "unfolded", "expanded", "tablet" ->
+                postureCommands.filter { it.target == SystemToggleTarget.POSTURE_INNER }
+            "cover", "fold", "folded", "compact", "outer" ->
+                postureCommands.filter { it.target == SystemToggleTarget.POSTURE_COVER }
+            "tent", "standby" ->
+                postureCommands.filter { it.target == SystemToggleTarget.POSTURE_TENT }
+            "auto", "reset", "sensor", "default", "hardware" ->
+                postureCommands.filter { it.target == SystemToggleTarget.POSTURE_AUTO }
+            else -> emptyList()
+        }
+        if (exact.isNotEmpty()) return exact
+        return postureCommands.filter { cmd ->
+            cmd.triggerCommand.lowercase(Locale.US).contains(query) ||
+                cmd.title.lowercase(Locale.US).contains(query) ||
+                cmd.actionId.lowercase(Locale.US).contains(query)
         }
     }
 
@@ -482,7 +732,8 @@ object OmniCommandEngine {
      * Evaluates developer expressions & unit conversions:
      * - Hex <-> Decimal <-> Binary (`0xFF`, `255 in hex`, `0b1010`, `#1DC323` RGB breakdown)
      * - Unix Epoch Timestamp <-> ISO-8601 (`1793065200`, `now`)
-     * - Android px <-> dp at DPI (`1080px at 450dpi` -> `384dp`) and units (`km` <-> `mi`, `kg` <-> `lb`, `c` <-> `f`)
+     * - Android px <-> dp at DPI (`1080px at 450dpi` -> `384dp`, `2448px @ 420dpi`, `1248px to dp`, `2448x1848 @ 420dpi`)
+     * - Physical units (`km` <-> `mi`, `kg` <-> `lb`, `c` <-> `f`)
      * - Base64 encode/decode (`b64: ...`, `b64d: ...`)
      */
     fun evaluateDeveloperQuery(
@@ -504,7 +755,7 @@ object OmniCommandEngine {
         // 4. Unix Epoch Timestamp <-> ISO-8601 (`now`, `1793065200`, ISO string)
         evaluateEpochTimestamp(trimmed, nowEpochMs)?.let { return it }
 
-        // 5. Android Density (`1080px at 450dpi` -> `384dp`) & Physical Unit Conversions (`km`/`mi`, `kg`/`lb`, `c`/`f`)
+        // 5. Android Density (`1080px at 450dpi`, `2448px @ 420dpi`, `1248px to dp`, `2448x1848 @ 420dpi`) & Physical Unit Conversions
         evaluateUnitConversion(trimmed)?.let { return it }
 
         return null
@@ -763,32 +1014,65 @@ object OmniCommandEngine {
     }
 
     private fun evaluateUnitConversion(trimmed: String): OmniAction.DeveloperEval? {
-        // 1. Android Display Density Conversion (`1080px at 450dpi` -> `384dp` or `384dp at 450dpi` -> `1080px`)
+        // 1A. 2D Screen Resolution (`2448x1848 @ 420dpi`, `2448x1848 to dp`, `2448x1848px @ 420dpi`)
+        RESOLUTION_AT_DPI_REGEX.matchEntire(trimmed)?.let { match ->
+            val widthPx = match.groupValues[1].toDoubleOrNull() ?: return null
+            val heightPx = match.groupValues[2].toDoubleOrNull() ?: return null
+            val explicitDpi = match.groupValues[3].takeIf { it.isNotEmpty() }?.toDoubleOrNull()
+            val dpi = explicitDpi ?: DEFAULT_Z_FOLD8_DPI
+            if (dpi <= 0.0) return null
+
+            val widthDp = widthPx * 160.0 / dpi
+            val heightDp = heightPx * 160.0 / dpi
+            val smallestDp = min(widthDp, heightDp)
+            val densityScale = dpi / 160.0
+            val postureLabel = classifyFold8PostureForDp(smallestDp)
+            val formattedPrimary = "${formatNumber(widthDp)}x${formatNumber(heightDp)}dp"
+            val roundedPair = "${widthDp.roundToInt()}x${heightDp.roundToInt()}dp"
+
+            return OmniAction.DeveloperEval(
+                category = "ANDROID DPI",
+                inputExpression = trimmed,
+                primaryOutput = formattedPrimary,
+                secondaryDetails = "${formatNumber(widthPx)}x${formatNumber(heightPx)}px @ ${formatNumber(dpi)}dpi (${formatNumber(densityScale)}x) = $formattedPrimary (~$roundedPair) · Z Fold 8: $postureLabel",
+                copyText = formattedPrimary
+            )
+        }
+
+        // 1B. Single-dimension Android Display Density (`1080px at 450dpi` -> `384dp`, `2448px @ 420dpi`, `1248px to dp`)
         PX_AT_DPI_REGEX.matchEntire(trimmed)?.let { match ->
             val value = match.groupValues[1].toDoubleOrNull() ?: return null
             val unit = match.groupValues[2].lowercase(Locale.US)
-            val dpi = match.groupValues[3].toDoubleOrNull() ?: return null
+            val dpiBeforeTarget = match.groupValues[3].takeIf { it.isNotEmpty() }?.toDoubleOrNull()
+            val targetUnit = match.groupValues[4].lowercase(Locale.US)
+            val dpiAfterTarget = match.groupValues[5].takeIf { it.isNotEmpty() }?.toDoubleOrNull()
+            // Require either `@ <dpi>` or `to dp`/`in dp` (or `to px`/`in px`) so bare numbers without context don't misfire
+            if (dpiBeforeTarget == null && dpiAfterTarget == null && targetUnit.isEmpty()) return null
+
+            val dpi = dpiBeforeTarget ?: dpiAfterTarget ?: DEFAULT_Z_FOLD8_DPI
             if (dpi <= 0.0) return null
 
             val densityScale = dpi / 160.0
             return if (unit == "px") {
                 val dp = value * 160.0 / dpi
                 val formattedDp = "${formatNumber(dp)}dp"
+                val postureLabel = classifyFold8PostureForDp(dp)
                 OmniAction.DeveloperEval(
                     category = "ANDROID DPI",
                     inputExpression = trimmed,
                     primaryOutput = formattedDp,
-                    secondaryDetails = "${formatNumber(value)}px @ ${formatNumber(dpi)}dpi (${formatNumber(densityScale)}x density) = $formattedDp",
+                    secondaryDetails = "${formatNumber(value)}px @ ${formatNumber(dpi)}dpi (${formatNumber(densityScale)}x density) = $formattedDp (~${dp.roundToInt()}dp) · Z Fold 8: $postureLabel",
                     copyText = formattedDp
                 )
             } else {
                 val px = value * dpi / 160.0
                 val formattedPx = "${formatNumber(px)}px"
+                val postureLabel = classifyFold8PostureForDp(value)
                 OmniAction.DeveloperEval(
                     category = "ANDROID DPI",
                     inputExpression = trimmed,
                     primaryOutput = formattedPx,
-                    secondaryDetails = "${formatNumber(value)}dp @ ${formatNumber(dpi)}dpi (${formatNumber(densityScale)}x density) = $formattedPx",
+                    secondaryDetails = "${formatNumber(value)}dp @ ${formatNumber(dpi)}dpi (${formatNumber(densityScale)}x density) = $formattedPx · Z Fold 8: $postureLabel",
                     copyText = formattedPx
                 )
             }
@@ -871,6 +1155,14 @@ object OmniCommandEngine {
         }
     }
 
+    private fun classifyFold8PostureForDp(dpValue: Double): String {
+        return when {
+            dpValue >= 840.0 -> "EXPANDED (Inner Landscape / DeX >= 840dp)"
+            dpValue >= 600.0 -> "EXPANDED (Unfolded Inner Canvas >= 600dp)"
+            else -> "COMPACT (Cover Screen < 600dp)"
+        }
+    }
+
     internal fun formatNumber(value: Double): String {
         val roundedLong = value.roundToInt().toLong()
         if (abs(value - roundedLong.toDouble()) < 1e-6) {
@@ -888,7 +1180,8 @@ object OmniCommandEngine {
         clipboardVault: ClipboardVault? = null,
         onToggleFloatingHud: (() -> Unit)? = null,
         onToggleThumbArc: (() -> Unit)? = null,
-        onStatusMessage: ((String) -> Unit)? = null
+        onStatusMessage: ((String) -> Unit)? = null,
+        onPostureCommand: ((String) -> Unit)? = null
     ): Boolean {
         return when (action) {
             is OmniAction.LaunchAdHocSplit -> {
@@ -949,6 +1242,15 @@ object OmniCommandEngine {
                     }
                     SystemToggleTarget.NOTIFICATIONS -> {
                         SystemTweaker.expandNotificationsPanel(context)
+                    }
+                    SystemToggleTarget.POSTURE_FLEX,
+                    SystemToggleTarget.POSTURE_INNER,
+                    SystemToggleTarget.POSTURE_COVER,
+                    SystemToggleTarget.POSTURE_TENT,
+                    SystemToggleTarget.POSTURE_AUTO -> {
+                        onPostureCommand?.invoke(action.actionId)
+                        onStatusMessage?.invoke("${action.title} (${action.actionId})")
+                        true
                     }
                 }
             }
@@ -1212,7 +1514,7 @@ class ClipboardVault(
         private const val KEY_VAULT_ITEMS_JSON = "vault_items_json"
 
         /**
-         * Default pinned developer & Fold 8 power-user snippets preloaded in the Vault.
+         * Default pinned developer & Z Fold 8 (`SM-F971U1`) power-user snippets preloaded in the Vault.
          */
         fun defaultPinnedSnippets(): List<ClipboardItem> = listOf(
             ClipboardItem(
@@ -1225,8 +1527,8 @@ class ClipboardVault(
             ),
             ClipboardItem(
                 id = "pin_adb_wireless",
-                text = "adb connect 100.68.53.123:40919",
-                label = "Tailscale Wireless ADB Connect",
+                text = "adb connect 100.101.43.86:42595",
+                label = "Z Fold 8 (SM-F971U1) Wireless ADB",
                 timestampMs = 1793000003000L,
                 isPinned = true,
                 category = "Tailscale"
@@ -1269,7 +1571,7 @@ class ClipboardVault(
 }
 
 /**
- * Renders Omni-Command Palette cards (Ad-Hoc Split-Screen, `>` System/DeX Tweaker commands,
+ * Renders Omni-Command Palette cards (Ad-Hoc Split-Screen, `>` System/DeX/Posture Tweaker commands,
  * `vc:` Agent Dispatch, Developer/Unit Conversions, and `clip:` Clipboard Vault results)
  * for Spotlight Search and the Home Dashboard.
  */
@@ -1404,11 +1706,13 @@ private fun OmniQuickSyntaxStrip(
 ) {
     val suggestions = remember(clipboardCount) {
         listOf(
-            "split: " to "⚡ split: app1 + app2",
+            "split: vc + compare" to "⚡ vc + compare",
+            "split: vc + termux" to "🖥 vc + termux",
+            "> posture flex" to "📐 > posture flex",
             "> " to "⚙ > system & DeX",
             "vc: " to "🤖 vc: prompt",
             "clip: " to "📋 clip: vault ($clipboardCount)",
-            "1080px at 450dpi" to "📐 px→dp",
+            "2448x1848 @ 420dpi" to "📱 Fold8 px→dp",
             "now" to "⏱ epoch now"
         )
     }

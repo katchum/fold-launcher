@@ -211,13 +211,15 @@ fun PostureAnimatedContainer(
     AnimatedContent(
         targetState = postureState,
         modifier = modifier,
-        contentKey = { it.mode },
+        contentKey = { it.mode to it.isTentMode },
         transitionSpec = {
             val initialRank = AnimationPhysicsMath.postureExpansionRank(initialState.mode)
             val targetRank = AnimationPhysicsMath.postureExpansionRank(targetState.mode)
             val isUnfolding = targetRank >= initialRank
             val involvesFlex = initialState.mode == PostureMode.FLEX_TABLETOP ||
-                targetState.mode == PostureMode.FLEX_TABLETOP
+                targetState.mode == PostureMode.FLEX_TABLETOP ||
+                initialState.isTentMode ||
+                targetState.isTentMode
 
             val slideEnter = if (involvesFlex) {
                 slideInVertically(

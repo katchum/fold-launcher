@@ -36,11 +36,17 @@ for pkg in "com.xsun.foldlauncher" "com.xsun.foldlauncher.debug"; do
   fi
 done
 
-echo "[*] Enabling Lock Screen & Home Screen Auto-Rotation..."
+echo "[*] Enabling Lock Screen & Home Screen Auto-Rotation + Instant Face Unlock Bypass..."
 "$ADB" shell settings put system accelerometer_rotation 1
 "$ADB" shell settings put system lock_screen_allow_rotation 1
 "$ADB" shell settings put secure lock_screen_allow_rotation 1 || true
 "$ADB" shell settings put global lock_screen_allow_rotation 1 || true
+"$ADB" shell settings put secure face_stay_on_lock_screen 0 || true
+"$ADB" shell settings put system lock_application_shortcut '{"leftShortcut":{"component":"dev.agentconversation/dev.agentconversation.MainActivity","enable":true},"rightShortcut":{"component":"com.xsun.foldlauncher/com.xsun.foldlauncher.MainActivity","enable":true},"version":"1.0"}' || true
+
+echo "[*] Auto-enabling Fold8 Launcher Accessibility Service (System-Wide Floating HUD & Lock Screen Overlay)..."
+"$ADB" shell settings put secure enabled_accessibility_services com.xsun.foldlauncher/com.xsun.foldlauncher.service.FoldAccessibilityService || true
+"$ADB" shell settings put secure accessibility_enabled 1 || true
 
 echo "[*] Configuring Samsung DeX keyboard location to Phone Screen (allows Gboard)..."
 "$ADB" shell settings put global dex_on_screen_keyboard_location 1 || true

@@ -170,6 +170,29 @@ class SpatialMathTest {
     }
 
     @Test
+    fun computeHingeSpecularShift_andFormatHingePostureBadge_mapFold8HingeAnglesCleanly() {
+        assertEquals(0f, SpatialMath.computeHingeSpecularShift(null), 0.001f)
+        assertEquals(-0.35f, SpatialMath.computeHingeSpecularShift(0f), 0.001f)
+        assertEquals(0f, SpatialMath.computeHingeSpecularShift(90f), 0.001f)
+        assertEquals(0.35f, SpatialMath.computeHingeSpecularShift(180f), 0.001f)
+
+        assertEquals("0° CLOSED", SpatialMath.formatHingePostureBadge(0f))
+        assertEquals("48° TENT", SpatialMath.formatHingePostureBadge(48f))
+        assertEquals("115° FLEX", SpatialMath.formatHingePostureBadge(115f))
+        assertEquals("178° FLAT", SpatialMath.formatHingePostureBadge(178f))
+
+        val withHinge = SpatialMath.computeParallaxOffset(
+            pitch = 0f,
+            roll = 0f,
+            depthLayer = 1f,
+            hingeAngleDegrees = 135f
+        )
+        assertEquals(135f, withHinge.hingeAngleDegrees ?: -1f, 0.001f)
+        assertEquals(0.175f, withHinge.hingeSpecularShift, 0.001f)
+        assertEquals(0.175f, withHinge.specularShift, 0.001f)
+    }
+
+    @Test
     fun normalizeTilt_lowPassFilter_andTrackpadCursor_clampWithinBounds() {
         assertEquals(1f, SpatialMath.normalizeTilt(2.0f, maxRange = 0.65f), 0.001f)
         assertEquals(-1f, SpatialMath.normalizeTilt(-2.0f, maxRange = 0.65f), 0.001f)
