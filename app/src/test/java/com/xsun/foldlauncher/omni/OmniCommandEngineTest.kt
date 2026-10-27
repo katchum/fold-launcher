@@ -175,15 +175,15 @@ class OmniCommandEngineTest {
         for (macroKey in listOf("status", "approve", "ship", "test")) {
             val parsed = OmniCommandEngine.parseVcCommand("vc: $macroKey")
             assertNotNull("Expected VcQuickMacro for vc: $macroKey", parsed)
-            assertTrue(parsed is OmniCommandResult.VcQuickMacro)
-            val macro = parsed as OmniCommandResult.VcQuickMacro
+            assertTrue(parsed is OmniAction.VcQuickMacro)
+            val macro = parsed as OmniAction.VcQuickMacro
             assertEquals(macroKey, macro.macroKey)
             assertTrue(macro.promptText.isNotBlank())
             assertEquals(macro.promptText, macro.prompt)
 
             val evaluated = OmniCommandEngine.evaluatePrimary("vc: $macroKey")
-            assertTrue(evaluated is OmniCommandResult.VcQuickMacro)
-            assertEquals(macroKey, (evaluated as OmniCommandResult.VcQuickMacro).macroKey)
+            assertTrue(evaluated is OmniAction.VcQuickMacro)
+            assertEquals(macroKey, (evaluated as OmniAction.VcQuickMacro).macroKey)
         }
     }
 

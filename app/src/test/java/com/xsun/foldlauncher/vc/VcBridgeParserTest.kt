@@ -341,20 +341,17 @@ class VcBridgeParserTest {
     fun `parseSnapshotResponse extracts active non-archived sessions and projects`() {
         val snapshotJson = """
             {
-              "projects": [
-                {"id": "proj-1", "name": "Android launcher"}
-              ],
               "sessions": [
-                {"id": "s-1", "name": "Coordinator", "projectId": "proj-1", "role": "general", "status": "working"},
-                {"id": "s-2", "name": "Old Agent", "projectId": "proj-1", "role": "worker", "status": "idle", "archived": true}
+                {"id": "s-1", "name": "Coordinator", "projectName": "Android launcher", "role": "general", "status": "working"},
+                {"id": "s-2", "name": "Old Agent", "projectName": "Android launcher", "role": "worker", "status": "idle", "archived": true}
               ]
             }
         """.trimIndent()
 
-        val agents = VcBridgeClient.parseSnapshotResponse(snapshotJson)
-        assertEquals(1, agents.size)
-        assertEquals("s-1", agents[0].sessionId)
-        assertEquals("Android launcher", agents[0].project)
-        assertTrue(agents[0].isWorking)
+        val summary = VcBridgeClient.parseSnapshotResponse(snapshotJson)
+        assertEquals(1, summary.activeAgents.size)
+        assertEquals("s-1", summary.activeAgents[0].sessionId)
+        assertEquals("Android launcher", summary.activeAgents[0].project)
+        assertTrue(summary.activeAgents[0].isWorking)
     }
 }
