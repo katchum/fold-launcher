@@ -201,6 +201,58 @@ class OmniCommandEngineTest {
     }
 
     @Test
+    fun parseSystemCommands_unfoldContinuityActionsAndBareUnfoldPosture_resolveExpectedTargets() {
+        // 1. Bare `> unfold` must continue to resolve to POSTURE_INNER (`posture_inner`)
+        val bareUnfold = OmniCommandEngine.parseSystemCommands("> unfold")
+        assertEquals(1, bareUnfold.size)
+        assertEquals(SystemToggleTarget.POSTURE_INNER, bareUnfold.first().target)
+        assertEquals(SystemToggleTarget.POSTURE_FORCE_INNER, bareUnfold.first().target)
+        assertEquals("posture_inner", bareUnfold.first().actionId)
+
+        // 2. Z Fold 8 Unfold-Open Continuity Commands (`> unfold dashboard`, `> unfold split`, `> unfold compare`, `> unfold browser`)
+        val expectedUnfoldModes = listOf(
+            "> unfold dashboard" to "dashboard",
+            "> unfold split" to "vc_termux",
+            "> unfold vc+termux" to "vc_termux",
+            "> unfold compare" to "prod_compare",
+            "> unfold prod+compare" to "prod_compare",
+            "> unfold browser" to "vc_browser",
+            "> unfold vc+browser" to "vc_browser"
+        )
+        for ((query, expectedMode) in expectedUnfoldModes) {
+            val cmds = OmniCommandEngine.parseSystemCommands(query)
+            assertEquals("Expected 1 command for $query", 1, cmds.size)
+            val cmd = cmds.first()
+            assertEquals(SystemToggleTarget.SET_UNFOLD_ACTION, cmd.target)
+            assertEquals("unfold_$expectedMode", cmd.actionId)
+            assertEquals(expectedMode, cmd.parameter)
+            assertEquals(expectedMode, cmd.unfoldActionMode)
+        }
+    }
+
+    @Test
+    fun parseScratchpadCommand_noteMemoAndNoteVcVariants_parsesNoteTextAndVcFlag() {
+        val noteCmd = OmniCommandEngine.parseScratchpadCommand("note: check fold8 hinge detent at 115 deg")
+        assertNotNull(noteCmd)
+        assertEquals("check fold8 hinge detent at 115 deg", noteCmd!!.noteText)
+        assertFalse(noteCmd.sendToVcImmediately)
+        assertEquals("scratchpad_note", noteCmd.actionId)
+
+        val memoEvaluated = OmniCommandEngine.evaluatePrimary("memo: pin tailscale adb port 42595")
+        assertTrue(memoEvaluated is OmniAction.ScratchpadNote)
+        val asMemo = memoEvaluated as OmniAction.ScratchpadNote
+        assertEquals("pin tailscale adb port 42595", asMemo.noteText)
+        assertFalse(asMemo.sendToVcImmediately)
+
+        val noteVcEvaluated = OmniCommandEngine.evaluatePrimary("note-vc: verify v0.5.0 unfold split continuity")
+        assertTrue(noteVcEvaluated is OmniAction.ScratchpadNote)
+        val asNoteVc = noteVcEvaluated as OmniAction.ScratchpadNote
+        assertEquals("verify v0.5.0 unfold split continuity", asNoteVc.noteText)
+        assertTrue(asNoteVc.sendToVcImmediately)
+        assertEquals("scratchpad_note_vc", asNoteVc.actionId)
+    }
+
+    @Test
     fun parseTermuxCommand_standardShAndSplitVariants_resolvesShellCommandAndSplitFlag() {
         val termuxCmd = OmniCommandEngine.parseTermuxCommand("termux: top -n 1")
         assertNotNull(termuxCmd)

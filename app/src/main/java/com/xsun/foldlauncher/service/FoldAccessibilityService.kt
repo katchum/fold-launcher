@@ -33,6 +33,7 @@ import com.xsun.foldlauncher.display.DualScreenPresentationController
 import com.xsun.foldlauncher.posture.FoldCloseActionMode
 import com.xsun.foldlauncher.posture.HingeDetentTick
 import com.xsun.foldlauncher.posture.PostureClassifier
+import com.xsun.foldlauncher.posture.UnfoldActionMode
 import com.xsun.foldlauncher.vc.VcBackgroundMonitor
 import com.xsun.foldlauncher.vc.VcPackages
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -81,6 +82,7 @@ class FoldAccessibilityService : AccessibilityService() {
     private var lockHudMetaText: TextView? = null
 
     private var lastDetentReferenceAngle: Float? = null
+    private var lastUnfoldActionTimeMs: Long = 0L
 
     var autoGuardDexKeyboard: Boolean = true
 
@@ -400,6 +402,13 @@ class FoldAccessibilityService : AccessibilityService() {
                         if (PostureClassifier.isFoldCloseTransition(refAngle, clamped)) {
                             lastDetentReferenceAngle = clamped
                             SystemTweaker.executeFoldCloseAction(this@FoldAccessibilityService)
+                        } else if (PostureClassifier.isUnfoldOpenTransition(refAngle, clamped)) {
+                            lastDetentReferenceAngle = clamped
+                            val now = System.currentTimeMillis()
+                            if (now - lastUnfoldActionTimeMs >= 1500L) {
+                                lastUnfoldActionTimeMs = now
+                                SystemTweaker.executeUnfoldAction(this@FoldAccessibilityService)
+                            }
                         }
                     } else {
                         lastDetentReferenceAngle = clamped
@@ -522,12 +531,19 @@ class FoldAccessibilityService : AccessibilityService() {
         val foldCloseActionMode: StateFlow<FoldCloseActionMode>
             get() = SystemTweaker.foldCloseActionMode
 
+        val unfoldActionMode: StateFlow<UnfoldActionMode>
+            get() = SystemTweaker.unfoldActionMode
+
         fun setHingeDetentHapticsEnabled(context: Context, enabled: Boolean) {
             SystemTweaker.setHingeDetentHapticsEnabled(context, enabled)
         }
 
         fun setFoldCloseActionMode(context: Context, mode: FoldCloseActionMode) {
             SystemTweaker.setFoldCloseActionMode(context, mode)
+        }
+
+        fun setUnfoldActionMode(context: Context, mode: UnfoldActionMode) {
+            SystemTweaker.setUnfoldActionMode(context, mode)
         }
 
         fun loadLockHudPreferences(context: Context) {

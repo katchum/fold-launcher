@@ -128,7 +128,11 @@ fun TopStatusBar(
     hingeHapticsEnabled: Boolean = true,
     foldCloseModeLabel: String? = null,
     onToggleHingeHaptics: (() -> Unit)? = null,
-    onCycleFoldCloseMode: (() -> Unit)? = null
+    onCycleFoldCloseMode: (() -> Unit)? = null,
+    unfoldModeLabel: String? = null,
+    onCycleUnfoldMode: (() -> Unit)? = null,
+    tailscaleIp: String? = null,
+    lanIp: String? = null
 ) {
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current

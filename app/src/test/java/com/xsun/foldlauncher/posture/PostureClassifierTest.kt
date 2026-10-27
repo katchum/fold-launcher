@@ -1,5 +1,7 @@
 package com.xsun.foldlauncher.posture
 
+import com.xsun.foldlauncher.service.NetworkTelemetrySnapshot
+import com.xsun.foldlauncher.service.SystemTweaker
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -211,5 +213,58 @@ class PostureClassifierTest {
         assertEquals(FoldCloseActionMode.TENT_STANDBY, third)
         assertEquals(FoldCloseActionMode.INSTANT_LOCK, fourth)
         assertEquals(FoldCloseActionMode.STAY_AWAKE_COVER, wrapped)
+    }
+
+    @Test
+    fun isUnfoldOpenTransition_detectsUnfoldingUpwardAcross155Degrees() {
+        assertTrue(PostureClassifier.isUnfoldOpenTransition(previousAngleDeg = 148f, currentAngleDeg = 160f))
+        assertTrue(isUnfoldOpenTransition(previousAngleDeg = 120f, currentAngleDeg = 155f))
+        // Closing downward across 155° must not trigger unfold
+        assertFalse(PostureClassifier.isUnfoldOpenTransition(previousAngleDeg = 165f, currentAngleDeg = 140f))
+        // Sub-2.0° jitter across 155° must be ignored
+        assertFalse(PostureClassifier.isUnfoldOpenTransition(previousAngleDeg = 154.2f, currentAngleDeg = 155.4f))
+    }
+
+    @Test
+    fun unfoldActionMode_cyclesAndParsesKeys() {
+        val start = UnfoldActionMode.INNER_DASHBOARD
+        val second = start.next()
+        val third = second.next()
+        val fourth = third.next()
+        val wrapped = fourth.next()
+
+        assertEquals(UnfoldActionMode.AUTO_SPLIT_VC_TERMUX, second)
+        assertEquals(UnfoldActionMode.AUTO_SPLIT_PROD_COMPARE, third)
+        assertEquals(UnfoldActionMode.AUTO_SPLIT_VC_BROWSER, fourth)
+        assertEquals(UnfoldActionMode.INNER_DASHBOARD, wrapped)
+
+        assertEquals(UnfoldActionMode.AUTO_SPLIT_VC_TERMUX, UnfoldActionMode.fromKey("vc_termux"))
+        assertEquals(UnfoldActionMode.AUTO_SPLIT_PROD_COMPARE, UnfoldActionMode.fromKey("prod_compare"))
+        assertEquals(UnfoldActionMode.AUTO_SPLIT_VC_BROWSER, UnfoldActionMode.fromKey("vc_browser"))
+        assertEquals(UnfoldActionMode.INNER_DASHBOARD, UnfoldActionMode.fromKey(null))
+    }
+
+    @Test
+    fun networkTelemetry_detectsTailscaleCgnatAndLanAddresses() {
+        // Z Fold 8 (100.101.43.86) and S23 Ultra (100.68.53.123) Tailscale IPs
+        assertTrue(SystemTweaker.isTailscaleCgnatIpv4("100.101.43.86"))
+        assertTrue(SystemTweaker.isTailscaleCgnatIpv4("100.68.53.123"))
+        assertTrue(SystemTweaker.isTailscaleCgnatIpv4("100.96.188.90"))
+        assertFalse(SystemTweaker.isTailscaleCgnatIpv4("100.63.255.1"))
+        assertFalse(SystemTweaker.isTailscaleCgnatIpv4("192.168.1.50"))
+
+        assertTrue(SystemTweaker.isPrivateLanIpv4("192.168.1.50"))
+        assertTrue(SystemTweaker.isPrivateLanIpv4("10.0.0.12"))
+        assertFalse(SystemTweaker.isPrivateLanIpv4("100.101.43.86"))
+
+        val tsSnapshot = NetworkTelemetrySnapshot(
+            tailscaleIp = "100.101.43.86",
+            lanIp = "192.168.1.42",
+            isVpnActive = true,
+            isWifiConnected = true,
+            downstreamMbps = 320
+        )
+        assertTrue(tsSnapshot.isTailscaleConnected)
+        assertEquals("TS 100.101.43.86", tsSnapshot.statusBadge)
     }
 }

@@ -297,6 +297,37 @@ class VcBackgroundMonitor private constructor(context: Context) {
         return snippet
     }
 
+    fun getScratchpadNote(): String {
+        return VcBridgeClient.loadScratchpadNote(appContext)
+    }
+
+    fun setScratchpadNote(noteText: String) {
+        VcBridgeClient.saveScratchpadNote(appContext, noteText)
+    }
+
+    fun injectScratchpadToVc(
+        noteText: String,
+        sessionId: String? = _pinnedSessionId.value,
+        postureLabel: String = "INNER",
+        hingeAngleDeg: Float = 180f,
+        tailscaleIp: String? = null,
+        steerIfWorking: Boolean = true,
+        onComplete: ((Boolean, String) -> Unit)? = null
+    ) {
+        val enriched = buildTelemetryEnrichedPrompt(
+            noteText = noteText,
+            postureLabel = postureLabel,
+            hingeAngleDeg = hingeAngleDeg,
+            tailscaleIp = tailscaleIp
+        )
+        sendQuickMessage(
+            sessionId = sessionId,
+            text = enriched,
+            steerIfWorking = steerIfWorking,
+            onComplete = onComplete
+        )
+    }
+
     fun launchVc(
         sessionId: String? = null,
         startVoiceTalk: Boolean = false,

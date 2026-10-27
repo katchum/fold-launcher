@@ -301,8 +301,8 @@ private fun TentModeStandbyBannerCard(
 }
 
 /**
- * v0.4.0 1-Tap Workspace Profile Pill Bar (`🌐 All Panels`, `⚡ VC & Dev`, `🎯 Minimal Focus`, `🌑 Pure OLED`)
- * plus instant Hardware Torch, Dual-Screen Cover Mirror, Hinge Detent Haptics & Fold-Close Action Mode pills.
+ * v0.5.0 1-Tap Workspace Profile Pill Bar (`🌐 All Panels`, `⚡ VC & Dev`, `🎯 Minimal Focus`, `🌑 Pure OLED`)
+ * plus instant Hardware Torch, Dual-Screen Cover Mirror, Hinge Detent Haptics, Fold-Close & Unfold-Open Action Mode pills.
  */
 @Composable
 fun WorkspaceProfilePillBar(
@@ -319,6 +319,10 @@ fun WorkspaceProfilePillBar(
     onToggleHingeHaptics: (() -> Unit)? = null,
     foldCloseModeLabel: String = "📱 Keep Cover Awake",
     onCycleFoldCloseActionMode: (() -> Unit)? = null,
+    unfoldModeLabel: String = "🖥️ Inner Cockpit",
+    onCycleUnfoldActionMode: (() -> Unit)? = null,
+    tailscaleIp: String? = null,
+    lanIp: String? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -481,6 +485,48 @@ fun WorkspaceProfilePillBar(
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     color = FoldLauncherColors.CyanBright
+                )
+            }
+        }
+
+        // v0.5.0 Unfold-Open Action Mode Pill
+        if (onCycleUnfoldActionMode != null) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(surfaceColor)
+                    .border(1.dp, FoldLauncherColors.ElectricCyan.copy(alpha = 0.55f), RoundedCornerShape(14.dp))
+                    .clickable(onClick = onCycleUnfoldActionMode)
+                    .padding(horizontal = 11.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = "📖 $unfoldModeLabel",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = FoldLauncherColors.CyanBright
+                )
+            }
+        }
+
+        // v0.5.0 Live Tailscale / LAN IP Telemetry Pill
+        val activeIpBadge = when {
+            !tailscaleIp.isNullOrBlank() -> "🔗 $tailscaleIp"
+            !lanIp.isNullOrBlank() -> "🌐 $lanIp"
+            else -> null
+        }
+        if (activeIpBadge != null) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(surfaceColor)
+                    .border(1.dp, FoldLauncherColors.EmeraldSuccess.copy(alpha = 0.55f), RoundedCornerShape(14.dp))
+                    .padding(horizontal = 11.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = activeIpBadge,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = FoldLauncherColors.EmeraldSuccess
                 )
             }
         }
@@ -690,6 +736,10 @@ fun CoverOrSlabHomeScreen(
     onToggleHingeHaptics: (() -> Unit)? = null,
     foldCloseModeLabel: String = "📱 Keep Cover Awake",
     onCycleFoldCloseActionMode: (() -> Unit)? = null,
+    unfoldModeLabel: String = "🖥️ Inner Cockpit",
+    onCycleUnfoldActionMode: (() -> Unit)? = null,
+    tailscaleIp: String? = null,
+    lanIp: String? = null,
     allApps: List<AppEntry>,
     pinnedCoverApps: List<AppEntry>,
     dockApps: List<AppEntry>,
@@ -803,7 +853,7 @@ fun CoverOrSlabHomeScreen(
                 modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.7f)
             )
 
-            // v0.4.0 Workspace Profile Pill Bar + Hardware Torch, Haptics, Fold-Close & Lock Cockpit Controls
+            // v0.5.0 Workspace Profile Pill Bar + Hardware Torch, Haptics, Fold-Close, Unfold-Open & Lock Cockpit Controls
             WorkspaceProfilePillBar(
                 workspaceProfile = workspaceProfile,
                 onSelectWorkspaceProfile = { profile ->
@@ -819,7 +869,11 @@ fun CoverOrSlabHomeScreen(
                 hingeHapticsEnabled = hingeHapticsEnabled,
                 onToggleHingeHaptics = onToggleHingeHaptics,
                 foldCloseModeLabel = foldCloseModeLabel,
-                onCycleFoldCloseActionMode = onCycleFoldCloseActionMode
+                onCycleFoldCloseActionMode = onCycleFoldCloseActionMode,
+                unfoldModeLabel = unfoldModeLabel,
+                onCycleUnfoldActionMode = onCycleUnfoldActionMode,
+                tailscaleIp = tailscaleIp,
+                lanIp = lanIp
             )
 
             if (isKeyguardLocked || showLockCockpit) {
@@ -941,6 +995,10 @@ fun CoverOrSlabHomeScreen(
                                 foldCloseModeLabel = foldCloseModeLabel,
                                 onToggleHingeHaptics = { onToggleHingeHaptics?.invoke() },
                                 onCycleFoldCloseMode = { onCycleFoldCloseActionMode?.invoke() },
+                                unfoldModeLabel = unfoldModeLabel,
+                                onCycleUnfoldMode = { onCycleUnfoldActionMode?.invoke() },
+                                tailscaleIp = tailscaleIp,
+                                lanIp = lanIp,
                                 modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.88f)
                             )
                         } else {
@@ -971,7 +1029,11 @@ fun CoverOrSlabHomeScreen(
                                 hingeHapticsEnabled = hingeHapticsEnabled,
                                 foldCloseModeLabel = foldCloseModeLabel,
                                 onToggleHingeHaptics = { onToggleHingeHaptics?.invoke() },
-                                onCycleFoldCloseMode = { onCycleFoldCloseActionMode?.invoke() }
+                                onCycleFoldCloseMode = { onCycleFoldCloseActionMode?.invoke() },
+                                unfoldModeLabel = unfoldModeLabel,
+                                onCycleUnfoldMode = { onCycleUnfoldActionMode?.invoke() },
+                                tailscaleIp = tailscaleIp,
+                                lanIp = lanIp
                             )
                         }
                     }
@@ -1129,6 +1191,10 @@ fun UnfoldedInnerDashboardScreen(
     onToggleHingeHaptics: (() -> Unit)? = null,
     foldCloseModeLabel: String = "📱 Keep Cover Awake",
     onCycleFoldCloseActionMode: (() -> Unit)? = null,
+    unfoldModeLabel: String = "🖥️ Inner Cockpit",
+    onCycleUnfoldActionMode: (() -> Unit)? = null,
+    tailscaleIp: String? = null,
+    lanIp: String? = null,
     allApps: List<AppEntry>,
     pinnedInnerApps: List<AppEntry>,
     dockApps: List<AppEntry>,
@@ -1256,7 +1322,7 @@ fun UnfoldedInnerDashboardScreen(
                 modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.65f)
             )
 
-            // v0.4.0 Workspace Profile Pill Bar + Hardware Torch, Cover Mirror, Haptics, Fold-Close & Lock Cockpit
+            // v0.5.0 Workspace Profile Pill Bar + Hardware Torch, Cover Mirror, Haptics, Fold-Close, Unfold-Open & Lock Cockpit
             WorkspaceProfilePillBar(
                 workspaceProfile = workspaceProfile,
                 onSelectWorkspaceProfile = { profile ->
@@ -1272,7 +1338,11 @@ fun UnfoldedInnerDashboardScreen(
                 hingeHapticsEnabled = hingeHapticsEnabled,
                 onToggleHingeHaptics = onToggleHingeHaptics,
                 foldCloseModeLabel = foldCloseModeLabel,
-                onCycleFoldCloseActionMode = onCycleFoldCloseActionMode
+                onCycleFoldCloseActionMode = onCycleFoldCloseActionMode,
+                unfoldModeLabel = unfoldModeLabel,
+                onCycleUnfoldActionMode = onCycleUnfoldActionMode,
+                tailscaleIp = tailscaleIp,
+                lanIp = lanIp
             )
 
             if (isKeyguardLocked || showLockCockpit) {
@@ -1373,6 +1443,10 @@ fun UnfoldedInnerDashboardScreen(
                             foldCloseModeLabel = foldCloseModeLabel,
                             onToggleHingeHaptics = { onToggleHingeHaptics?.invoke() },
                             onCycleFoldCloseMode = { onCycleFoldCloseActionMode?.invoke() },
+                            unfoldModeLabel = unfoldModeLabel,
+                            onCycleUnfoldMode = { onCycleUnfoldActionMode?.invoke() },
+                            tailscaleIp = tailscaleIp,
+                            lanIp = lanIp,
                             modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.92f)
                         )
                     } else {
@@ -1403,7 +1477,11 @@ fun UnfoldedInnerDashboardScreen(
                             hingeHapticsEnabled = hingeHapticsEnabled,
                             foldCloseModeLabel = foldCloseModeLabel,
                             onToggleHingeHaptics = { onToggleHingeHaptics?.invoke() },
-                            onCycleFoldCloseMode = { onCycleFoldCloseActionMode?.invoke() }
+                            onCycleFoldCloseMode = { onCycleFoldCloseActionMode?.invoke() },
+                            unfoldModeLabel = unfoldModeLabel,
+                            onCycleUnfoldMode = { onCycleUnfoldActionMode?.invoke() },
+                            tailscaleIp = tailscaleIp,
+                            lanIp = lanIp
                         )
                     }
 
@@ -1645,6 +1723,10 @@ fun FlexTabletopHomeScreen(
     onToggleHingeHaptics: (() -> Unit)? = null,
     foldCloseModeLabel: String = "📱 Keep Cover Awake",
     onCycleFoldCloseActionMode: (() -> Unit)? = null,
+    unfoldModeLabel: String = "🖥️ Inner Cockpit",
+    onCycleUnfoldActionMode: (() -> Unit)? = null,
+    tailscaleIp: String? = null,
+    lanIp: String? = null,
     allApps: List<AppEntry>,
     favoriteApps: List<AppEntry>,
     dockApps: List<AppEntry>,
@@ -1763,7 +1845,11 @@ fun FlexTabletopHomeScreen(
                 hingeHapticsEnabled = hingeHapticsEnabled,
                 onToggleHingeHaptics = onToggleHingeHaptics,
                 foldCloseModeLabel = foldCloseModeLabel,
-                onCycleFoldCloseActionMode = onCycleFoldCloseActionMode
+                onCycleFoldCloseActionMode = onCycleFoldCloseActionMode,
+                unfoldModeLabel = unfoldModeLabel,
+                onCycleUnfoldActionMode = onCycleUnfoldActionMode,
+                tailscaleIp = tailscaleIp,
+                lanIp = lanIp
             )
 
             if (isKeyguardLocked || showLockCockpit) {
@@ -1849,6 +1935,10 @@ fun FlexTabletopHomeScreen(
                     foldCloseModeLabel = foldCloseModeLabel,
                     onToggleHingeHaptics = { onToggleHingeHaptics?.invoke() },
                     onCycleFoldCloseMode = { onCycleFoldCloseActionMode?.invoke() },
+                    unfoldModeLabel = unfoldModeLabel,
+                    onCycleUnfoldMode = { onCycleUnfoldActionMode?.invoke() },
+                    tailscaleIp = tailscaleIp,
+                    lanIp = lanIp,
                     modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.88f)
                 )
             } else {
@@ -1875,7 +1965,11 @@ fun FlexTabletopHomeScreen(
                     hingeHapticsEnabled = hingeHapticsEnabled,
                     foldCloseModeLabel = foldCloseModeLabel,
                     onToggleHingeHaptics = { onToggleHingeHaptics?.invoke() },
-                    onCycleFoldCloseMode = { onCycleFoldCloseActionMode?.invoke() }
+                    onCycleFoldCloseMode = { onCycleFoldCloseActionMode?.invoke() },
+                    unfoldModeLabel = unfoldModeLabel,
+                    onCycleUnfoldMode = { onCycleUnfoldActionMode?.invoke() },
+                    tailscaleIp = tailscaleIp,
+                    lanIp = lanIp
                 )
             }
         }

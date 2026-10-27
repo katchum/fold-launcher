@@ -27,9 +27,11 @@ import com.xsun.foldlauncher.omni.ClipboardVault
 import com.xsun.foldlauncher.omni.OmniAction
 import com.xsun.foldlauncher.omni.OmniCommandEngine
 import com.xsun.foldlauncher.posture.PostureOverride
+import com.xsun.foldlauncher.posture.UnfoldActionMode
 import com.xsun.foldlauncher.search.SearchEngine
 import com.xsun.foldlauncher.service.FoldAccessibilityService
 import com.xsun.foldlauncher.service.HardwareTelemetrySnapshot
+import com.xsun.foldlauncher.service.NetworkTelemetrySnapshot
 import com.xsun.foldlauncher.service.SystemTweaker
 import com.xsun.foldlauncher.ui.theme.IconShapePreset
 import com.xsun.foldlauncher.vc.VcBackgroundMonitor
@@ -62,9 +64,9 @@ enum class WorkspaceProfile(val label: String, val badge: String) {
 }
 
 /**
- * Consolidated v0.4.0 UI state snapshot for workspace profile, posture override,
- * custom dock pinning, hinge detent haptics, fold-close action mode, hardware torch,
- * dual-screen presentation, and lock-screen keyguard state.
+ * Consolidated v0.5.0 UI state snapshot for workspace profile, posture override,
+ * custom dock pinning, hinge detent haptics, fold-close & unfold-open action modes,
+ * Tailscale/LAN network telemetry, hardware torch, dual-screen presentation, and lock-screen keyguard state.
  */
 data class LauncherUiState(
     val workspaceProfile: WorkspaceProfile = WorkspaceProfile.ALL,
@@ -72,6 +74,10 @@ data class LauncherUiState(
     val pinnedDockPackages: Set<String> = emptySet(),
     val hingeHapticsEnabled: Boolean = true,
     val foldCloseModeLabel: String = "📱 Keep Cover Awake",
+    val unfoldModeLabel: String = "🖥️ Inner Cockpit",
+    val tailscaleIp: String? = null,
+    val lanIp: String? = null,
+    val networkTelemetry: NetworkTelemetrySnapshot = NetworkTelemetrySnapshot(),
     val isTorchEnabled: Boolean = false,
     val isDualScreenPresentationActive: Boolean = false,
     val isKeyguardLocked: Boolean = false,
@@ -90,9 +96,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     companion object {
         private const val PREFS_NAME = "fold_launcher_prefs"
+        private const val PREFS_SCRATCHPAD = "fold_scratchpad_prefs"
+        private const val KEY_SCRATCHPAD_TEXT = "scratchpad_text"
         private const val KEY_PINNED_DOCK = "pinned_dock_packages"
         private const val KEY_HINGE_HAPTICS = "hinge_haptics_enabled"
         private const val KEY_FOLD_CLOSE_MODE = "fold_close_action_mode"
+        private const val KEY_UNFOLD_MODE = "unfold_action_mode"
 
         val FOLD_CLOSE_MODES: List<String> = listOf(
             "📱 Keep Cover Awake",
@@ -100,10 +109,18 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             "⛺ OLED Standby",
             "🔒 Instant Lock"
         )
+
+        val UNFOLD_OPEN_MODES: List<String> = listOf(
+            "🖥️ Inner Cockpit",
+            "⚡ Auto-Split VC + Termux",
+            "🔀 Auto-Split Prod + Compare",
+            "🌐 Auto-Split VC + Browser"
+        )
     }
 
     private val appContext: Context = application.applicationContext
     private val rawPrefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val scratchpadPrefs = appContext.getSharedPreferences(PREFS_SCRATCHPAD, Context.MODE_PRIVATE)
     val preferences = LauncherPreferences(appContext)
     val repository = AppRepository(appContext, preferences)
     val clipboardVault = ClipboardVault(appContext)
@@ -248,6 +265,21 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     )
     val foldCloseModeLabel: StateFlow<String> = _foldCloseModeLabel.asStateFlow()
 
+    // v0.5.0 Unfold-Open Action Mode (`"unfold_action_mode"`) & Live Tailscale / LAN Network Telemetry
+    private val _unfoldModeLabel = MutableStateFlow(
+        rawPrefs.getString(KEY_UNFOLD_MODE, UNFOLD_OPEN_MODES.first()) ?: UNFOLD_OPEN_MODES.first()
+    )
+    val unfoldModeLabel: StateFlow<String> = _unfoldModeLabel.asStateFlow()
+
+    private val _tailscaleIp = MutableStateFlow<String?>(null)
+    val tailscaleIp: StateFlow<String?> = _tailscaleIp.asStateFlow()
+
+    private val _lanIp = MutableStateFlow<String?>(null)
+    val lanIp: StateFlow<String?> = _lanIp.asStateFlow()
+
+    private val _networkTelemetry = MutableStateFlow(NetworkTelemetrySnapshot())
+    val networkTelemetry: StateFlow<NetworkTelemetrySnapshot> = _networkTelemetry.asStateFlow()
+
     // v0.3.0 Hardware Torch, Dual-Screen Cover Presentation & Lock-Screen Keyguard Telemetry
     private val _isTorchEnabled = MutableStateFlow(SystemTweaker.isTorchEnabled())
     val isTorchEnabled: StateFlow<Boolean> = _isTorchEnabled.asStateFlow()
@@ -381,6 +413,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             pinnedDockPackages = _pinnedDockPackages.value,
             hingeHapticsEnabled = _hingeHapticsEnabled.value,
             foldCloseModeLabel = _foldCloseModeLabel.value,
+            unfoldModeLabel = _unfoldModeLabel.value,
+            tailscaleIp = _tailscaleIp.value,
+            lanIp = _lanIp.value,
+            networkTelemetry = _networkTelemetry.value,
             isTorchEnabled = _isTorchEnabled.value,
             isDualScreenPresentationActive = _isDualScreenPresentationActive.value,
             isKeyguardLocked = _isKeyguardLocked.value,
@@ -402,6 +438,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun refreshSystemCompanionState() {
+        SystemTweaker.loadHingePreferences(appContext)
         _isDefaultLauncher.value = repository.isDefaultLauncher()
         val a11yEnabled = SystemTweaker.isAccessibilityServiceEnabled(appContext)
         _isAccessibilityActive.value = a11yEnabled
@@ -412,6 +449,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _isKeyguardLocked.value = km?.isKeyguardLocked == true
         _isTorchEnabled.value = SystemTweaker.isTorchEnabled()
         _hardwareTelemetry.value = SystemTweaker.readHardwareTelemetry(appContext)
+        val netSnapshot = SystemTweaker.readNetworkTelemetry(appContext)
+        _networkTelemetry.value = netSnapshot
+        _tailscaleIp.value = netSnapshot.tailscaleIp
+        _lanIp.value = netSnapshot.lanIp
+        val scratchpadSaved = scratchpadPrefs.getString(KEY_SCRATCHPAD_TEXT, null)
+        if (!scratchpadSaved.isNullOrBlank() && _quickNoteText.value != scratchpadSaved) {
+            _quickNoteText.value = scratchpadSaved
+            preferences.quickNoteText = scratchpadSaved
+        }
         if (a11yEnabled) {
             FloatingHudController.syncOverlayWithService()
         }
@@ -613,6 +659,46 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         setFoldCloseActionMode(next)
     }
 
+    // v0.5.0 Unfold-Open Action Mode Controls (`"unfold_action_mode"`)
+    fun setUnfoldActionMode(modeOrQuery: String) {
+        val trimmed = modeOrQuery.trim()
+        val resolvedMode: UnfoldActionMode = when {
+            trimmed.contains("termux", ignoreCase = true) || trimmed.equals("vc_termux", ignoreCase = true) ->
+                UnfoldActionMode.AUTO_SPLIT_VC_TERMUX
+            trimmed.contains("compare", ignoreCase = true) || trimmed.contains("prod", ignoreCase = true) ||
+                trimmed.equals("prod_compare", ignoreCase = true) ->
+                UnfoldActionMode.AUTO_SPLIT_PROD_COMPARE
+            trimmed.contains("browser", ignoreCase = true) || trimmed.contains("chrome", ignoreCase = true) ||
+                trimmed.equals("vc_browser", ignoreCase = true) ->
+                UnfoldActionMode.AUTO_SPLIT_VC_BROWSER
+            trimmed.contains("cockpit", ignoreCase = true) || trimmed.contains("dashboard", ignoreCase = true) ||
+                trimmed.contains("inner", ignoreCase = true) ->
+                UnfoldActionMode.INNER_DASHBOARD
+            else -> {
+                val currentIdx = UNFOLD_OPEN_MODES.indexOf(_unfoldModeLabel.value)
+                val nextIdx = (if (currentIdx >= 0) currentIdx + 1 else 0) % UnfoldActionMode.values().size
+                UnfoldActionMode.values()[nextIdx]
+            }
+        }
+        val resolvedLabel = "${resolvedMode.badge} ${resolvedMode.label}"
+        _unfoldModeLabel.value = resolvedLabel
+        rawPrefs.edit().putString(KEY_UNFOLD_MODE, resolvedLabel).apply()
+        SystemTweaker.setUnfoldActionMode(appContext, resolvedMode)
+        syncUiStateSnapshot()
+        val feedback = "Unfold-Open Mode: $resolvedLabel"
+        _omniStatusMessage.value = feedback
+        try {
+            Toast.makeText(appContext, feedback, Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) {
+        }
+    }
+
+    fun cycleUnfoldActionMode() {
+        val currentIdx = UNFOLD_OPEN_MODES.indexOf(_unfoldModeLabel.value)
+        val next = UNFOLD_OPEN_MODES[(if (currentIdx >= 0) currentIdx + 1 else 0) % UNFOLD_OPEN_MODES.size]
+        setUnfoldActionMode(next)
+    }
+
     // v0.3.0 Hardware Torch, Dual-Screen Presentation & Lock-Screen Cockpit Actions
     fun toggleTorch() {
         val next = SystemTweaker.toggleTorch(appContext, _isTorchEnabled.value)
@@ -762,33 +848,74 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 setFoldCloseActionMode("🔒 Instant Lock")
                 true
             }
+            "set_unfold_action", "unfold_action", "cycle_unfold" -> {
+                cycleUnfoldActionMode()
+                true
+            }
+            "unfold_dashboard", "unfold_cockpit", "unfold_inner" -> {
+                setUnfoldActionMode("🖥️ Inner Cockpit")
+                true
+            }
+            "unfold_vc_termux", "unfold_termux" -> {
+                setUnfoldActionMode("⚡ Auto-Split VC + Termux")
+                true
+            }
+            "unfold_prod_compare", "unfold_compare" -> {
+                setUnfoldActionMode("🔀 Auto-Split Prod + Compare")
+                true
+            }
+            "unfold_vc_browser", "unfold_browser" -> {
+                setUnfoldActionMode("🌐 Auto-Split VC + Browser")
+                true
+            }
             else -> false
         }
     }
 
     private fun handleSystemOrTermuxOmniAction(action: OmniAction) {
-        if (action is OmniAction.SystemCommand) {
-            when (action.target.name) {
-                "TOGGLE_HINGE_HAPTICS" -> {
-                    when (action.parameter.lowercase()) {
-                        "on", "true", "1" -> setHingeHapticsEnabled(true)
-                        "off", "false", "0" -> setHingeHapticsEnabled(false)
-                        else -> toggleHingeHaptics()
+        when (action) {
+            is OmniAction.SystemCommand -> {
+                when (action.target.name) {
+                    "TOGGLE_HINGE_HAPTICS" -> {
+                        when (action.parameter.lowercase()) {
+                            "on", "true", "1" -> setHingeHapticsEnabled(true)
+                            "off", "false", "0" -> setHingeHapticsEnabled(false)
+                            else -> toggleHingeHaptics()
+                        }
                     }
-                }
-                "SET_FOLD_CLOSE_ACTION" -> {
-                    if (action.parameter.isNotBlank()) {
-                        setFoldCloseActionMode(action.parameter)
-                    } else {
-                        cycleFoldCloseActionMode()
+                    "SET_FOLD_CLOSE_ACTION" -> {
+                        if (action.parameter.isNotBlank()) {
+                            setFoldCloseActionMode(action.parameter)
+                        } else {
+                            cycleFoldCloseActionMode()
+                        }
+                    }
+                    "SET_UNFOLD_ACTION" -> {
+                        if (action.parameter.isNotBlank()) {
+                            setUnfoldActionMode(action.parameter)
+                        } else {
+                            cycleUnfoldActionMode()
+                        }
                     }
                 }
             }
-        } else if (action::class.java.simpleName == "TermuxCommand" ||
-            action.actionId.startsWith("termux", ignoreCase = true)
-        ) {
-            preferences.incrementLaunchCount(VcPackages.TERMUX_PACKAGE)
-            syncAppFlagsInMemory()
+            is OmniAction.ScratchpadNote -> {
+                if (action.noteText.isNotBlank()) {
+                    updateQuickNote(action.noteText)
+                    if (action.sendToVcImmediately && vcMonitor.config.value.isConfigured) {
+                        vcMonitor.sendQuickMessage(
+                            sessionId = null,
+                            text = action.noteText,
+                            steerIfWorking = true
+                        )
+                    }
+                }
+            }
+            is OmniAction.TermuxCommand -> {
+                preferences.incrementLaunchCount(VcPackages.TERMUX_PACKAGE)
+                syncAppFlagsInMemory()
+            }
+            else -> {}
         }
     }
 
@@ -812,13 +939,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 }
                 closeSearch()
             }
-            else -> {
-                if (action::class.java.simpleName == "TermuxCommand" ||
-                    action.actionId.startsWith("termux", ignoreCase = true)
-                ) {
-                    closeSearch()
-                }
+            is OmniAction.ScratchpadNote, is OmniAction.TermuxCommand -> {
+                closeSearch()
             }
+            else -> {}
         }
 
         OmniCommandEngine.execute(
@@ -868,13 +992,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 refreshSystemCompanionState()
                 closeSearch()
             }
-            else -> {
-                if (action::class.java.simpleName == "TermuxCommand" ||
-                    action.actionId.startsWith("termux", ignoreCase = true)
-                ) {
-                    closeSearch()
-                }
+            is OmniAction.ScratchpadNote, is OmniAction.TermuxCommand -> {
+                closeSearch()
             }
+            else -> {}
         }
     }
 
@@ -1198,6 +1319,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun updateQuickNote(text: String) {
         preferences.quickNoteText = text
+        scratchpadPrefs.edit().putString(KEY_SCRATCHPAD_TEXT, text).apply()
         _quickNoteText.value = text
     }
 

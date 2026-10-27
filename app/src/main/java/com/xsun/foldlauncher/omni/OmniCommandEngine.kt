@@ -80,7 +80,12 @@ enum class SystemToggleTarget(val defaultActionId: String) {
     TOGGLE_COVER_PRESENTATION("toggle_cover_presentation"),
     SWITCH_WORKSPACE_PROFILE("switch_workspace_profile"),
     TOGGLE_HINGE_HAPTICS("toggle_hinge_haptics"),
-    SET_FOLD_CLOSE_ACTION("set_fold_close_action")
+    SET_FOLD_CLOSE_ACTION("set_fold_close_action"),
+    SET_UNFOLD_ACTION("set_unfold_action");
+
+    companion object {
+        val POSTURE_FORCE_INNER: SystemToggleTarget = POSTURE_INNER
+    }
 }
 
 /**
@@ -136,7 +141,8 @@ sealed class OmniAction {
 
     /**
      * Executes a live system/DeX setting tweak, hardware torch toggle, Z Fold 8 dual-screen cover presentation,
-     * workspace profile switch, hinge haptics toggle, fold-close action, posture simulator override, or launcher overlay toggle.
+     * workspace profile switch, hinge haptics toggle, fold-close action, unfold-open continuity action,
+     * posture simulator override, or launcher overlay toggle.
      */
     data class SystemCommand(
         val target: SystemToggleTarget,
@@ -151,12 +157,40 @@ sealed class OmniAction {
         val type: SystemActionType get() = target
         val profileKey: String get() = parameter
         val foldCloseMode: String get() = parameter
+        val unfoldActionMode: String get() = parameter
         val desiredTorchState: Boolean?
             get() = when (parameter.lowercase(Locale.US)) {
                 "on", "true", "1" -> true
                 "off", "false", "0" -> false
                 else -> null
             }
+    }
+
+    /**
+     * Captures a quick scratchpad note (`note: <text>`, `memo: <text>`, or `note-vc: <text>`),
+     * saving [noteText] to `SharedPreferences` (`"fold_scratchpad_prefs"`, key `"scratchpad_text"`) + [ClipboardVault],
+     * and optionally dispatching the note to VC immediately when [sendToVcImmediately] is true.
+     */
+    data class ScratchpadNote(
+        val noteText: String,
+        val sendToVcImmediately: Boolean = false
+    ) : OmniAction() {
+        val text: String get() = noteText
+        val note: String get() = noteText
+        override val title: String =
+            if (noteText.isBlank()) {
+                if (sendToVcImmediately) "Capture Scratchpad Note & Send to VC"
+                else "Capture Quick Scratchpad Note"
+            } else {
+                if (sendToVcImmediately) "Scratchpad -> VC: \"$noteText\""
+                else "Scratchpad Note: \"$noteText\""
+            }
+        override val subtitle: String =
+            if (sendToVcImmediately) "Saves to Scratchpad (fold_scratchpad_prefs) + Vault & dispatches to VC"
+            else "Saves to Scratchpad (fold_scratchpad_prefs) + Clipboard Vault"
+        override val badge: String = if (sendToVcImmediately) "NOTE -> VC" else "SCRATCHPAD"
+        override val copyText: String = noteText
+        override val actionId: String = if (sendToVcImmediately) "scratchpad_note_vc" else "scratchpad_note"
     }
 
     /**
@@ -326,6 +360,12 @@ object OmniCommandEngine {
     const val CHROME_PACKAGE = "com.android.chrome"
 
     /**
+     * SharedPreferences file and key for Quick Scratchpad Note Capture (`note: <text>` / `memo: <text>`).
+     */
+    const val SCRATCHPAD_PREFS_NAME = "fold_scratchpad_prefs"
+    const val KEY_SCRATCHPAD_TEXT = "scratchpad_text"
+
+    /**
      * Built-in VC Quick Macro definitions (`vc: status`, `vc: approve`, `vc: ship`, `vc: test`).
      */
     val VC_QUICK_MACROS: Map<String, String> = mapOf(
@@ -406,6 +446,12 @@ object OmniCommandEngine {
     private val FOLD_PREFIX_REGEX =
         Regex("^fold(?:\\s*:\\s*|\\s+)(stay|voice|tent|lock)$", RegexOption.IGNORE_CASE)
 
+    private val UNFOLD_PREFIX_REGEX =
+        Regex("^unfold(?:\\s*:\\s*|\\s+)(dashboard|vc\\s*\\+\\s*termux|vc_termux|split|compare|prod\\s*\\+\\s*compare|prod_compare|browser|vc\\s*\\+\\s*browser|vc_browser)$", RegexOption.IGNORE_CASE)
+
+    private val SCRATCHPAD_COMMAND_REGEX =
+        Regex("^(note-vc|memo-vc|note|memo)\\s*:\\s*(.*)$", RegexOption.IGNORE_CASE)
+
     private val TERMUX_COMMAND_REGEX =
         Regex("^(termux-split|sh-split|tty-split|termux|sh|tty)\\s*:\\s*(.*)$", RegexOption.IGNORE_CASE)
 
@@ -471,17 +517,24 @@ object OmniCommandEngine {
 
         val results = mutableListOf<OmniAction>()
 
-        // 1. Live System, DeX Tweaker, Torch, Dual-Screen Presentation, Workspace Profile, Hinge Haptics, Fold-Close & Posture Commands
+        // 1. Live System, DeX Tweaker, Torch, Dual-Screen Presentation, Workspace Profile, Hinge Haptics, Fold-Close, Unfold-Open & Posture Commands
         if (trimmed.startsWith(">") ||
             POSTURE_PREFIX_REGEX.matches(trimmed) ||
             PROFILE_PREFIX_REGEX.matches(trimmed) ||
-            FOLD_PREFIX_REGEX.matches(trimmed)
+            FOLD_PREFIX_REGEX.matches(trimmed) ||
+            UNFOLD_PREFIX_REGEX.matches(trimmed)
         ) {
             results.addAll(parseSystemCommands(trimmed))
             return results
         }
 
-        // 2. Termux / ADB Shell Snippet Dispatcher (`termux: <cmd>`, `sh: <cmd>`, `termux-split: <cmd>`)
+        // 2. Quick Scratchpad Note Capture (`note: <text>`, `memo: <text>`, `note-vc: <text>`)
+        parseScratchpadCommand(trimmed)?.let { noteAction ->
+            results.add(noteAction)
+            return results
+        }
+
+        // 3. Termux / ADB Shell Snippet Dispatcher (`termux: <cmd>`, `sh: <cmd>`, `termux-split: <cmd>`)
         parseTermuxCommand(trimmed)?.let { termuxAction ->
             results.add(termuxAction)
             return results
@@ -616,6 +669,8 @@ object OmniCommandEngine {
      * `> presentation`), workspace profile switcher (`> profile all`, `> profile vc`, `> profile focus`,
      * `> profile oled`), Z Fold 8 hinge haptics (`> haptics`, `> hinge haptics`, `> detents`),
      * fold-close actions (`> fold stay`, `> fold voice`, `> fold tent`, `> fold lock`),
+     * unfold-open continuity actions (`> unfold dashboard`, `> unfold split`, `> unfold vc+termux`,
+     * `> unfold compare`, `> unfold prod+compare`, `> unfold browser`, `> unfold vc+browser`),
      * and posture simulator commands (`> posture ...` / `posture: ...`).
      */
     fun parseSystemCommands(rawQuery: String): List<OmniAction.SystemCommand> {
@@ -624,7 +679,13 @@ object OmniCommandEngine {
         val posturePrefixMatch = POSTURE_PREFIX_REGEX.matchEntire(trimmed)
         val profilePrefixMatch = PROFILE_PREFIX_REGEX.matchEntire(trimmed)
         val foldPrefixMatch = FOLD_PREFIX_REGEX.matchEntire(trimmed)
-        if (!isChevron && posturePrefixMatch == null && profilePrefixMatch == null && foldPrefixMatch == null) {
+        val unfoldPrefixMatch = UNFOLD_PREFIX_REGEX.matchEntire(trimmed)
+        if (!isChevron &&
+            posturePrefixMatch == null &&
+            profilePrefixMatch == null &&
+            foldPrefixMatch == null &&
+            unfoldPrefixMatch == null
+        ) {
             return emptyList()
         }
 
@@ -861,6 +922,45 @@ object OmniCommandEngine {
             )
         )
 
+        val unfoldActionCommands = listOf(
+            OmniAction.SystemCommand(
+                target = SystemToggleTarget.SET_UNFOLD_ACTION,
+                triggerCommand = "> unfold dashboard",
+                title = "Unfold-Open Action: 2-Column Home Dashboard",
+                subtitle = "Opens Fold8 2-Column Command Center when unfolding Z Fold 8 (unfold_dashboard)",
+                badge = "UNFOLD DASHBOARD",
+                actionId = "unfold_dashboard",
+                parameter = "dashboard"
+            ),
+            OmniAction.SystemCommand(
+                target = SystemToggleTarget.SET_UNFOLD_ACTION,
+                triggerCommand = "> unfold vc+termux",
+                title = "Unfold-Open Action: VC + Termux Split-Screen",
+                subtitle = "Automatically launches VC + Termux 50/50 split when unfolding Z Fold 8 (unfold_vc_termux)",
+                badge = "UNFOLD VC+TERMUX",
+                actionId = "unfold_vc_termux",
+                parameter = "vc_termux"
+            ),
+            OmniAction.SystemCommand(
+                target = SystemToggleTarget.SET_UNFOLD_ACTION,
+                triggerCommand = "> unfold prod+compare",
+                title = "Unfold-Open Action: VC Prod + VC Compare Split-Screen",
+                subtitle = "Automatically launches VC Prod + VC Compare 50/50 split when unfolding Z Fold 8 (unfold_prod_compare)",
+                badge = "UNFOLD COMPARE",
+                actionId = "unfold_prod_compare",
+                parameter = "prod_compare"
+            ),
+            OmniAction.SystemCommand(
+                target = SystemToggleTarget.SET_UNFOLD_ACTION,
+                triggerCommand = "> unfold vc+browser",
+                title = "Unfold-Open Action: VC + Chrome Browser Split-Screen",
+                subtitle = "Automatically launches VC + Chrome 50/50 split when unfolding Z Fold 8 (unfold_vc_browser)",
+                badge = "UNFOLD BROWSER",
+                actionId = "unfold_vc_browser",
+                parameter = "vc_browser"
+            )
+        )
+
         if (posturePrefixMatch != null) {
             val postureArg = posturePrefixMatch.groupValues[1].trim().lowercase(Locale.US)
             if (postureArg.isEmpty()) return postureCommands
@@ -876,6 +976,11 @@ object OmniCommandEngine {
         if (foldPrefixMatch != null) {
             val foldArg = foldPrefixMatch.groupValues[1].trim().lowercase(Locale.US)
             return matchFoldCloseCommands(foldArg, foldCloseActionCommands)
+        }
+
+        if (unfoldPrefixMatch != null) {
+            val unfoldArg = unfoldPrefixMatch.groupValues[1].trim().lowercase(Locale.US)
+            return matchUnfoldActionCommands(unfoldArg, unfoldActionCommands)
         }
 
         val body = trimmed.removePrefix(">").trim().lowercase(Locale.US)
@@ -917,7 +1022,17 @@ object OmniCommandEngine {
             if (matchedFold.isNotEmpty()) return matchedFold
         }
 
-        // 5. Workspace Profile Switcher Commands (`> profile all`, `> profile vc`, `> profile focus`, `> profile oled`)
+        // 5. Z Fold 8 Unfold-Open Continuity Commands (`> unfold dashboard`, `> unfold split`, `> unfold vc+termux`, `> unfold compare`, `> unfold prod+compare`, `> unfold browser`, `> unfold vc+browser`)
+        // Note: bare `> unfold` intentionally falls through to Posture Simulator (`POSTURE_INNER` / `posture_inner`).
+        if (body.startsWith("unfold ") || body.startsWith("unfold:")) {
+            val sub = body.removePrefix("unfold").removePrefix(":").trim()
+            if (sub.isNotEmpty()) {
+                val matchedUnfold = matchUnfoldActionCommands(sub, unfoldActionCommands)
+                if (matchedUnfold.isNotEmpty()) return matchedUnfold
+            }
+        }
+
+        // 6. Workspace Profile Switcher Commands (`> profile all`, `> profile vc`, `> profile focus`, `> profile oled`)
         if (body == "profile" || body == "profile:" || body == "profiles") {
             return workspaceProfileCommands
         }
@@ -928,7 +1043,7 @@ object OmniCommandEngine {
             if (matchedProfile.isNotEmpty()) return matchedProfile
         }
 
-        // 6. Posture Simulator Commands (`> posture ...`, `> flex`, `> unfold`, `> tent`, `> cover`)
+        // 7. Posture Simulator Commands (`> posture ...`, `> flex`, `> unfold`, `> tent`, `> cover`)
         if (body == "posture" || body == "posture:") {
             return postureCommands
         }
@@ -954,7 +1069,7 @@ object OmniCommandEngine {
         }
         if (directPostureMatch.isNotEmpty()) return directPostureMatch
 
-        // 7. Core System & DeX Tweaker Commands
+        // 8. Core System & DeX Tweaker Commands
         val exactFiltered = when {
             body == "dex gboard" || body == "gboard" || body == "dex ime" || body == "dex" || body == "ime" ->
                 coreSystemCommands.filter { it.target == SystemToggleTarget.DEX_GBOARD }
@@ -982,6 +1097,7 @@ object OmniCommandEngine {
         val allCommands = coreSystemCommands +
             listOf(torchToggleCmd, torchOnCmd, torchOffCmd, coverPresentationCmd, hingeHapticsCmd) +
             foldCloseActionCommands +
+            unfoldActionCommands +
             workspaceProfileCommands +
             postureCommands
 
@@ -990,6 +1106,30 @@ object OmniCommandEngine {
                 cmd.title.lowercase(Locale.US).contains(body) ||
                 cmd.badge.lowercase(Locale.US).contains(body) ||
                 cmd.actionId.lowercase(Locale.US).contains(body)
+        }
+    }
+
+    private fun matchUnfoldActionCommands(
+        query: String,
+        unfoldCommands: List<OmniAction.SystemCommand>
+    ): List<OmniAction.SystemCommand> {
+        val normalized = query.replace("\\s+".toRegex(), "")
+        val exact = when (normalized) {
+            "dashboard", "home", "launcher", "default" ->
+                unfoldCommands.filter { it.parameter == "dashboard" }
+            "vc+termux", "vc_termux", "vctermux", "split", "termux", "vc+sh", "vc+tty" ->
+                unfoldCommands.filter { it.parameter == "vc_termux" }
+            "compare", "prod+compare", "prod_compare", "prodcompare", "vc+compare", "vc_compare" ->
+                unfoldCommands.filter { it.parameter == "prod_compare" }
+            "browser", "vc+browser", "vc_browser", "vcbrowser", "chrome", "vc+chrome", "web", "vc+web" ->
+                unfoldCommands.filter { it.parameter == "vc_browser" }
+            else -> emptyList()
+        }
+        if (exact.isNotEmpty()) return exact
+        return unfoldCommands.filter { cmd ->
+            cmd.parameter.contains(normalized) ||
+                cmd.title.lowercase(Locale.US).contains(query) ||
+                cmd.actionId.lowercase(Locale.US).contains(normalized)
         }
     }
 
@@ -1053,6 +1193,53 @@ object OmniCommandEngine {
             cmd.triggerCommand.lowercase(Locale.US).contains(query) ||
                 cmd.title.lowercase(Locale.US).contains(query) ||
                 cmd.actionId.lowercase(Locale.US).contains(query)
+        }
+    }
+
+    /**
+     * Parses `note: <text>`, `memo: <text>`, `note-vc: <text>`, or `memo-vc: <text>` into [OmniAction.ScratchpadNote].
+     */
+    fun parseScratchpadCommand(rawQuery: String): OmniAction.ScratchpadNote? {
+        val trimmed = rawQuery.trim()
+        val match = SCRATCHPAD_COMMAND_REGEX.matchEntire(trimmed) ?: return null
+        val prefix = match.groupValues[1].lowercase(Locale.US)
+        val rawNote = match.groupValues[2].trim()
+        val vcViaFlag = rawNote.startsWith("--vc ") || rawNote.startsWith("!vc ")
+        val sendToVcImmediately = prefix.endsWith("-vc") || vcViaFlag
+        val cleanedNote = rawNote
+            .removePrefix("--vc ")
+            .removePrefix("!vc ")
+            .trim()
+        return OmniAction.ScratchpadNote(
+            noteText = cleanedNote,
+            sendToVcImmediately = sendToVcImmediately
+        )
+    }
+
+    /**
+     * Saves a quick scratchpad note to `SharedPreferences` (`"fold_scratchpad_prefs"`, key `"scratchpad_text"`).
+     */
+    fun saveScratchpadNote(context: Context, noteText: String): Boolean {
+        val normalized = noteText.trim()
+        if (normalized.isEmpty()) return false
+        return try {
+            val prefs = context.applicationContext.getSharedPreferences(SCRATCHPAD_PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.edit().putString(KEY_SCRATCHPAD_TEXT, normalized).apply()
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Reads the current scratchpad note from `SharedPreferences` (`"fold_scratchpad_prefs"`, key `"scratchpad_text"`).
+     */
+    fun loadScratchpadNote(context: Context): String {
+        return try {
+            val prefs = context.applicationContext.getSharedPreferences(SCRATCHPAD_PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.getString(KEY_SCRATCHPAD_TEXT, "") ?: ""
+        } catch (_: Exception) {
+            ""
         }
     }
 
@@ -1631,7 +1818,9 @@ object OmniCommandEngine {
         onToggleCoverPresentation: (() -> Unit)? = null,
         onSwitchWorkspaceProfile: ((String) -> Unit)? = null,
         onToggleHingeHaptics: (() -> Unit)? = null,
-        onSetFoldCloseAction: ((String) -> Unit)? = null
+        onSetFoldCloseAction: ((String) -> Unit)? = null,
+        onSetUnfoldAction: ((String) -> Unit)? = null,
+        onSaveScratchpadNote: ((String, Boolean) -> Unit)? = null
     ): Boolean {
         return when (action) {
             is OmniAction.LaunchAdHocSplit -> {
@@ -1746,6 +1935,61 @@ object OmniCommandEngine {
                         onStatusMessage?.invoke("Fold-Close Action set to: ${mode.uppercase(Locale.US)}")
                         true
                     }
+                    SystemToggleTarget.SET_UNFOLD_ACTION -> {
+                        val mode = action.unfoldActionMode.ifBlank { "dashboard" }
+                        try {
+                            context.applicationContext
+                                .getSharedPreferences("fold_unfold_continuity_prefs", Context.MODE_PRIVATE)
+                                .edit()
+                                .putString("unfold_action_mode", mode)
+                                .apply()
+                        } catch (_: Exception) {
+                        }
+                        onSetUnfoldAction?.invoke(mode)
+                        onPostureCommand?.invoke(action.actionId)
+                        onStatusMessage?.invoke("Unfold-Open Action set to: ${mode.uppercase(Locale.US)}")
+                        true
+                    }
+                }
+            }
+            is OmniAction.ScratchpadNote -> {
+                if (action.noteText.isNotBlank()) {
+                    saveScratchpadNote(context, action.noteText)
+                    ClipboardVault.copyToSystemClipboard(context, action.noteText, "Scratchpad Note")
+                    val targetVault = clipboardVault ?: ClipboardVault(context)
+                    targetVault.addOrBumpClip(
+                        text = action.noteText,
+                        label = if (action.sendToVcImmediately) "Scratchpad Note (VC)" else "Scratchpad Note",
+                        category = "Scratchpad"
+                    )
+                    onSaveScratchpadNote?.invoke(action.noteText, action.sendToVcImmediately)
+                }
+                if (action.sendToVcImmediately) {
+                    val vcPkg = SystemTweaker.findInstalledVcPackage(context)
+                    if (vcPkg != null) {
+                        val intent = context.packageManager.getLaunchIntentForPackage(vcPkg)?.apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            if (action.noteText.isNotBlank()) {
+                                putExtra(Intent.EXTRA_TEXT, action.noteText)
+                                putExtra("prompt", action.noteText)
+                                putExtra("initialPrompt", action.noteText)
+                            }
+                        }
+                        if (intent != null) {
+                            try {
+                                context.startActivity(intent)
+                                onStatusMessage?.invoke("Saved Scratchpad note & dispatched to VC")
+                                return true
+                            } catch (_: Exception) {
+                            }
+                        }
+                    }
+                    SystemTweaker.launchVc(context = context, startVoiceTalk = false, adjacentSplitScreen = false)
+                    onStatusMessage?.invoke("Saved Scratchpad note & opened VC Console")
+                    true
+                } else {
+                    onStatusMessage?.invoke("Saved note to Scratchpad & Clipboard Vault")
+                    true
                 }
             }
             is OmniAction.TermuxCommand -> {
@@ -2193,6 +2437,18 @@ fun OmniCommandResultsCard(
                         }
                     )
                 }
+                is OmniAction.ScratchpadNote -> {
+                    ScratchpadNoteActionCard(
+                        action = action,
+                        onClick = {
+                            if (action.noteText.isNotBlank()) {
+                                composeClipboard.setText(AnnotatedString(action.noteText))
+                            }
+                            OmniCommandEngine.execute(context, action)
+                            onExecuteAction(action)
+                        }
+                    )
+                }
                 is OmniAction.TermuxCommand -> {
                     TermuxCommandActionCard(
                         action = action,
@@ -2253,7 +2509,9 @@ private fun OmniQuickSyntaxStrip(
         listOf(
             "split: vc + compare" to "⚡ vc + compare",
             "vc: ship" to "🚀 vc: ship",
+            "note: " to "📝 note: memo",
             "termux: " to "💻 termux: cmd",
+            "> unfold split" to "📖 > unfold split",
             "> haptics" to "📳 > haptics",
             "> fold voice" to "🎙 > fold voice",
             "> torch" to "🔦 > torch",
@@ -2412,6 +2670,74 @@ private fun SystemCommandActionRow(
             fontWeight = FontWeight.ExtraBold,
             color = FoldLauncherColors.EmeraldSuccess
         )
+    }
+}
+
+@Composable
+private fun ScratchpadNoteActionCard(
+    action: OmniAction.ScratchpadNote,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(
+                Brush.horizontalGradient(
+                    colors = listOf(
+                        FoldLauncherColors.AmberWarning.copy(alpha = 0.24f),
+                        FoldLauncherColors.GlassSurfaceElevated
+                    )
+                )
+            )
+            .border(1.5.dp, FoldLauncherColors.AmberWarning, RoundedCornerShape(20.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                OmniBadgePill(text = action.badge, color = FoldLauncherColors.AmberWarning)
+                Text(
+                    text = if (action.sendToVcImmediately) "SAVE NOTE + DISPATCH TO VC" else "QUICK SCRATCHPAD CAPTURE",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = FoldLauncherColors.CyanBright
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = if (action.noteText.isBlank()) "Type note text after note: or memo: …" else action.noteText,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                color = FoldLauncherColors.TextPrimary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = action.subtitle,
+                fontSize = 11.sp,
+                color = FoldLauncherColors.TextSecondary
+            )
+        }
+        Spacer(modifier = Modifier.width(10.dp))
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(FoldLauncherColors.AmberWarning)
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            Text(
+                text = if (action.sendToVcImmediately) "Save & VC ↗" else "Save ↵",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = Color(0xFF02131D)
+            )
+        }
     }
 }
 

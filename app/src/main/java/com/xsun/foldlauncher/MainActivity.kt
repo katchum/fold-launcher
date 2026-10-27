@@ -162,6 +162,9 @@ private fun FoldLauncherRoot(
     val pinnedDockPackages by viewModel.pinnedDockPackages.collectAsState()
     val hingeHapticsEnabled by viewModel.hingeHapticsEnabled.collectAsState()
     val foldCloseModeLabel by viewModel.foldCloseModeLabel.collectAsState()
+    val unfoldModeLabel by viewModel.unfoldModeLabel.collectAsState()
+    val tailscaleIp by viewModel.tailscaleIp.collectAsState()
+    val lanIp by viewModel.lanIp.collectAsState()
 
     val allApps by viewModel.allApps.collectAsState()
     val hiddenApps by viewModel.hiddenApps.collectAsState()
@@ -237,6 +240,10 @@ private fun FoldLauncherRoot(
                         onToggleHingeHaptics = viewModel::toggleHingeHaptics,
                         foldCloseModeLabel = foldCloseModeLabel,
                         onCycleFoldCloseActionMode = viewModel::cycleFoldCloseActionMode,
+                        unfoldModeLabel = unfoldModeLabel,
+                        onCycleUnfoldActionMode = viewModel::cycleUnfoldActionMode,
+                        tailscaleIp = tailscaleIp,
+                        lanIp = lanIp,
                         allApps = allApps,
                         pinnedCoverApps = pinnedCoverApps,
                         dockApps = dockApps,
@@ -293,6 +300,10 @@ private fun FoldLauncherRoot(
                         onToggleHingeHaptics = viewModel::toggleHingeHaptics,
                         foldCloseModeLabel = foldCloseModeLabel,
                         onCycleFoldCloseActionMode = viewModel::cycleFoldCloseActionMode,
+                        unfoldModeLabel = unfoldModeLabel,
+                        onCycleUnfoldActionMode = viewModel::cycleUnfoldActionMode,
+                        tailscaleIp = tailscaleIp,
+                        lanIp = lanIp,
                         allApps = allApps,
                         favoriteApps = pinnedInnerApps,
                         dockApps = dockApps,
@@ -348,6 +359,10 @@ private fun FoldLauncherRoot(
                         onToggleHingeHaptics = viewModel::toggleHingeHaptics,
                         foldCloseModeLabel = foldCloseModeLabel,
                         onCycleFoldCloseActionMode = viewModel::cycleFoldCloseActionMode,
+                        unfoldModeLabel = unfoldModeLabel,
+                        onCycleUnfoldActionMode = viewModel::cycleUnfoldActionMode,
+                        tailscaleIp = tailscaleIp,
+                        lanIp = lanIp,
                         allApps = allApps,
                         pinnedInnerApps = pinnedInnerApps,
                         dockApps = dockApps,

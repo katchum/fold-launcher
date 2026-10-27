@@ -229,6 +229,47 @@ data class VcAgentStatus(
 }
 
 /**
+ * Persistent Scratchpad & 1-Tap VC Context Injector packet (`v0.5.0`).
+ */
+data class VcScratchpadPacket(
+    val noteText: String,
+    val postureLabel: String = "INNER",
+    val hingeAngleDeg: Float = 180f,
+    val tailscaleIp: String? = null
+) {
+    fun toEnrichedPrompt(): String {
+        return buildTelemetryEnrichedPrompt(
+            noteText = noteText,
+            postureLabel = postureLabel,
+            hingeAngleDeg = hingeAngleDeg,
+            tailscaleIp = tailscaleIp
+        )
+    }
+}
+
+/**
+ * Formats a scratchpad note with a compact `[Fold8 Telemetry: INNER @ 180° | Tailscale: ...]`
+ * context header for VC agents (`v0.5.0`).
+ */
+fun buildTelemetryEnrichedPrompt(
+    noteText: String,
+    postureLabel: String = "INNER",
+    hingeAngleDeg: Float = 180f,
+    tailscaleIp: String? = null
+): String {
+    val cleanPosture = postureLabel.trim().ifEmpty { "INNER" }.uppercase()
+    val roundedAngle = hingeAngleDeg.toInt().coerceIn(0, 180)
+    val ipPart = tailscaleIp?.trim()?.takeIf { it.isNotEmpty() }?.let { " | Tailscale: $it" } ?: ""
+    val header = "[Fold8 Telemetry: $cleanPosture @ ${roundedAngle}°$ipPart]"
+    val cleanNote = noteText.trim()
+    return if (cleanNote.isEmpty()) {
+        header
+    } else {
+        "$header\n$cleanNote"
+    }
+}
+
+/**
  * Multi-agent squad telemetry breakdown across active VC sessions (`v0.4.0`).
  */
 data class VcSquadTelemetry(
@@ -373,6 +414,20 @@ data class VcLiveSummary(
     companion object {
         fun computeSquadTelemetry(agents: List<VcAgentStatus>): VcSquadTelemetry {
             return com.xsun.foldlauncher.vc.computeSquadTelemetry(agents)
+        }
+
+        fun buildTelemetryEnrichedPrompt(
+            noteText: String,
+            postureLabel: String = "INNER",
+            hingeAngleDeg: Float = 180f,
+            tailscaleIp: String? = null
+        ): String {
+            return com.xsun.foldlauncher.vc.buildTelemetryEnrichedPrompt(
+                noteText = noteText,
+                postureLabel = postureLabel,
+                hingeAngleDeg = hingeAngleDeg,
+                tailscaleIp = tailscaleIp
+            )
         }
     }
 

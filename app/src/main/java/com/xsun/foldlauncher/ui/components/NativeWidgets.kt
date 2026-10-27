@@ -3,6 +3,8 @@ package com.xsun.foldlauncher.ui.components
 import android.app.Activity
 import android.app.ActivityManager
 import android.app.KeyguardManager
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -12,6 +14,8 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import java.net.Inet4Address
+import java.net.NetworkInterface
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -114,6 +118,205 @@ val DefaultZFold8FoldCloseModes: List<String> = listOf(
     "⛺ OLED Standby",
     "🔒 Instant Lock"
 )
+
+/**
+ * Z Fold 8 Unfold-Open Action Cycler Modes (`v0.5.0`):
+ * Cycles through:
+ * 1. `🖥️ Inner Cockpit`
+ * 2. `⚡ Auto-Split VC + Termux`
+ * 3. `🔀 Auto-Split Prod + Compare`
+ * 4. `🌐 Auto-Split VC + Browser`
+ */
+val DefaultZFold8UnfoldOpenModes: List<String> = listOf(
+    "🖥️ Inner Cockpit",
+    "⚡ Auto-Split VC + Termux",
+    "🔀 Auto-Split Prod + Compare",
+    "🌐 Auto-Split VC + Browser"
+)
+
+private data class LiveNetworkMeshTelemetry(
+    val tailscaleIp: String? = null,
+    val lanIp: String? = null
+)
+
+private fun resolveNetworkTelemetry(context: Context): LiveNetworkMeshTelemetry {
+    var tsIp: String? = null
+    var localLanIp: String? = null
+
+    // 1. Try SystemTweaker.readNetworkTelemetry(context) if available
+    try {
+        val method = SystemTweaker::class.java.methods.firstOrNull {
+            it.name == "readNetworkTelemetry"
+        }
+        val snapshot = method?.invoke(SystemTweaker, context)
+        if (snapshot != null) {
+            val snapClass = snapshot.javaClass
+            val tsProp = snapClass.methods.firstOrNull {
+                it.name == "getTailscaleIp" || it.name == "getTailscaleIpv4"
+            }?.invoke(snapshot) as? String
+            val lanProp = snapClass.methods.firstOrNull {
+                it.name == "getLanIp" || it.name == "getWifiLanIp" || it.name == "getLocalIp"
+            }?.invoke(snapshot) as? String
+            if (!tsProp.isNullOrBlank()) tsIp = tsProp
+            if (!lanProp.isNullOrBlank()) localLanIp = lanProp
+        }
+    } catch (_: Exception) {
+    }
+
+    // 2. Scan active NetworkInterfaces for Tailscale (100.64.0.0/10 / tun0 / tailscale0) & LAN IPv4
+    if (tsIp.isNullOrBlank() || localLanIp.isNullOrBlank()) {
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                val iface = interfaces.nextElement()
+                if (!iface.isUp || iface.isLoopback) continue
+                val ifaceName = iface.name.lowercase(Locale.US)
+                val addrs = iface.inetAddresses
+                while (addrs.hasMoreElements()) {
+                    val addr = addrs.nextElement()
+                    if (addr is Inet4Address && !addr.isLoopbackAddress) {
+                        val ip = addr.hostAddress ?: continue
+                        val octets = ip.split('.')
+                        val firstOctet = octets.getOrNull(0)?.toIntOrNull() ?: 0
+                        val secondOctet = octets.getOrNull(1)?.toIntOrNull() ?: 0
+                        val isTailscaleRange = firstOctet == 100 && secondOctet in 64..127
+                        if (isTailscaleRange || ifaceName.contains("tailscale") || ifaceName.startsWith("tun")) {
+                            if (tsIp.isNullOrBlank()) tsIp = ip
+                        } else if (firstOctet == 192 || firstOctet == 10 || (firstOctet == 172 && secondOctet in 16..31)) {
+                            if (localLanIp.isNullOrBlank()) localLanIp = ip
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    return LiveNetworkMeshTelemetry(
+        tailscaleIp = tsIp,
+        lanIp = localLanIp
+    )
+}
+
+@Composable
+private fun rememberLiveNetworkMeshTelemetry(
+    overrideTailscaleIp: String? = null,
+    overrideLanIp: String? = null
+): LiveNetworkMeshTelemetry {
+    val context = LocalContext.current
+    var telemetry by remember { mutableStateOf(resolveNetworkTelemetry(context)) }
+
+    LaunchedEffect(context) {
+        while (true) {
+            telemetry = resolveNetworkTelemetry(context)
+            delay(10_000L)
+        }
+    }
+
+    return LiveNetworkMeshTelemetry(
+        tailscaleIp = overrideTailscaleIp?.takeIf { it.isNotBlank() } ?: telemetry.tailscaleIp,
+        lanIp = overrideLanIp?.takeIf { it.isNotBlank() } ?: telemetry.lanIp
+    )
+}
+
+/**
+ * Interactive Tailscale Mesh & LAN Telemetry Pill (`🔗 Tailscale: 100.101.43.86` or LAN IP)
+ * with 1-tap copy to `ClipboardManager`.
+ */
+@Composable
+fun TailscaleMeshTelemetryPill(
+    tailscaleIp: String? = null,
+    lanIp: String? = null,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
+    val liveNet = rememberLiveNetworkMeshTelemetry(
+        overrideTailscaleIp = tailscaleIp,
+        overrideLanIp = lanIp
+    )
+    var copiedFeedback by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(copiedFeedback) {
+        if (copiedFeedback != null) {
+            delay(1_800L)
+            copiedFeedback = null
+        }
+    }
+
+    val ts = liveNet.tailscaleIp
+    val lan = liveNet.lanIp
+    val primaryIp = ts ?: lan ?: "100.101.43.86"
+    val isTailscale = ts != null || (lan == null)
+    val displayLabel = when {
+        copiedFeedback != null -> "✓ Copied $copiedFeedback"
+        ts != null && lan != null -> "🔗 Tailscale: $ts · LAN $lan"
+        isTailscale -> "🔗 Tailscale: $primaryIp"
+        else -> "🌐 LAN: $primaryIp"
+    }
+
+    val pillShape = RoundedCornerShape(12.dp)
+    Row(
+        modifier = modifier
+            .clip(pillShape)
+            .background(
+                if (copiedFeedback != null) {
+                    FoldLauncherColors.EmeraldSuccess.copy(alpha = 0.22f)
+                } else {
+                    FoldLauncherColors.DeepVoid.copy(alpha = 0.76f)
+                }
+            )
+            .border(
+                1.dp,
+                if (copiedFeedback != null) {
+                    FoldLauncherColors.EmeraldSuccess
+                } else {
+                    FoldLauncherColors.ElectricCyan.copy(alpha = 0.65f)
+                },
+                pillShape
+            )
+            .clickable {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                try {
+                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                    cm?.setPrimaryClip(ClipData.newPlainText("Z Fold 8 IP", primaryIp))
+                    copiedFeedback = primaryIp
+                } catch (_: Exception) {
+                    copiedFeedback = primaryIp
+                }
+            }
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(
+                    if (isTailscale) FoldLauncherColors.EmeraldSuccess
+                    else FoldLauncherColors.ElectricCyan
+                )
+        )
+        Text(
+            text = displayLabel,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (copiedFeedback != null) {
+                FoldLauncherColors.EmeraldSuccess
+            } else {
+                FoldLauncherColors.CyanBright
+            },
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = "📋",
+            fontSize = 10.sp,
+            color = FoldLauncherColors.TextSecondary
+        )
+    }
+}
 
 private data class HardwareSystemTelemetry(
     val batteryTempCelsius: Float = 31.5f,
@@ -280,7 +483,11 @@ fun NativeDashboardCards(
     hingeHapticsEnabled: Boolean = true,
     foldCloseModeLabel: String = "📱 Keep Cover Awake",
     onToggleHingeHaptics: () -> Unit = {},
-    onCycleFoldCloseMode: () -> Unit = {}
+    onCycleFoldCloseMode: () -> Unit = {},
+    unfoldModeLabel: String = "🖥️ Inner Cockpit",
+    onCycleUnfoldMode: () -> Unit = {},
+    tailscaleIp: String? = null,
+    lanIp: String? = null
 ) {
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
@@ -298,6 +505,16 @@ fun NativeDashboardCards(
     }
     val effectiveFoldCloseLabel = DefaultZFold8FoldCloseModes.getOrElse(localFoldCloseIndex) {
         foldCloseModeLabel
+    }
+
+    var localUnfoldIndex by remember(unfoldModeLabel) {
+        val idx = DefaultZFold8UnfoldOpenModes.indexOfFirst {
+            it.equals(unfoldModeLabel, ignoreCase = true)
+        }
+        mutableIntStateOf(if (idx >= 0) idx else 0)
+    }
+    val effectiveUnfoldLabel = DefaultZFold8UnfoldOpenModes.getOrElse(localUnfoldIndex) {
+        unfoldModeLabel
     }
 
     val effectiveVcSummary = vcSummaryOverride ?: monitorSummary
@@ -547,6 +764,14 @@ fun NativeDashboardCards(
                 }
                 onCycleFoldCloseMode()
             },
+            unfoldModeLabel = effectiveUnfoldLabel,
+            onCycleUnfoldMode = {
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                localUnfoldIndex = (localUnfoldIndex + 1) % DefaultZFold8UnfoldOpenModes.size
+                onCycleUnfoldMode()
+            },
+            tailscaleIp = tailscaleIp,
+            lanIp = lanIp,
             modifier = Modifier.spatialParallaxCard(tilt = tilt, depthLayer = 1.0f)
         )
 
@@ -865,10 +1090,12 @@ private fun CockpitActionPill(
 }
 
 /**
- * Interactive Z Fold 8 Hinge Mechanics Strip (`v0.4.0`):
+ * Interactive Z Fold 8 Hinge Mechanics Strip (`v0.5.0`):
  * - 1-tap `⚙️ Hinge Detents: ON/OFF` chip (toggles mechanical watch-crown 15° hinge haptics)
  * - 1-tap `📐 On Fold Close: 📱 Keep Cover Awake` cycler pill
  *   (`📱 Keep Cover Awake` -> `🎙️ Auto-Talk to VC` -> `⛺ OLED Standby` -> `🔒 Instant Lock`)
+ * - 1-tap `📖 On Unfold: 🖥️ Inner Cockpit` cycler pill
+ *   (`🖥️ Inner Cockpit` -> `⚡ Auto-Split VC + Termux` -> `🔀 Auto-Split Prod + Compare` -> `🌐 Auto-Split VC + Browser`)
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -877,6 +1104,10 @@ fun HingeMechanicsStrip(
     foldCloseModeLabel: String = "📱 Keep Cover Awake",
     onToggleHingeHaptics: () -> Unit = {},
     onCycleFoldCloseMode: () -> Unit = {},
+    unfoldModeLabel: String = "🖥️ Inner Cockpit",
+    onCycleUnfoldMode: () -> Unit = {},
+    tailscaleIp: String? = null,
+    lanIp: String? = null,
     modifier: Modifier = Modifier
 ) {
     val haptics = LocalHapticFeedback.current
@@ -905,7 +1136,7 @@ fun HingeMechanicsStrip(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                text = "HINGE MECHANICS · 15° CROWN DETENTS & FOLD-CLOSE",
+                text = "HINGE MECHANICS · 15° DETENTS · FOLD & UNFOLD",
                 fontSize = 10.sp,
                 fontWeight = FontWeight.ExtraBold,
                 color = FoldLauncherColors.CyanBright
@@ -991,14 +1222,45 @@ fun HingeMechanicsStrip(
                     color = FoldLauncherColors.ElectricCyan
                 )
             }
+
+            // 3. 1-Tap Unfold-Open Action Cycler Pill (v0.5.0)
+            Row(
+                modifier = Modifier
+                    .clip(pillShape)
+                    .background(FoldLauncherColors.ElectricCyan.copy(alpha = 0.16f))
+                    .border(1.dp, FoldLauncherColors.ElectricCyan, pillShape)
+                    .clickable {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onCycleUnfoldMode()
+                    }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Text(
+                    text = "📖 On Unfold: $unfoldModeLabel",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = FoldLauncherColors.CyanBright,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "↻",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = FoldLauncherColors.EmeraldSuccess
+                )
+            }
         }
     }
 }
 
 /**
- * Enhanced `SystemQuickTileWidget` for v0.4.0:
- * Displays a live Thermal / RAM pill (`31.5°C • 9.4 / 16 GB RAM`), a 1-tap `🔦 Torch` quick-tile button,
- * and the interactive Z Fold 8 Hinge Mechanics Strip (`⚙️ Hinge Detents: ON/OFF` + `📐 On Fold Close`).
+ * Enhanced `SystemQuickTileWidget` for v0.5.0:
+ * Displays a live Thermal / RAM pill (`31.5°C • 9.4 / 16 GB RAM`), a live Tailscale Mesh & LAN Telemetry Pill
+ * (`🔗 Tailscale: 100.101.43.86` with 1-tap Clipboard copy), a 1-tap `🔦 Torch` quick-tile button,
+ * and the interactive Z Fold 8 Hinge Mechanics Strip (`⚙️ Hinge Detents: ON/OFF` + `📐 On Fold Close` + `📖 On Unfold`).
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -1013,6 +1275,10 @@ fun SystemQuickTileWidget(
     foldCloseModeLabel: String = "📱 Keep Cover Awake",
     onToggleHingeHaptics: () -> Unit = {},
     onCycleFoldCloseMode: () -> Unit = {},
+    unfoldModeLabel: String = "🖥️ Inner Cockpit",
+    onCycleUnfoldMode: () -> Unit = {},
+    tailscaleIp: String? = null,
+    lanIp: String? = null,
     hingeAngleDegrees: Float? = null,
     isAccessibilityActive: Boolean = false,
     isWriteSecureSettingsGranted: Boolean = false,
@@ -1098,12 +1364,22 @@ fun SystemQuickTileWidget(
             }
         }
 
-        // Interactive Z Fold 8 Hinge Mechanics Strip (Detents + Fold-Close Behavior Cycler)
+        // Live Tailscale Mesh & LAN Telemetry Pill with 1-tap Clipboard copy
+        TailscaleMeshTelemetryPill(
+            tailscaleIp = tailscaleIp,
+            lanIp = lanIp
+        )
+
+        // Interactive Z Fold 8 Hinge Mechanics Strip (Detents + Fold-Close + Unfold-Open Cyclers)
         HingeMechanicsStrip(
             hingeHapticsEnabled = hingeHapticsEnabled,
             foldCloseModeLabel = foldCloseModeLabel,
             onToggleHingeHaptics = onToggleHingeHaptics,
-            onCycleFoldCloseMode = onCycleFoldCloseMode
+            onCycleFoldCloseMode = onCycleFoldCloseMode,
+            unfoldModeLabel = unfoldModeLabel,
+            onCycleUnfoldMode = onCycleUnfoldMode,
+            tailscaleIp = tailscaleIp,
+            lanIp = lanIp
         )
 
         FlowRow(
@@ -1165,7 +1441,8 @@ fun SystemQuickTileWidget(
 /**
  * Z Fold 8 System Dashboard Card with live 120Hz VRR & Hinge Angle Sensor Telemetry Gauge
  * (`120Hz VRR • Hinge 180°`), live Thermal / RAM pill (`31.5°C • 9.4 / 16 GB RAM`),
- * interactive Hinge Mechanics Strip (`⚙️ Hinge Detents: ON/OFF` + `📐 On Fold Close`),
+ * live Tailscale Mesh & LAN Telemetry Pill (`🔗 Tailscale: 100.101.43.86`),
+ * interactive Hinge Mechanics Strip (`⚙️ Hinge Detents: ON/OFF` + `📐 On Fold Close` + `📖 On Unfold`),
  * 1-tap `🔦 Torch` quick-tile button, and quick hardware/DeX/HUD controls.
  */
 @OptIn(ExperimentalLayoutApi::class)
@@ -1194,7 +1471,11 @@ fun SystemDashboardCard(
     hingeHapticsEnabled: Boolean = true,
     foldCloseModeLabel: String = "📱 Keep Cover Awake",
     onToggleHingeHaptics: () -> Unit = {},
-    onCycleFoldCloseMode: () -> Unit = {}
+    onCycleFoldCloseMode: () -> Unit = {},
+    unfoldModeLabel: String = "🖥️ Inner Cockpit",
+    onCycleUnfoldMode: () -> Unit = {},
+    tailscaleIp: String? = null,
+    lanIp: String? = null
 ) {
     val context = LocalContext.current
     val hudState by FloatingHudController.state.collectAsState()
@@ -1372,12 +1653,22 @@ fun SystemDashboardCard(
             }
         }
 
-        // Interactive Z Fold 8 Hinge Mechanics Strip (15° Watch-Crown Detents + Fold-Close Cycler)
+        // Live Tailscale Mesh & LAN Telemetry Pill with 1-tap Clipboard copy
+        TailscaleMeshTelemetryPill(
+            tailscaleIp = tailscaleIp,
+            lanIp = lanIp
+        )
+
+        // Interactive Z Fold 8 Hinge Mechanics Strip (15° Watch-Crown Detents + Fold-Close + Unfold-Open Cyclers)
         HingeMechanicsStrip(
             hingeHapticsEnabled = hingeHapticsEnabled,
             foldCloseModeLabel = foldCloseModeLabel,
             onToggleHingeHaptics = onToggleHingeHaptics,
-            onCycleFoldCloseMode = onCycleFoldCloseMode
+            onCycleFoldCloseMode = onCycleFoldCloseMode,
+            unfoldModeLabel = unfoldModeLabel,
+            onCycleUnfoldMode = onCycleUnfoldMode,
+            tailscaleIp = tailscaleIp,
+            lanIp = lanIp
         )
 
         FlowRow(

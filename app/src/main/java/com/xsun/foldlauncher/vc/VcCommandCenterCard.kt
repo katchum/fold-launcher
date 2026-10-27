@@ -91,6 +91,10 @@ fun VcCommandCenterCard(
     var selectedVariant by remember(summary.selectedVariant) { mutableStateOf(summary.selectedVariant) }
     var quickMessageDraft by remember { mutableStateOf("") }
     var copiedSnippetFeedback by remember { mutableStateOf(false) }
+    var showScratchpadInjector by remember { mutableStateOf(false) }
+    var scratchpadNote by remember(context) {
+        mutableStateOf(VcBridgeClient.loadScratchpadNote(context))
+    }
 
     val detectedVariants = remember(context, summary.installedVariants) {
         val probed = VcBridgeClient.resolveInstalledVcVariants(context)
@@ -265,6 +269,20 @@ fun VcCommandCenterCard(
                         .clip(RoundedCornerShape(10.dp))
                         .background(FoldLauncherColors.GlassSurfaceHighlight)
                         .clickable(onClick = onRefreshVc)
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+                Text(
+                    text = if (showScratchpadInjector) "📝 Hide Pad" else "📝 Pad",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (showScratchpadInjector) FoldLauncherColors.CyanBright else FoldLauncherColors.TextPrimary,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (showScratchpadInjector) FoldLauncherColors.CyanGlow
+                            else FoldLauncherColors.GlassSurfaceHighlight
+                        )
+                        .clickable { showScratchpadInjector = !showScratchpadInjector }
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 )
                 Text(
@@ -888,6 +906,125 @@ fun VcCommandCenterCard(
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = if (canSend) Color(0xFF02131D) else FoldLauncherColors.TextMuted
+                    )
+                }
+            }
+        }
+
+        // 6b. Collapsible Persistent Scratchpad & 1-Tap VC Context Injector (`v0.5.0`)
+        if (showScratchpadInjector) {
+            val isUnfoldedInner = context.resources.configuration.screenWidthDp >= 600
+            val postureLabel = if (isUnfoldedInner) "INNER" else "COVER"
+            val hingeAngle = if (isUnfoldedInner) 180f else 0f
+            val tailscaleIp = config.normalizedServerUrl
+                .substringAfter("://", "")
+                .substringBefore(":")
+                .substringBefore("/")
+                .takeIf { it.startsWith("100.") }
+                ?: "100.101.43.86"
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(FoldLauncherColors.DeepVoid.copy(alpha = 0.82f))
+                    .border(1.dp, VcMintAccent.copy(alpha = 0.52f), RoundedCornerShape(14.dp))
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "📝 QUICK SCRATCHPAD & TELEMETRY INJECTOR",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = VcMintAccent
+                    )
+                    Text(
+                        text = "🧹 Clear",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = FoldLauncherColors.TextSecondary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(FoldLauncherColors.GlassSurfaceHighlight)
+                            .clickable {
+                                scratchpadNote = ""
+                                VcBridgeClient.saveScratchpadNote(context, "")
+                            }
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp, max = 96.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(FoldLauncherColors.GlassSurface)
+                        .border(1.dp, FoldLauncherColors.GlassBorder, RoundedCornerShape(10.dp))
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    contentAlignment = Alignment.TopStart
+                ) {
+                    if (scratchpadNote.isEmpty()) {
+                        Text(
+                            text = "Persistent scratchpad (saved across restarts). Type notes, ADB commands, or task context to inject with Fold8 posture telemetry…",
+                            fontSize = 11.sp,
+                            color = FoldLauncherColors.TextMuted
+                        )
+                    }
+                    BasicTextField(
+                        value = scratchpadNote,
+                        onValueChange = { updated ->
+                            scratchpadNote = updated
+                            VcBridgeClient.saveScratchpadNote(context, updated)
+                        },
+                        textStyle = TextStyle(
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp,
+                            color = FoldLauncherColors.TextPrimary
+                        ),
+                        cursorBrush = SolidColor(VcMintAccent),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(VcOpSurface)
+                        .border(1.dp, VcMintAccent, RoundedCornerShape(10.dp))
+                        .clickable {
+                            val targetAgent = pinnedAgent ?: selectedAgent
+                            val enriched = buildTelemetryEnrichedPrompt(
+                                noteText = scratchpadNote,
+                                postureLabel = postureLabel,
+                                hingeAngleDeg = hingeAngle,
+                                tailscaleIp = tailscaleIp
+                            )
+                            val targetSid = targetAgent?.sessionId
+                            if (onQuickSend != null) {
+                                onQuickSend(targetSid, enriched)
+                            } else {
+                                onSendQuickMessage(
+                                    targetSid,
+                                    enriched,
+                                    targetAgent?.isWorking == true
+                                )
+                            }
+                        }
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "🚀 Inject Note + Device Telemetry to VC",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = VcMintAccent
                     )
                 }
             }

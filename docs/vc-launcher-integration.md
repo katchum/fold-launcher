@@ -1,10 +1,10 @@
-# VC-Launcher Integration & Non-Foreground Bridge Architecture (`v0.4.0`)
+# VC-Launcher Integration & Non-Foreground Bridge Architecture (`v0.5.0`)
 
 ## 1. Executive Summary
 
 The **Fold8 & Slab Launcher** (`com.xsun.foldlauncher`) includes a purpose-built native integration module (`com.xsun.foldlauncher.vc`) for **VC (`vc-host` / `dev.agentconversation.*`)**.
 
-When VC is not the foreground application on Android, its WebView conversation loop pauses and its native widgets and deep-link activities remain un-exported to third-party launchers. Because the home launcher and its companion `FoldAccessibilityService` are permanently resident in memory and have real-time visibility into foreground window transitions, physical hinge-close transitions, secondary displays, and lock-screen state, **Fold8 & Slab Launcher** acts as an always-ready **VC Background Bridge, Multi-Agent Squad Telemetry Dashboard, Fold-Close Voice Router, Dual-Display OLED Companion & Lock-Screen Cockpit**.
+When VC is not the foreground application on Android, its WebView conversation loop pauses and its native widgets and deep-link activities remain un-exported to third-party launchers. Because the home launcher and its companion `FoldAccessibilityService` are permanently resident in memory and have real-time visibility into foreground window transitions, physical unfold/fold-close transitions, Tailscale Mesh VPN status, secondary displays, and lock-screen state, **Fold8 & Slab Launcher** acts as an always-ready **VC Background Bridge, Unfold-Open Split-Workspace Router, Scratchpad & Device Telemetry Context Injector, Multi-Agent Squad Telemetry Dashboard & Lock-Screen Cockpit**.
 
 ---
 
@@ -37,25 +37,37 @@ Inspection of `/home/xsun/projects/vc-host` (`docs/foreground-polling.md`, `docs
 
 ---
 
-## 3. Concrete Architecture & `v0.4.0` Capabilities (`com.xsun.foldlauncher.vc`)
+## 3. Concrete Architecture & `v0.5.0` Capabilities (`com.xsun.foldlauncher.vc`)
 
-### 3.1 Multi-Agent Squad Telemetry (`VcSquadTelemetry`) & Markdown Status Export (`buildMarkdownStatusSnippet`)
-- **`VcSquadTelemetry` (`v0.4.0`)**: Aggregates active agent roster metrics into a normalized squad telemetry breakdown (`totalAgents`, `workingCount`, `approvalCount`, `failedCount`, `idleOrCompletedCount`, `workingFraction`, `approvalFraction`, `failedFraction`, `idleFraction`, and `activeRatioPercent`).
-- **`VcSquadTelemetryBar` (`v0.4.0`)**: Renders a 120Hz segmented progress bar inside `VcCommandCenterCard` color-coded by agent state (`AmberWarning` for approvals, `ElectricCyan` for working, `CoralDanger` for failed, `EmeraldSuccess` for completed/idle) along with live squad utilization percentage.
-- **1-Tap Markdown Status Copy (`buildMarkdownStatusSnippet` & `📋 Copy Status`)**: Formats a concise, structured Markdown snapshot of connection status, squad telemetry counters, active/pinned agents, and top unread attention items, copying it directly to the Android clipboard in 1 tap.
+### 3.1 Persistent Scratchpad & 1-Tap Device Telemetry Context Injector (`VcScratchpadPacket` & `buildTelemetryEnrichedPrompt`)
+- **Collapsible `📝 Quick Scratchpad & Telemetry Injector` in `VcCommandCenterCard` (`v0.5.0`)**:
+  - Stores a persistent scratchpad memo (`scratchpadText`) in `LauncherPreferences` so prompt drafts, wireless ADB ports, or debugging notes survive posture transitions and reboots.
+  - **`VcScratchpadPacket` & `buildTelemetryEnrichedPrompt`**: When `injectTelemetryOnSend` is enabled (or when using `Send + Telemetry` / `note-vc: <text>`), the launcher automatically enriches the outgoing VC message with a structured hardware/posture/network context block:
+    - Device model & active posture (`COMPACT` / `FLEX_TABLETOP` / `EXPANDED` / `TENT`)
+    - Live hardware hinge angle (`0°..180°`)
+    - Battery percentage, thermal reading (`°C`), battery current (`mA`), and available RAM (`MB`)
+    - Active Tailscale CGNAT IPv4 (`100.64.0.0/10`) and LAN IPv4 (`NetworkTelemetrySnapshot`)
+- **Omni-Bar Scratchpad Integration**:
+  - `note: <text>` / `memo: <text>`: Saves `<text>` to the persistent scratchpad.
+  - `note-vc: <text>`: Saves `<text>` to the scratchpad, enriches it via `buildTelemetryEnrichedPrompt`, and dispatches it immediately to the pinned or active VC session.
 
-### 3.2 Fold-Close Auto-VC Voice Handoff (`FoldCloseActionMode.AUTO_VC_VOICE`) & Termux Split Dispatcher
-- **Fold-Close to VC Voice (`FoldCloseActionMode.AUTO_VC_VOICE`)**: When the user folds the Galaxy Z Fold 8 shut (`isFoldCloseTransition` from `>= 45°` to `< 15°`) with `AUTO_VC_VOICE` active (`> fold voice`), the launcher automatically triggers `SystemTweaker.launchVc(..., startVoiceTalk = true)` on the Cover Display so the user can seamlessly continue their conversation by voice while on the move.
-- **Omni-Bar Termux / Shell Snippet Dispatcher (`termux:`, `sh:`, `termux-split:`)**:
-  - `termux: <cmd>` / `sh: <cmd>`: Copies `<cmd>` to the clipboard and opens `com.termux`.
-  - `termux-split: <cmd>`: Copies `<cmd>` to the clipboard and launches the active VC instance + `com.termux` side-by-side (`FLAG_ACTIVITY_LAUNCH_ADJACENT`).
+### 3.2 Unfold-Open Auto-Split Continuity (`UnfoldActionMode` & `isUnfoldOpenTransition`) & Fold-Close Voice Handoff
+- **Unfold-Open Auto-Split Continuity (`v0.5.0`)**:
+  - When the user unfolds the Galaxy Z Fold 8 across `155°` (`isUnfoldOpenTransition` from `<= 120°` to `>= 155°`), the launcher automatically executes the configured `UnfoldActionMode` (`> unfold <dashboard|split|vc+termux|compare|browser>`):
+    - `INNER_DASHBOARD`: Stays on the 120Hz dual-hemisphere home dashboard.
+    - `AUTO_SPLIT_VC_TERMUX`: Launches **VC + Termux** side-by-side (`FLAG_ACTIVITY_LAUNCH_ADJACENT`).
+    - `AUTO_SPLIT_PROD_COMPARE`: Launches **VC Prod (`vci`) + VC Compare (`compare`)** side-by-side.
+    - `AUTO_SPLIT_VC_BROWSER`: Launches **VC + Chrome** side-by-side.
+- **Fold-Close to VC Voice (`FoldCloseActionMode.AUTO_VC_VOICE`, `v0.4.0`)**:
+  - When folding the Z Fold 8 shut (`isFoldCloseTransition` from `>= 45°` to `< 15°`) with `AUTO_VC_VOICE` active (`> fold voice`), automatically launches VC Voice Talk (`dev.agentconversation.widget.TALK`) on the Cover Display.
 
-### 3.3 Data Models, Multi-Instance Target, Prompt Macros & Pinned Coordinator (`VcModels.kt`)
-- **`VcInstanceTarget` (`PROD`, `PREVIEW`, `COMPARE`)**: Selects which installed VC package (`dev.agentconversation.vci`, `dev.agentconversation.preview`, or `dev.agentconversation.compare`) is the active launch & voice target.
-- **`VcSplitPreset`**: Defines 4 1-tap Z Fold 8 dual-pane split-screen workspace combinations (`VC_TERMUX`, `PROD_COMPARE`, `PROD_PREVIEW`, `VC_CHROME`).
-- **`VcPromptMacro`**: Built-in 1-tap prompt macros (`Status`, `Approve & Go`, `Verify CI/Tests`, `Ship Release`, `Keep Building`).
-- **Pinned Coordinator Session (`pinnedSessionId`)**: Pins a primary Coordinator or General session ID so 1-tap macros, quick-send messages, and Omni-Bar `vc:` commands always route to the pinned session by default.
+### 3.3 Live Tailscale Mesh VPN & LAN IP Telemetry (`NetworkTelemetrySnapshot` & `TailscaleMeshTelemetryPill`)
+- Because VC (`http://100.96.188.90:8080`) and wireless ADB (`100.101.43.86` / `100.68.53.123`) operate over Tailscale Mesh VPN, `SystemTweaker` continuously inspects network interfaces and `isTailscaleCgnatIpv4` (`100.64.0.0/10`), surfacing the live Tailscale IPv4 and LAN IPv4 in `TailscaleMeshTelemetryPill` with 1-tap clipboard copy.
 
-### 3.4 Lock-Screen Ambient Cockpit (`LockScreenCockpitCard`) & Secondary Display OLED Companion (`CoverScreenPresentation`)
+### 3.4 Multi-Agent Squad Telemetry (`VcSquadTelemetry`) & Markdown Status Export (`buildMarkdownStatusSnippet`)
+- **`VcSquadTelemetry` & `VcSquadTelemetryBar`**: Renders a 120Hz segmented progress bar inside `VcCommandCenterCard` color-coded by agent state (`AmberWarning` for approvals, `ElectricCyan` for working, `CoralDanger` for failed, `EmeraldSuccess` for completed/idle).
+- **1-Tap Markdown Status Copy (`buildMarkdownStatusSnippet` & `📋 Copy Status`)**: Copies a structured Markdown status summary of all active VC agents and unread attention items to the clipboard.
+
+### 3.5 Lock-Screen Ambient Cockpit (`LockScreenCockpitCard`) & Secondary Display OLED Companion (`CoverScreenPresentation`)
 - **Dedicated Lock-Screen Ambient Cockpit Card (`LockScreenCockpitCard`)**: Provides a 1-tap **`Unlock & Split VC + Termux`** button (`KeyguardManager.requestDismissKeyguard`) and **Inline Lock-Screen VC Approval** directly over the One UI 9.0 lock screen.
 - **Z Fold 8 Secondary Display OLED Companion (`CoverScreenPresentation.kt` & `DualScreenPresentationController`)**: Projects a live `#000000` AMOLED companion HUD onto the Z Fold 8 secondary/cover display (`> dual`) protected by 3:2 Lissajous burn-in pixel shift (`computeOledPixelShiftOffset`).

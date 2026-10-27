@@ -41,6 +41,8 @@ object VcBridgeClient {
     private const val READ_TIMEOUT_MS = 12_000
     private const val MAX_RESPONSE_BYTES = 4 * 1024 * 1024
     private const val MAX_READ_EVENTS_KEPT = 200
+    private const val SCRATCHPAD_PREFS_NAME = "vc_command_center_scratchpad"
+    private const val KEY_SCRATCHPAD_NOTE = "scratchpad_note_text"
 
     /**
      * Extracts the base server origin (`https://host:port` or `http://127.0.0.1:4327`) if the user
@@ -645,6 +647,57 @@ object VcBridgeClient {
         } catch (_: Exception) {
         }
         return snippet
+    }
+
+    /**
+     * Loads the persistent VC scratchpad note from `SharedPreferences` (`v0.5.0`).
+     */
+    fun loadScratchpadNote(context: Context): String {
+        return try {
+            val prefs = context.getSharedPreferences(SCRATCHPAD_PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.getString(KEY_SCRATCHPAD_NOTE, "").orEmpty()
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    /**
+     * Saves the persistent VC scratchpad note to `SharedPreferences` (`v0.5.0`).
+     */
+    fun saveScratchpadNote(context: Context, noteText: String) {
+        try {
+            val prefs = context.getSharedPreferences(SCRATCHPAD_PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.edit().putString(KEY_SCRATCHPAD_NOTE, noteText).apply()
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Dispatches a scratchpad note enriched with Fold8 device telemetry to the target VC session (`v0.5.0`).
+     */
+    fun sendScratchpadWithTelemetry(
+        config: VcConnectionConfig,
+        noteText: String,
+        sessionId: String?,
+        postureLabel: String = "INNER",
+        hingeAngleDeg: Float = 180f,
+        tailscaleIp: String? = null,
+        steerIfWorking: Boolean = true,
+        activeAgents: List<VcAgentStatus> = emptyList()
+    ): Result<String> {
+        val enriched = buildTelemetryEnrichedPrompt(
+            noteText = noteText,
+            postureLabel = postureLabel,
+            hingeAngleDeg = hingeAngleDeg,
+            tailscaleIp = tailscaleIp
+        )
+        return sendQuickMessage(
+            config = config,
+            sessionId = sessionId,
+            text = enriched,
+            steerIfWorking = steerIfWorking,
+            activeAgents = activeAgents
+        )
     }
 
     /**

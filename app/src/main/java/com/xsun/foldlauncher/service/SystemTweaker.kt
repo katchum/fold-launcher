@@ -10,6 +10,8 @@ import android.content.pm.PackageManager
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.hardware.display.DisplayManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
@@ -24,12 +26,17 @@ import android.view.inputmethod.InputMethodManager
 import androidx.core.content.ContextCompat
 import com.xsun.foldlauncher.posture.FoldCloseActionMode as PostureFoldCloseActionMode
 import com.xsun.foldlauncher.posture.HingeDetentTick as PostureHingeDetentTick
+import com.xsun.foldlauncher.posture.UnfoldActionMode as PostureUnfoldActionMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.net.Inet4Address
+import java.net.NetworkInterface
+import java.util.Collections
 
 typealias FoldCloseActionMode = PostureFoldCloseActionMode
 typealias HingeDetentTick = PostureHingeDetentTick
+typealias UnfoldActionMode = PostureUnfoldActionMode
 
 data class LockScreenStatus(
     val isKeyguardLocked: Boolean,
@@ -50,6 +57,29 @@ data class HardwareTelemetrySnapshot(
     val secondaryDisplayCount: Int = 0
 )
 
+data class NetworkTelemetrySnapshot(
+    val tailscaleIp: String? = null,
+    val lanIp: String? = null,
+    val isVpnActive: Boolean = false,
+    val isWifiConnected: Boolean = false,
+    val downstreamMbps: Int = 0
+) {
+    val isTailscaleConnected: Boolean
+        get() = !tailscaleIp.isNullOrBlank()
+
+    val primaryIp: String?
+        get() = tailscaleIp ?: lanIp
+
+    val statusBadge: String
+        get() = when {
+            !tailscaleIp.isNullOrBlank() -> "TS $tailscaleIp"
+            !lanIp.isNullOrBlank() -> "LAN $lanIp"
+            isVpnActive -> "VPN ACTIVE"
+            isWifiConnected -> "WIFI ONLINE"
+            else -> "OFFLINE"
+        }
+}
+
 object SystemTweaker {
 
     const val SAMSUNG_HONEYBOARD_PACKAGE = "com.samsung.android.honeyboard"
@@ -66,6 +96,15 @@ object SystemTweaker {
     private const val PREFS_HINGE_TWEAKS = "fold8_hinge_tweaks_prefs"
     private const val KEY_HINGE_DETENT_HAPTICS = "hinge_detent_haptics_enabled"
     private const val KEY_FOLD_CLOSE_ACTION_MODE = "fold_close_action_mode"
+    private const val KEY_UNFOLD_ACTION_MODE = "unfold_action_mode"
+
+    const val TERMUX_PACKAGE = "com.termux"
+    private val PREFERRED_BROWSER_PACKAGES = listOf(
+        "com.sec.android.app.sbrowser",
+        "com.android.chrome",
+        "com.brave.browser",
+        "org.mozilla.firefox"
+    )
 
     private const val KEY_LOCK_SCREEN_ALLOW_ROTATION = "lock_screen_allow_rotation"
     private const val KEY_SUB_DISPLAY_ROTATION_LOCK = "sub_display_accelerometer_rotation"
@@ -87,6 +126,9 @@ object SystemTweaker {
     private val _foldCloseActionMode = MutableStateFlow(FoldCloseActionMode.STAY_AWAKE_COVER)
     val foldCloseActionMode: StateFlow<FoldCloseActionMode> = _foldCloseActionMode.asStateFlow()
 
+    private val _unfoldActionMode = MutableStateFlow(UnfoldActionMode.INNER_DASHBOARD)
+    val unfoldActionMode: StateFlow<UnfoldActionMode> = _unfoldActionMode.asStateFlow()
+
     fun loadHingePreferences(context: Context) {
         val prefs = context.getSharedPreferences(PREFS_HINGE_TWEAKS, Context.MODE_PRIVATE)
         _hingeDetentHapticsEnabled.value = prefs.getBoolean(KEY_HINGE_DETENT_HAPTICS, true)
@@ -94,6 +136,9 @@ object SystemTweaker {
         val parsedMode = FoldCloseActionMode.values().firstOrNull { it.name == rawMode }
             ?: FoldCloseActionMode.STAY_AWAKE_COVER
         _foldCloseActionMode.value = parsedMode
+
+        val rawUnfold = prefs.getString(KEY_UNFOLD_ACTION_MODE, UnfoldActionMode.INNER_DASHBOARD.key)
+        _unfoldActionMode.value = UnfoldActionMode.fromKey(rawUnfold)
     }
 
     fun setHingeDetentHapticsEnabled(context: Context, enabled: Boolean) {
@@ -128,6 +173,70 @@ object SystemTweaker {
         val next = _foldCloseActionMode.value.next()
         setFoldCloseActionMode(context, next)
         return next
+    }
+
+    fun setUnfoldActionMode(context: Context, mode: UnfoldActionMode) {
+        _unfoldActionMode.value = mode
+        context.getSharedPreferences(PREFS_HINGE_TWEAKS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_UNFOLD_ACTION_MODE, mode.key)
+            .apply()
+    }
+
+    fun cycleUnfoldActionMode(context: Context): UnfoldActionMode {
+        val next = _unfoldActionMode.value.next()
+        setUnfoldActionMode(context, next)
+        return next
+    }
+
+    /**
+     * Executes the user's configured [UnfoldActionMode] when unfolding the Z Fold 8 across `155°`.
+     */
+    fun executeUnfoldAction(
+        context: Context,
+        mode: UnfoldActionMode = _unfoldActionMode.value
+    ): Boolean {
+        return when (mode) {
+            UnfoldActionMode.INNER_DASHBOARD -> {
+                try {
+                    val intent = Intent().apply {
+                        setClassName(context.packageName, "com.xsun.foldlauncher.MainActivity")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    }
+                    context.startActivity(intent)
+                    true
+                } catch (_: Exception) {
+                    false
+                }
+            }
+            UnfoldActionMode.AUTO_SPLIT_VC_TERMUX -> {
+                val vcPkg = findInstalledVcPackage(context) ?: VC_PROD_PACKAGE
+                if (launchSplitScreenPair(context, vcPkg, TERMUX_PACKAGE)) {
+                    true
+                } else {
+                    launchVc(context, adjacentSplitScreen = true)
+                }
+            }
+            UnfoldActionMode.AUTO_SPLIT_PROD_COMPARE -> {
+                if (launchSplitScreenPair(context, VC_PROD_PACKAGE, VC_PREVIEW_PACKAGE)) {
+                    true
+                } else {
+                    launchVc(context, adjacentSplitScreen = true)
+                }
+            }
+            UnfoldActionMode.AUTO_SPLIT_VC_BROWSER -> {
+                val vcPkg = findInstalledVcPackage(context) ?: VC_PROD_PACKAGE
+                val pm = context.packageManager
+                val browserPkg = PREFERRED_BROWSER_PACKAGES.firstOrNull {
+                    pm.getLaunchIntentForPackage(it) != null
+                }
+                if (browserPkg != null && launchSplitScreenPair(context, vcPkg, browserPkg)) {
+                    true
+                } else {
+                    launchVc(context, adjacentSplitScreen = true)
+                }
+            }
+        }
     }
 
     /**
@@ -293,6 +402,92 @@ object SystemTweaker {
             totalRamMb = totalRamMb,
             secondaryDisplayCount = secondaryCount
         )
+    }
+
+    /**
+     * Reads live Tailscale Mesh VPN (`100.64.0.0/10` CGNAT, e.g. `100.101.43.86` on Z Fold 8 and
+     * `100.68.53.123` on S23 Ultra) and private LAN IPv4 telemetry, plus active VPN/Wi-Fi transport
+     * and downstream bandwidth (Mbps). Safe to call without runtime permissions.
+     */
+    fun readNetworkTelemetry(context: Context): NetworkTelemetrySnapshot {
+        var tailscaleIp: String? = null
+        var lanIp: String? = null
+
+        runCatching {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            if (interfaces != null) {
+                for (nif in Collections.list(interfaces)) {
+                    if (!nif.isUp || nif.isLoopback) continue
+                    val addresses = nif.inetAddresses ?: continue
+                    for (addr in Collections.list(addresses)) {
+                        if (addr !is Inet4Address || addr.isLoopbackAddress) continue
+                        val hostAddr = addr.hostAddress ?: continue
+                        if (tailscaleIp == null && isTailscaleCgnatIpv4(hostAddr)) {
+                            tailscaleIp = hostAddr
+                        } else if (lanIp == null && isPrivateLanIpv4(hostAddr)) {
+                            lanIp = hostAddr
+                        }
+                    }
+                }
+            }
+        }
+
+        var isVpnActive = !tailscaleIp.isNullOrBlank()
+        var isWifiConnected = !lanIp.isNullOrBlank()
+        var downstreamMbps = 0
+
+        runCatching {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            val activeNet = cm?.activeNetwork
+            val caps = if (activeNet != null) cm.getNetworkCapabilities(activeNet) else null
+            if (caps != null) {
+                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                    isVpnActive = true
+                }
+                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                    isWifiConnected = true
+                }
+                val kbps = caps.linkDownstreamBandwidthKbps
+                if (kbps > 0) {
+                    downstreamMbps = (kbps / 1000).coerceAtLeast(1)
+                }
+            }
+        }
+
+        return NetworkTelemetrySnapshot(
+            tailscaleIp = tailscaleIp,
+            lanIp = lanIp,
+            isVpnActive = isVpnActive,
+            isWifiConnected = isWifiConnected,
+            downstreamMbps = downstreamMbps
+        )
+    }
+
+    /**
+     * Returns true if `ip` is in the Tailscale CGNAT IPv4 range (`100.64.0.0/10`, i.e., `100.64..127.x.y`).
+     */
+    fun isTailscaleCgnatIpv4(ip: String): Boolean {
+        val parts = ip.split('.')
+        if (parts.size != 4) return false
+        val first = parts[0].toIntOrNull() ?: return false
+        val second = parts[1].toIntOrNull() ?: return false
+        return first == 100 && second in 64..127
+    }
+
+    /**
+     * Returns true if `ip` is in RFC1918 private LAN space (`192.168.x.y`, `10.x.y.z`, or `172.16..31.x.y`).
+     */
+    fun isPrivateLanIpv4(ip: String): Boolean {
+        val parts = ip.split('.')
+        if (parts.size != 4) return false
+        val first = parts[0].toIntOrNull() ?: return false
+        val second = parts[1].toIntOrNull() ?: return false
+        return when (first) {
+            10 -> true
+            192 -> second == 168
+            172 -> second in 16..31
+            else -> false
+        }
     }
 
     fun hasWriteSecureSettings(context: Context): Boolean {

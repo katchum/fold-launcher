@@ -392,4 +392,38 @@ class VcBridgeParserTest {
         assertTrue(snippet.contains("Coordinator"))
         assertTrue(snippet.contains("📌"))
     }
+
+    @Test
+    fun `v0_5_0 buildTelemetryEnrichedPrompt formats Fold8 posture and Tailscale IP header`() {
+        val enriched = buildTelemetryEnrichedPrompt(
+            noteText = "Please inspect fold-launcher CI status.",
+            postureLabel = "INNER",
+            hingeAngleDeg = 180f,
+            tailscaleIp = "100.101.43.86"
+        )
+        assertEquals(
+            "[Fold8 Telemetry: INNER @ 180° | Tailscale: 100.101.43.86]\nPlease inspect fold-launcher CI status.",
+            enriched
+        )
+
+        val packet = VcScratchpadPacket(
+            noteText = "Flex tabletop check",
+            postureLabel = "flex",
+            hingeAngleDeg = 112.6f,
+            tailscaleIp = null
+        )
+        assertEquals(
+            "[Fold8 Telemetry: FLEX @ 112°]\nFlex tabletop check",
+            packet.toEnrichedPrompt()
+        )
+        assertEquals(
+            packet.toEnrichedPrompt(),
+            VcLiveSummary.buildTelemetryEnrichedPrompt(
+                noteText = "Flex tabletop check",
+                postureLabel = "flex",
+                hingeAngleDeg = 112.6f,
+                tailscaleIp = null
+            )
+        )
+    }
 }

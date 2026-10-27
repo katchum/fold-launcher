@@ -71,6 +71,62 @@ enum class FoldCloseActionMode(val label: String, val badge: String, val descrip
         val entries = values()
         return entries[(ordinal + 1) % entries.size]
     }
+
+    companion object {
+        fun fromKey(key: String?): FoldCloseActionMode {
+            if (key.isNullOrBlank()) return STAY_AWAKE_COVER
+            return values().firstOrNull { it.name.equals(key, ignoreCase = true) } ?: STAY_AWAKE_COVER
+        }
+    }
+}
+
+/**
+ * Configurable continuity action executed when unfolding the Z Fold 8 inner display (`< 155° -> >= 155°`).
+ */
+enum class UnfoldActionMode(
+    val key: String,
+    val label: String,
+    val badge: String,
+    val description: String
+) {
+    INNER_DASHBOARD(
+        "dashboard",
+        "Inner Cockpit",
+        "🖥️",
+        "Open 2-column Fold8 Inner Dashboard"
+    ),
+    AUTO_SPLIT_VC_TERMUX(
+        "vc_termux",
+        "Auto-Split VC + Termux",
+        "⚡",
+        "Unfolding automatically stages VC + Termux side-by-side"
+    ),
+    AUTO_SPLIT_PROD_COMPARE(
+        "prod_compare",
+        "Auto-Split Prod + Compare",
+        "🔀",
+        "Unfolding automatically stages VC Prod + VC Compare"
+    ),
+    AUTO_SPLIT_VC_BROWSER(
+        "vc_browser",
+        "Auto-Split VC + Browser",
+        "🌐",
+        "Unfolding automatically stages VC + Browser"
+    );
+
+    fun next(): UnfoldActionMode {
+        val entries = values()
+        return entries[(ordinal + 1) % entries.size]
+    }
+
+    companion object {
+        fun fromKey(key: String?): UnfoldActionMode {
+            if (key.isNullOrBlank()) return INNER_DASHBOARD
+            return values().firstOrNull {
+                it.key.equals(key, ignoreCase = true) || it.name.equals(key, ignoreCase = true)
+            } ?: INNER_DASHBOARD
+        }
+    }
 }
 
 data class FoldingStateSnapshot(
@@ -202,6 +258,20 @@ object PostureClassifier {
         return previousAngleDeg > closeThresholdDeg &&
             currentAngleDeg <= closeThresholdDeg &&
             (previousAngleDeg - currentAngleDeg) >= DETENT_HYSTERESIS_DEG
+    }
+
+    /**
+     * Returns true when unfolding upward across `unfoldThresholdDeg` (default `155°`)
+     * with at least `2.0°` positive hinge movement.
+     */
+    fun isUnfoldOpenTransition(
+        previousAngleDeg: Float,
+        currentAngleDeg: Float,
+        unfoldThresholdDeg: Float = 155f
+    ): Boolean {
+        return previousAngleDeg < unfoldThresholdDeg &&
+            currentAngleDeg >= unfoldThresholdDeg &&
+            (currentAngleDeg - previousAngleDeg) >= 2.0f
     }
 
     private fun crossedThreshold(prev: Float, curr: Float, threshold: Float): Boolean {
@@ -422,6 +492,26 @@ fun computeHingeDetentCrossed(
     previousAngleDeg = previousAngleDeg,
     currentAngleDeg = currentAngleDeg,
     stepDegrees = stepDegrees
+)
+
+fun isFoldCloseTransition(
+    previousAngleDeg: Float,
+    currentAngleDeg: Float,
+    closeThresholdDeg: Float = 8f
+): Boolean = PostureClassifier.isFoldCloseTransition(
+    previousAngleDeg = previousAngleDeg,
+    currentAngleDeg = currentAngleDeg,
+    closeThresholdDeg = closeThresholdDeg
+)
+
+fun isUnfoldOpenTransition(
+    previousAngleDeg: Float,
+    currentAngleDeg: Float,
+    unfoldThresholdDeg: Float = 155f
+): Boolean = PostureClassifier.isUnfoldOpenTransition(
+    previousAngleDeg = previousAngleDeg,
+    currentAngleDeg = currentAngleDeg,
+    unfoldThresholdDeg = unfoldThresholdDeg
 )
 
 @Composable
