@@ -8,6 +8,7 @@ import android.os.Looper
 import com.xsun.foldlauncher.service.SystemTweaker
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.HttpURLConnection
@@ -846,7 +847,7 @@ object VcBridgeClient {
             val status = connection.responseCode
             val stream: InputStream? = if (status >= 400) connection.errorStream else connection.inputStream
             val responseText = stream?.use { input ->
-                val bytes = input.readNBytes(MAX_RESPONSE_BYTES)
+                val bytes = readBoundedBytes(input, MAX_RESPONSE_BYTES)
                 String(bytes, StandardCharsets.UTF_8)
             }.orEmpty()
 
@@ -857,6 +858,19 @@ object VcBridgeClient {
         } finally {
             connection.disconnect()
         }
+    }
+
+    private fun readBoundedBytes(input: InputStream, maxBytes: Int): ByteArray {
+        val out = ByteArrayOutputStream(minOf(maxBytes, 16 * 1024))
+        val buffer = ByteArray(8192)
+        var remaining = maxBytes
+        while (remaining > 0) {
+            val read = input.read(buffer, 0, minOf(buffer.size, remaining))
+            if (read <= 0) break
+            out.write(buffer, 0, read)
+            remaining -= read
+        }
+        return out.toByteArray()
     }
 
     private fun urlEncode(value: String): String {

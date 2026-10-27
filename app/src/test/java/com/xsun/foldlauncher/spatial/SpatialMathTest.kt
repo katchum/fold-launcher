@@ -1,6 +1,10 @@
 package com.xsun.foldlauncher.spatial
 
+import com.xsun.foldlauncher.posture.PostureMode
+import com.xsun.foldlauncher.ui.animation.AnimationPhysicsMath
+import com.xsun.foldlauncher.ui.animation.RadialTriggerCorner
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.abs
@@ -185,5 +189,53 @@ class SpatialMathTest {
         )
         assertEquals(1f, cursorX, 0.001f)
         assertEquals(0f, cursorY, 0.001f)
+    }
+
+    @Test
+    fun animationPhysicsMath_gaussianWave_scrubberIndex_andCornerArcTriggers() {
+        assertEquals(0, AnimationPhysicsMath.postureExpansionRank(PostureMode.COVER_OR_SLAB))
+        assertEquals(1, AnimationPhysicsMath.postureExpansionRank(PostureMode.FLEX_TABLETOP))
+        assertEquals(2, AnimationPhysicsMath.postureExpansionRank(PostureMode.UNFOLDED_TABLET))
+
+        val peak = AnimationPhysicsMath.computeGaussianWaveIntensity(index = 5, centerIndex = 5f)
+        val neighbor = AnimationPhysicsMath.computeGaussianWaveIntensity(index = 6, centerIndex = 5f)
+        val outside = AnimationPhysicsMath.computeGaussianWaveIntensity(index = 10, centerIndex = 5f)
+        assertEquals(1f, peak, 0.001f)
+        assertTrue(neighbor in 0.1f..0.95f)
+        assertEquals(0f, outside, 0.001f)
+
+        assertEquals(0, AnimationPhysicsMath.resolveScrubberLetterIndex(-20f, 500f, 26))
+        assertEquals(13, AnimationPhysicsMath.resolveScrubberLetterIndex(250f, 500f, 26))
+        assertEquals(25, AnimationPhysicsMath.resolveScrubberLetterIndex(600f, 500f, 26))
+
+        val rightCorner = AnimationPhysicsMath.detectCornerArcTrigger(
+            startX = 980f,
+            startY = 2100f,
+            dragDx = -60f,
+            dragDy = -65f,
+            widthPx = 1080f,
+            heightPx = 2400f
+        )
+        assertEquals(RadialTriggerCorner.BOTTOM_RIGHT, rightCorner)
+
+        val leftCorner = AnimationPhysicsMath.detectCornerArcTrigger(
+            startX = 90f,
+            startY = 2100f,
+            dragDx = 60f,
+            dragDy = -65f,
+            widthPx = 1080f,
+            heightPx = 2400f
+        )
+        assertEquals(RadialTriggerCorner.BOTTOM_LEFT, leftCorner)
+
+        val centerDrag = AnimationPhysicsMath.detectCornerArcTrigger(
+            startX = 540f,
+            startY = 1200f,
+            dragDx = -60f,
+            dragDy = -65f,
+            widthPx = 1080f,
+            heightPx = 2400f
+        )
+        assertNull(centerDrag)
     }
 }
