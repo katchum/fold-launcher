@@ -1,0 +1,816 @@
+package com.xsun.foldlauncher.viewmodel
+
+import android.app.Activity
+import android.app.Application
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.graphics.Rect
+import android.os.BatteryManager
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.xsun.foldlauncher.data.AppRepository
+import com.xsun.foldlauncher.data.LauncherPreferences
+import com.xsun.foldlauncher.hud.FloatingHudController
+import com.xsun.foldlauncher.hud.FloatingHudUiState
+import com.xsun.foldlauncher.hud.VcHudAgentStatus
+import com.xsun.foldlauncher.model.AppEntry
+import com.xsun.foldlauncher.model.AppPair
+import com.xsun.foldlauncher.model.AppShortcutItem
+import com.xsun.foldlauncher.model.FolderItem
+import com.xsun.foldlauncher.omni.ClipboardItem
+import com.xsun.foldlauncher.omni.ClipboardVault
+import com.xsun.foldlauncher.omni.OmniAction
+import com.xsun.foldlauncher.omni.OmniCommandEngine
+import com.xsun.foldlauncher.search.SearchEngine
+import com.xsun.foldlauncher.service.FoldAccessibilityService
+import com.xsun.foldlauncher.service.SystemTweaker
+import com.xsun.foldlauncher.ui.theme.IconShapePreset
+import com.xsun.foldlauncher.vc.VcBackgroundMonitor
+import com.xsun.foldlauncher.vc.VcConnectionConfig
+import com.xsun.foldlauncher.vc.VcLiveSummary
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+class LauncherViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val appContext: Context = application.applicationContext
+    val preferences = LauncherPreferences(appContext)
+    val repository = AppRepository(appContext, preferences)
+    val clipboardVault = ClipboardVault(appContext)
+    val vcMonitor = VcBackgroundMonitor.getInstance(appContext)
+
+    private val _allInstalledApps = MutableStateFlow<List<AppEntry>>(emptyList())
+
+    private val _hiddenPackages = MutableStateFlow(preferences.hiddenPackages)
+    val hiddenPackages: StateFlow<Set<String>> = _hiddenPackages.asStateFlow()
+
+    val allApps: StateFlow<List<AppEntry>> = combine(
+        _allInstalledApps,
+        _hiddenPackages
+    ) { installed, hidden ->
+        installed.filter { it.packageName !in hidden }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val hiddenApps: StateFlow<List<AppEntry>> = combine(
+        _allInstalledApps,
+        _hiddenPackages
+    ) { installed, hidden ->
+        installed.filter { it.packageName in hidden }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val allAppsMap: StateFlow<Map<String, AppEntry>> = _allInstalledApps
+        .map { list -> list.associateBy { it.packageName } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    val pinnedCoverApps: StateFlow<List<AppEntry>> = allApps
+        .map { apps ->
+            val explicit = apps.filter { it.isPinnedCover }
+            if (explicit.isNotEmpty()) explicit else apps.take(8)
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val pinnedInnerApps: StateFlow<List<AppEntry>> = allApps
+        .map { apps ->
+            val explicit = apps.filter { it.isPinnedInner }
+            if (explicit.isNotEmpty()) explicit else apps.take(12)
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val dockApps: StateFlow<List<AppEntry>> = allApps
+        .map { apps ->
+            val explicit = apps.filter { it.isDockPinned }
+            if (explicit.isNotEmpty()) explicit.take(7) else apps.take(5)
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    private val _recentSessionPackages = MutableStateFlow<List<String>>(emptyList())
+
+    val recentApps: StateFlow<List<AppEntry>> = combine(
+        allApps,
+        _recentSessionPackages
+    ) { apps, sessionOrder ->
+        val byPkg = apps.associateBy { it.packageName }
+        val fromSession = sessionOrder.mapNotNull { byPkg[it] }
+        val fromCounts = apps
+            .filter { it.launchCount > 0 && it.packageName !in sessionOrder }
+            .sortedByDescending { it.launchCount }
+        (fromSession + fromCounts).take(8)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    private val _folders = MutableStateFlow(preferences.folders)
+    val folders: StateFlow<List<FolderItem>> = _folders.asStateFlow()
+
+    private val _appPairs = MutableStateFlow(preferences.appPairs)
+    val appPairs: StateFlow<List<AppPair>> = _appPairs.asStateFlow()
+
+    // Search, Inline Math, Omni-Command Engine & Clipboard Vault
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+
+    val rankedSearchApps: StateFlow<List<AppEntry>> = combine(
+        allApps,
+        _searchQuery
+    ) { apps, query ->
+        SearchEngine.rankApps(apps, query, limit = 30)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val inlineMathResult: StateFlow<String?> = _searchQuery
+        .map { SearchEngine.evaluateInlineMath(it) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    val clipboardItems: StateFlow<List<ClipboardItem>> = clipboardVault.items
+
+    val omniActions: StateFlow<List<OmniAction>> = combine(
+        _searchQuery,
+        allApps,
+        clipboardItems
+    ) { query, apps, clips ->
+        OmniCommandEngine.evaluate(
+            rawQuery = query,
+            installedApps = apps,
+            clipboardItems = clips
+        )
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val primaryOmniAction: StateFlow<OmniAction?> = omniActions
+        .map { it.firstOrNull() }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    private val _omniStatusMessage = MutableStateFlow<String?>(null)
+    val omniStatusMessage: StateFlow<String?> = _omniStatusMessage.asStateFlow()
+
+    // System-Wide Floating Micro-HUD Pill state
+    val floatingHudState: StateFlow<FloatingHudUiState> = FloatingHudController.state
+
+    val floatingHudEnabled: StateFlow<Boolean> = FloatingHudController.state
+        .map { it.isEnabled }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, preferences.floatingHudEnabled)
+
+    // Spatial Depth Parallax & One-Handed Radial Thumb Arc preferences
+    private val _radialArcEnabled = MutableStateFlow(preferences.radialArcEnabled)
+    val radialArcEnabled: StateFlow<Boolean> = _radialArcEnabled.asStateFlow()
+
+    private val _radialArcRightHanded = MutableStateFlow(preferences.radialArcRightHanded)
+    val radialArcRightHanded: StateFlow<Boolean> = _radialArcRightHanded.asStateFlow()
+
+    private val _spatialParallaxEnabled = MutableStateFlow(preferences.spatialParallaxEnabled)
+    val spatialParallaxEnabled: StateFlow<Boolean> = _spatialParallaxEnabled.asStateFlow()
+
+    // VC Background Monitor & Command Center states
+    val vcConfig: StateFlow<VcConnectionConfig> = vcMonitor.config
+    val vcLiveSummary: StateFlow<VcLiveSummary> = vcMonitor.liveSummary
+    val vcLastSendFeedback: StateFlow<String?> = vcMonitor.lastSendFeedback
+
+    // Overlay / Sheet UI states
+    private val _isSearchOpen = MutableStateFlow(false)
+    val isSearchOpen: StateFlow<Boolean> = _isSearchOpen.asStateFlow()
+
+    private val _selectedContextMenuApp = MutableStateFlow<AppEntry?>(null)
+    val selectedContextMenuApp: StateFlow<AppEntry?> = _selectedContextMenuApp.asStateFlow()
+
+    private val _isSettingsOpen = MutableStateFlow(false)
+    val isSettingsOpen: StateFlow<Boolean> = _isSettingsOpen.asStateFlow()
+
+    // User preferences states
+    private val _hideSystemStatusBar = MutableStateFlow(preferences.hideSystemStatusBar)
+    val hideSystemStatusBar: StateFlow<Boolean> = _hideSystemStatusBar.asStateFlow()
+
+    private val _iconShapePreset = MutableStateFlow(resolveIconShapePreset(preferences.iconShapePresetName))
+    val iconShapePreset: StateFlow<IconShapePreset> = _iconShapePreset.asStateFlow()
+
+    private val _quickNoteText = MutableStateFlow(preferences.quickNoteText)
+    val quickNoteText: StateFlow<String> = _quickNoteText.asStateFlow()
+
+    private val _nextEventText = MutableStateFlow(preferences.nextEventText)
+    val nextEventText: StateFlow<String> = _nextEventText.asStateFlow()
+
+    // Battery & System Companion states
+    private val _batteryPct = MutableStateFlow(100)
+    val batteryPct: StateFlow<Int> = _batteryPct.asStateFlow()
+
+    private val _isCharging = MutableStateFlow(false)
+    val isCharging: StateFlow<Boolean> = _isCharging.asStateFlow()
+
+    private val _isDefaultLauncher = MutableStateFlow(false)
+    val isDefaultLauncher: StateFlow<Boolean> = _isDefaultLauncher.asStateFlow()
+
+    private val _isAccessibilityActive = MutableStateFlow(false)
+    val isAccessibilityActive: StateFlow<Boolean> = _isAccessibilityActive.asStateFlow()
+
+    private val _isWriteSecureSettingsGranted = MutableStateFlow(false)
+    val isWriteSecureSettingsGranted: StateFlow<Boolean> = _isWriteSecureSettingsGranted.asStateFlow()
+
+    private val _lockScreenRotationEnabled = MutableStateFlow(false)
+    val lockScreenRotationEnabled: StateFlow<Boolean> = _lockScreenRotationEnabled.asStateFlow()
+
+    private val _isDeXConnected = MutableStateFlow(false)
+    val isDeXConnected: StateFlow<Boolean> = _isDeXConnected.asStateFlow()
+
+    val adbGrantCommand: String
+        get() = SystemTweaker.getAdbGrantCommand(appContext)
+
+    private var batteryReceiverRegistered = false
+    private val batteryReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent == null) return
+            val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+            val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+            if (level >= 0 && scale > 0) {
+                _batteryPct.value = ((level * 100f) / scale).toInt().coerceIn(0, 100)
+            }
+            val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+            _isCharging.value = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                status == BatteryManager.BATTERY_STATUS_FULL
+        }
+    }
+
+    init {
+        FloatingHudController.ensureInitialized(appContext)
+        registerBatteryMonitor()
+        repository.startObservingPackages {
+            refreshApps()
+        }
+        observeForegroundAndVcTelemetry()
+        refreshAll()
+    }
+
+    private fun observeForegroundAndVcTelemetry() {
+        // Bridge FoldAccessibilityService foreground package detection to VcBackgroundMonitor
+        viewModelScope.launch {
+            FoldAccessibilityService.foregroundPackage.collect { pkg ->
+                if (pkg.isNotBlank()) {
+                    vcMonitor.onForegroundPackageChanged(pkg)
+                }
+            }
+        }
+
+        // Sync live VC summary status with the System-Wide Floating Micro-HUD Pill dot
+        viewModelScope.launch {
+            vcMonitor.liveSummary.collect { summary ->
+                val hudDotStatus = when {
+                    summary.approvalCount > 0 -> VcHudAgentStatus.APPROVAL_NEEDED
+                    summary.failedCount > 0 -> VcHudAgentStatus.ERROR
+                    summary.workingCount > 0 || summary.runningCount > 0 -> VcHudAgentStatus.WORKING
+                    else -> VcHudAgentStatus.IDLE_READY
+                }
+                FloatingHudController.setVcAgentStatus(appContext, hudDotStatus)
+            }
+        }
+    }
+
+    fun refreshAll() {
+        refreshSystemCompanionState()
+        refreshApps()
+    }
+
+    fun refreshSystemCompanionState() {
+        _isDefaultLauncher.value = repository.isDefaultLauncher()
+        val a11yEnabled = SystemTweaker.isAccessibilityServiceEnabled(appContext)
+        _isAccessibilityActive.value = a11yEnabled
+        _isWriteSecureSettingsGranted.value = SystemTweaker.hasWriteSecureSettings(appContext)
+        _lockScreenRotationEnabled.value = SystemTweaker.isLockScreenRotationEnabled(appContext)
+        _isDeXConnected.value = SystemTweaker.isDexDesktopModeActive(appContext)
+        if (a11yEnabled) {
+            FloatingHudController.syncOverlayWithService()
+        }
+    }
+
+    fun onLauncherResumed() {
+        FoldAccessibilityService.notifyLauncherResumed(appContext.packageName)
+        vcMonitor.onLauncherResumed()
+        captureClipboardOnResume()
+        refreshSystemCompanionState()
+    }
+
+    fun refreshApps() {
+        viewModelScope.launch {
+            val loaded = withContext(Dispatchers.IO) {
+                repository.loadInstalledApps(includeHidden = true)
+            }
+            _allInstalledApps.value = loaded
+            _hiddenPackages.value = preferences.hiddenPackages
+        }
+    }
+
+    private fun syncAppFlagsInMemory() {
+        val pinnedCover = preferences.pinnedCoverPackages
+        val pinnedInner = preferences.pinnedInnerPackages
+        val pinnedDock = preferences.pinnedDockPackages
+        val counts = preferences.launchCounts
+        _hiddenPackages.value = preferences.hiddenPackages
+
+        _allInstalledApps.value = _allInstalledApps.value.map { entry ->
+            entry.copy(
+                launchCount = counts[entry.packageName] ?: entry.launchCount,
+                isPinnedCover = entry.packageName in pinnedCover,
+                isPinnedInner = entry.packageName in pinnedInner,
+                isDockPinned = entry.packageName in pinnedDock
+            )
+        }
+    }
+
+    // Search & Sheet Controls
+    fun onSearchQueryChange(query: String) {
+        _searchQuery.value = query
+    }
+
+    fun openSearch() {
+        _isSearchOpen.value = true
+    }
+
+    fun closeSearch() {
+        _isSearchOpen.value = false
+        _searchQuery.value = ""
+    }
+
+    fun setSearchOpen(open: Boolean) {
+        if (open) openSearch() else closeSearch()
+    }
+
+    fun openSettings() {
+        refreshSystemCompanionState()
+        _isSettingsOpen.value = true
+    }
+
+    fun closeSettings() {
+        _isSettingsOpen.value = false
+    }
+
+    fun setSettingsOpen(open: Boolean) {
+        if (open) openSettings() else closeSettings()
+    }
+
+    fun openContextMenu(app: AppEntry) {
+        _selectedContextMenuApp.value = app
+    }
+
+    fun dismissContextMenu() {
+        _selectedContextMenuApp.value = null
+    }
+
+    /**
+     * Handles system Back key or Home gesture while on the launcher.
+     * Closes any active sheet/overlay and returns `true` if an overlay was dismissed.
+     */
+    fun handleBackOrHomePress(): Boolean {
+        if (_selectedContextMenuApp.value != null) {
+            _selectedContextMenuApp.value = null
+            return true
+        }
+        if (_isSettingsOpen.value) {
+            _isSettingsOpen.value = false
+            return true
+        }
+        if (_isSearchOpen.value) {
+            closeSearch()
+            return true
+        }
+        return false
+    }
+
+    // Omni-Command & Clipboard Vault Operations
+    fun executeOmniAction(action: OmniAction) {
+        when (action) {
+            is OmniAction.LaunchAdHocSplit -> {
+                preferences.incrementLaunchCount(action.primaryApp.packageName)
+                preferences.incrementLaunchCount(action.secondaryApp.packageName)
+                syncAppFlagsInMemory()
+                closeSearch()
+            }
+            is OmniAction.SendToVc -> {
+                if (action.prompt.isNotBlank() && vcMonitor.config.value.isConfigured) {
+                    vcMonitor.sendQuickMessage(
+                        sessionId = null,
+                        text = action.prompt,
+                        steerIfWorking = true
+                    )
+                }
+                closeSearch()
+            }
+            else -> {}
+        }
+
+        OmniCommandEngine.execute(
+            context = appContext,
+            action = action,
+            clipboardVault = clipboardVault,
+            onToggleFloatingHud = ::toggleFloatingHud,
+            onToggleThumbArc = ::toggleRadialThumbArc,
+            onStatusMessage = { msg ->
+                _omniStatusMessage.value = msg
+            }
+        )
+
+        if (action is OmniAction.SystemCommand) {
+            refreshSystemCompanionState()
+        }
+    }
+
+    /**
+     * Synchronizes ViewModel state (app launch counts, live VC prompt dispatch, and companion state)
+     * when [SpotlightSearchOverlay] or [OmniCommandResultsCard] executes an [OmniAction].
+     */
+    fun onOmniActionFromSpotlight(action: OmniAction) {
+        when (action) {
+            is OmniAction.LaunchAdHocSplit -> {
+                preferences.incrementLaunchCount(action.primaryApp.packageName)
+                preferences.incrementLaunchCount(action.secondaryApp.packageName)
+                syncAppFlagsInMemory()
+                closeSearch()
+            }
+            is OmniAction.SendToVc -> {
+                if (action.prompt.isNotBlank() && vcMonitor.config.value.isConfigured) {
+                    vcMonitor.sendQuickMessage(
+                        sessionId = null,
+                        text = action.prompt,
+                        steerIfWorking = true
+                    )
+                }
+                closeSearch()
+            }
+            is OmniAction.SystemCommand -> {
+                refreshSystemCompanionState()
+                closeSearch()
+            }
+            else -> {}
+        }
+    }
+
+    fun captureClipboardOnResume() {
+        clipboardVault.captureFromSystemClipboard(appContext)
+    }
+
+    fun togglePinClipboardItem(itemId: String) {
+        clipboardVault.togglePin(itemId)
+    }
+
+    fun copyClipboardItem(item: ClipboardItem) {
+        ClipboardVault.copyToSystemClipboard(appContext, item.text, item.label.ifBlank { "Vault Snippet" })
+        clipboardVault.addOrBumpClip(
+            text = item.text,
+            label = item.label,
+            isPinned = item.isPinned,
+            category = item.category
+        )
+        _omniStatusMessage.value = "Copied snippet to clipboard"
+    }
+
+    fun removeClipboardItem(itemId: String) {
+        clipboardVault.removeClip(itemId)
+    }
+
+    fun clearUnpinnedClipboard() {
+        clipboardVault.clearUnpinned()
+    }
+
+    // Floating Micro-HUD Pill Controls
+    fun setFloatingHudEnabled(enabled: Boolean): Boolean {
+        preferences.floatingHudEnabled = enabled
+        return FloatingHudController.setHudEnabled(appContext, enabled)
+    }
+
+    fun toggleFloatingHud() {
+        val next = !FloatingHudController.state.value.isEnabled
+        setFloatingHudEnabled(next)
+    }
+
+    // Radial Thumb Arc & Spatial Parallax Controls
+    fun setRadialArcEnabled(enabled: Boolean) {
+        preferences.radialArcEnabled = enabled
+        _radialArcEnabled.value = enabled
+    }
+
+    fun toggleRadialThumbArc() {
+        setRadialArcEnabled(!_radialArcEnabled.value)
+    }
+
+    fun setRadialArcRightHanded(rightHanded: Boolean) {
+        preferences.radialArcRightHanded = rightHanded
+        _radialArcRightHanded.value = rightHanded
+    }
+
+    fun toggleRadialArcHandedness() {
+        setRadialArcRightHanded(!_radialArcRightHanded.value)
+    }
+
+    fun setSpatialParallaxEnabled(enabled: Boolean) {
+        preferences.spatialParallaxEnabled = enabled
+        _spatialParallaxEnabled.value = enabled
+    }
+
+    fun toggleSpatialParallax() {
+        setSpatialParallaxEnabled(!_spatialParallaxEnabled.value)
+    }
+
+    // VC Background Monitor & Command Center Actions
+    fun updateVcConfig(
+        serverUrl: String,
+        authToken: String = vcMonitor.config.value.authToken,
+        monitorEnabled: Boolean = vcMonitor.config.value.monitorEnabled,
+        notifyWhenBackgrounded: Boolean = vcMonitor.config.value.notifyWhenBackgrounded
+    ) {
+        vcMonitor.updateConfig(
+            serverUrl = serverUrl,
+            authToken = authToken,
+            monitorEnabled = monitorEnabled,
+            notifyWhenBackgrounded = notifyWhenBackgrounded
+        )
+    }
+
+    fun refreshVcNow() {
+        vcMonitor.refreshNow()
+    }
+
+    fun sendVcQuickMessage(
+        sessionId: String?,
+        text: String,
+        steerIfWorking: Boolean = true,
+        onComplete: ((Boolean, String) -> Unit)? = null
+    ) {
+        vcMonitor.sendQuickMessage(
+            sessionId = sessionId,
+            text = text,
+            steerIfWorking = steerIfWorking,
+            onComplete = onComplete
+        )
+    }
+
+    fun markVcAttentionRead(eventId: String? = null, markAll: Boolean = false) {
+        vcMonitor.markAttentionRead(eventId = eventId, markAll = markAll)
+    }
+
+    fun launchVcApp(sessionId: String? = null): Boolean {
+        return vcMonitor.launchVc(sessionId = sessionId)
+    }
+
+    fun launchVcSplitScreen(preferredSecondaryPackage: String? = null): Boolean {
+        return vcMonitor.launchVcSplitScreen(preferredSecondaryPackage = preferredSecondaryPackage)
+    }
+
+    // Core Launcher Operations
+    fun launchApp(app: AppEntry, sourceBounds: Rect? = null) {
+        preferences.incrementLaunchCount(app.packageName)
+        _recentSessionPackages.value =
+            (listOf(app.packageName) + _recentSessionPackages.value.filter { it != app.packageName }).take(10)
+        syncAppFlagsInMemory()
+        if (_isSearchOpen.value) {
+            closeSearch()
+        }
+        repository.launchApp(app, sourceBounds)
+    }
+
+    fun launchSplitScreenSingle(app: AppEntry) {
+        preferences.incrementLaunchCount(app.packageName)
+        syncAppFlagsInMemory()
+        repository.launchSplitScreenSingle(app)
+    }
+
+    fun launchAppPair(pair: AppPair) {
+        preferences.incrementLaunchCount(pair.primaryPackage)
+        preferences.incrementLaunchCount(pair.secondaryPackage)
+        syncAppFlagsInMemory()
+        repository.launchAppPair(pair)
+    }
+
+    fun addAppPair(title: String, primaryPackage: String, secondaryPackage: String) {
+        if (primaryPackage.isBlank() || secondaryPackage.isBlank()) return
+        val newPair = AppPair(
+            id = "pair_${System.currentTimeMillis()}",
+            title = title.ifBlank { "Split Pair" },
+            primaryPackage = primaryPackage,
+            secondaryPackage = secondaryPackage
+        )
+        val updated = _appPairs.value + newPair
+        preferences.appPairs = updated
+        _appPairs.value = updated
+    }
+
+    fun createQuickAppPairFromTopApps() {
+        val candidates = pinnedInnerApps.value.ifEmpty { allApps.value }
+        if (candidates.size < 2) return
+        val existingKeys = _appPairs.value.map { "${it.primaryPackage}|${it.secondaryPackage}" }.toSet()
+        for (i in 0 until candidates.size) {
+            for (j in i + 1 until candidates.size) {
+                val first = candidates[i]
+                val second = candidates[j]
+                val key = "${first.packageName}|${second.packageName}"
+                if (key !in existingKeys) {
+                    addAppPair(
+                        title = "${first.label.take(10)} + ${second.label.take(10)}",
+                        primaryPackage = first.packageName,
+                        secondaryPackage = second.packageName
+                    )
+                    return
+                }
+            }
+        }
+    }
+
+    fun removeAppPair(pairId: String) {
+        val updated = _appPairs.value.filterNot { it.id == pairId }
+        preferences.appPairs = updated
+        _appPairs.value = updated
+    }
+
+    fun createFolder(name: String, packageNames: List<String>) {
+        if (name.isBlank()) return
+        val newFolder = FolderItem(
+            id = "folder_${System.currentTimeMillis()}",
+            name = name.trim(),
+            packageNames = packageNames
+        )
+        val updated = _folders.value + newFolder
+        preferences.folders = updated
+        _folders.value = updated
+    }
+
+    fun removeFolder(folderId: String) {
+        val updated = _folders.value.filterNot { it.id == folderId }
+        preferences.folders = updated
+        _folders.value = updated
+    }
+
+    fun launchShortcut(shortcut: AppShortcutItem) {
+        repository.launchShortcut(shortcut)
+    }
+
+    fun togglePinCover(app: AppEntry) {
+        val current = preferences.pinnedCoverPackages.toMutableSet()
+        if (app.packageName in current) {
+            current.remove(app.packageName)
+        } else {
+            current.add(app.packageName)
+        }
+        preferences.pinnedCoverPackages = current
+        syncAppFlagsInMemory()
+    }
+
+    fun togglePinInner(app: AppEntry) {
+        val current = preferences.pinnedInnerPackages.toMutableSet()
+        if (app.packageName in current) {
+            current.remove(app.packageName)
+        } else {
+            current.add(app.packageName)
+        }
+        preferences.pinnedInnerPackages = current
+        syncAppFlagsInMemory()
+    }
+
+    fun togglePinDock(app: AppEntry) {
+        val current = preferences.pinnedDockPackages.toMutableSet()
+        if (app.packageName in current) {
+            current.remove(app.packageName)
+        } else {
+            current.add(app.packageName)
+        }
+        preferences.pinnedDockPackages = current
+        syncAppFlagsInMemory()
+    }
+
+    fun hideApp(app: AppEntry) {
+        val current = preferences.hiddenPackages.toMutableSet()
+        current.add(app.packageName)
+        preferences.hiddenPackages = current
+        syncAppFlagsInMemory()
+    }
+
+    fun unhideApp(packageName: String) {
+        val current = preferences.hiddenPackages.toMutableSet()
+        current.remove(packageName)
+        preferences.hiddenPackages = current
+        syncAppFlagsInMemory()
+    }
+
+    fun unhideAllApps() {
+        preferences.hiddenPackages = emptySet()
+        syncAppFlagsInMemory()
+    }
+
+    fun openAppInfo(app: AppEntry) {
+        repository.openAppInfo(app.packageName)
+    }
+
+    fun openAppInfo(packageName: String) {
+        repository.openAppInfo(packageName)
+    }
+
+    fun uninstallApp(app: AppEntry) {
+        repository.requestUninstall(app.packageName)
+    }
+
+    fun uninstallApp(packageName: String) {
+        repository.requestUninstall(packageName)
+    }
+
+    fun launchWebSearch(query: String) {
+        closeSearch()
+        repository.launchWebSearch(query)
+    }
+
+    fun openWallpaperPicker() {
+        repository.openWallpaperPicker()
+    }
+
+    fun openClockApp() {
+        repository.openClockApp()
+    }
+
+    fun requestDefaultLauncherRole(activity: Activity) {
+        repository.requestDefaultLauncherRole(activity)
+    }
+
+    // Settings & System Tweaks
+    fun setHideSystemStatusBar(hide: Boolean) {
+        preferences.hideSystemStatusBar = hide
+        _hideSystemStatusBar.value = hide
+    }
+
+    fun toggleHideSystemStatusBar() {
+        setHideSystemStatusBar(!_hideSystemStatusBar.value)
+    }
+
+    fun setIconShapePreset(preset: IconShapePreset) {
+        preferences.iconShapePresetName = preset.name
+        _iconShapePreset.value = preset
+    }
+
+    fun updateQuickNote(text: String) {
+        preferences.quickNoteText = text
+        _quickNoteText.value = text
+    }
+
+    fun toggleLockScreenRotation() {
+        val target = !_lockScreenRotationEnabled.value
+        if (SystemTweaker.setLockScreenRotation(appContext, target)) {
+            _lockScreenRotationEnabled.value = target
+        } else {
+            _lockScreenRotationEnabled.value = SystemTweaker.isLockScreenRotationEnabled(appContext)
+        }
+    }
+
+    fun enforceGboardInDeX() {
+        SystemTweaker.enforcePreferredIme(appContext)
+        refreshSystemCompanionState()
+    }
+
+    fun lockScreenNow() {
+        if (!SystemTweaker.lockScreenNow()) {
+            SystemTweaker.openAccessibilitySettings(appContext)
+        }
+    }
+
+    fun expandNotificationsPanel() {
+        SystemTweaker.expandNotificationsPanel(appContext)
+    }
+
+    fun openAccessibilitySettings() {
+        SystemTweaker.openAccessibilitySettings(appContext)
+    }
+
+    private fun registerBatteryMonitor() {
+        if (batteryReceiverRegistered) return
+        try {
+            val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+            val sticky = ContextCompat.registerReceiver(
+                appContext,
+                batteryReceiver,
+                filter,
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+            sticky?.let { batteryReceiver.onReceive(appContext, it) }
+            batteryReceiverRegistered = true
+        } catch (_: Exception) {
+            val bm = appContext.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+            val cap = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 100
+            _batteryPct.value = cap.coerceIn(0, 100)
+        }
+    }
+
+    override fun onCleared() {
+        repository.stopObservingPackages()
+        if (batteryReceiverRegistered) {
+            try {
+                appContext.unregisterReceiver(batteryReceiver)
+            } catch (_: Exception) {
+            }
+            batteryReceiverRegistered = false
+        }
+        super.onCleared()
+    }
+
+    private fun resolveIconShapePreset(name: String): IconShapePreset {
+        return IconShapePreset.entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
+            ?: IconShapePreset.SQUIRCLE
+    }
+}

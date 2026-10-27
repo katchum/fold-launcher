@@ -1,0 +1,79 @@
+name: Android CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: "Runner: scope (only docs/**/*.md changed: pass through)"
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          case "$EVENT" in
+            pull_request) base=$(git merge-base "$PR_BASE" HEAD 2>/dev/null || true) ;;
+            push) base=$PUSH_BEFORE ;;
+            *) base="" ;;
+          esac
+          chmod +x scripts/ci-scope.sh
+          scripts/ci-scope.sh "$base" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 17 (Temurin)
+        if: steps.scope.outputs.code == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Grant execute permission for gradlew
+        if: steps.scope.outputs.code == 'true'
+        run: chmod +x gradlew
+
+      - name: Run Unit Tests, Lint, Debug & Release (R8) Builds
+        if: steps.scope.outputs.code == 'true'
+        run: ./gradlew testDebugUnitTest lintDebug assembleDebug assembleRelease
+
+      - name: Upload Debug APK
+        if: steps.scope.outputs.code == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Upload Release APK (R8 Minified)
+        if: steps.scope.outputs.code == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
+      - name: Upload Android Lint Report
+        if: always() && steps.scope.outputs.code == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-report-debug
+          path: app/build/reports/lint-results-debug.html
+          if-no-files-found: ignore

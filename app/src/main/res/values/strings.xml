@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Fold8 Launcher</string>
+    <string name="accessibility_service_label">Fold8 Companion Tweaker</string>
+    <string name="accessibility_service_description">Provides double-tap to lock screen, notification shade pull-down, split-screen toggle, and automatic Gboard enforcement when Samsung DeX connects.</string>
+</resources>
