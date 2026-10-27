@@ -179,7 +179,7 @@ private fun TentModeStandbyBannerCard(
 ) {
     val context = LocalContext.current
     val vcMonitor = remember(context) { VcBackgroundMonitor.getInstance(context) }
-    val vcSummary by vcMonitor.summary.collectAsState()
+    val vcSummary by vcMonitor.liveSummary.collectAsState()
     val angleText = hingeAngleDegrees?.let { "${it.toInt()}°" } ?: "TENT"
 
     Column(

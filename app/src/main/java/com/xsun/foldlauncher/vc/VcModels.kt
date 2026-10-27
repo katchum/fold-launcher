@@ -216,6 +216,12 @@ data class VcLiveSummary(
     val pendingApprovals: Int
         get() = approvalCount
 
+    val approvalWaitingCount: Int
+        get() = approvalCount
+
+    val unreadUpdateCount: Int
+        get() = unreadCount
+
     val sessions: List<VcAgentStatus>
         get() = activeAgents
 

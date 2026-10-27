@@ -73,6 +73,12 @@ class VcBackgroundMonitor private constructor(context: Context) {
     )
     val liveSummary: StateFlow<VcLiveSummary> = _liveSummary.asStateFlow()
 
+    val summary: StateFlow<VcLiveSummary>
+        get() = liveSummary
+
+    val uiState: StateFlow<VcLiveSummary>
+        get() = liveSummary
+
     private val _lastSendFeedback = MutableStateFlow<String?>(null)
     val lastSendFeedback: StateFlow<String?> = _lastSendFeedback.asStateFlow()
 

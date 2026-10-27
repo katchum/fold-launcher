@@ -13,7 +13,12 @@ data class AppEntry(
     val isPinnedInner: Boolean = false,
     val isDockPinned: Boolean = false,
     val category: String = "Apps",
-    val shortcuts: List<AppShortcutItem> = emptyList()
+    val shortcuts: List<AppShortcutItem> = emptyList(),
+    val isSystemApp: Boolean = category.equals("System", ignoreCase = true) ||
+        category.equals("Utilities", ignoreCase = true) ||
+        packageName.startsWith("com.android.") ||
+        packageName.startsWith("com.sec.android.") ||
+        packageName.startsWith("com.samsung.android.")
 ) {
     val componentName: ComponentName
         get() = ComponentName(packageName, activityName)
