@@ -15,14 +15,21 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.VibrationEffect
+import android.os.Vibrator
 import android.provider.Settings
 import android.view.Display
 import android.view.Surface
 import android.view.inputmethod.InputMethodManager
 import androidx.core.content.ContextCompat
+import com.xsun.foldlauncher.posture.FoldCloseActionMode as PostureFoldCloseActionMode
+import com.xsun.foldlauncher.posture.HingeDetentTick as PostureHingeDetentTick
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+
+typealias FoldCloseActionMode = PostureFoldCloseActionMode
+typealias HingeDetentTick = PostureHingeDetentTick
 
 data class LockScreenStatus(
     val isKeyguardLocked: Boolean,
@@ -56,6 +63,10 @@ object SystemTweaker {
 
     const val EXTRA_LOCK_SCREEN_COCKPIT = "com.xsun.foldlauncher.EXTRA_LOCK_SCREEN_COCKPIT"
 
+    private const val PREFS_HINGE_TWEAKS = "fold8_hinge_tweaks_prefs"
+    private const val KEY_HINGE_DETENT_HAPTICS = "hinge_detent_haptics_enabled"
+    private const val KEY_FOLD_CLOSE_ACTION_MODE = "fold_close_action_mode"
+
     private const val KEY_LOCK_SCREEN_ALLOW_ROTATION = "lock_screen_allow_rotation"
     private const val KEY_SUB_DISPLAY_ROTATION_LOCK = "sub_display_accelerometer_rotation"
     private const val KEY_DEX_ON_SCREEN_KEYBOARD_LOCATION = "dex_on_screen_keyboard_location"
@@ -69,6 +80,102 @@ object SystemTweaker {
 
     private val _isTorchActive = MutableStateFlow(false)
     val isTorchActive: StateFlow<Boolean> = _isTorchActive.asStateFlow()
+
+    private val _hingeDetentHapticsEnabled = MutableStateFlow(true)
+    val hingeDetentHapticsEnabled: StateFlow<Boolean> = _hingeDetentHapticsEnabled.asStateFlow()
+
+    private val _foldCloseActionMode = MutableStateFlow(FoldCloseActionMode.STAY_AWAKE_COVER)
+    val foldCloseActionMode: StateFlow<FoldCloseActionMode> = _foldCloseActionMode.asStateFlow()
+
+    fun loadHingePreferences(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS_HINGE_TWEAKS, Context.MODE_PRIVATE)
+        _hingeDetentHapticsEnabled.value = prefs.getBoolean(KEY_HINGE_DETENT_HAPTICS, true)
+        val rawMode = prefs.getString(KEY_FOLD_CLOSE_ACTION_MODE, FoldCloseActionMode.STAY_AWAKE_COVER.name)
+        val parsedMode = FoldCloseActionMode.values().firstOrNull { it.name == rawMode }
+            ?: FoldCloseActionMode.STAY_AWAKE_COVER
+        _foldCloseActionMode.value = parsedMode
+    }
+
+    fun setHingeDetentHapticsEnabled(context: Context, enabled: Boolean) {
+        _hingeDetentHapticsEnabled.value = enabled
+        context.getSharedPreferences(PREFS_HINGE_TWEAKS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_HINGE_DETENT_HAPTICS, enabled)
+            .apply()
+    }
+
+    fun toggleHingeDetentHaptics(context: Context): Boolean {
+        val next = !_hingeDetentHapticsEnabled.value
+        setHingeDetentHapticsEnabled(context, next)
+        return next
+    }
+
+    fun setFoldCloseActionMode(context: Context, mode: FoldCloseActionMode) {
+        _foldCloseActionMode.value = mode
+        context.getSharedPreferences(PREFS_HINGE_TWEAKS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_FOLD_CLOSE_ACTION_MODE, mode.name)
+            .apply()
+        when (mode) {
+            FoldCloseActionMode.STAY_AWAKE_COVER,
+            FoldCloseActionMode.AUTO_VC_VOICE,
+            FoldCloseActionMode.TENT_STANDBY -> setFoldCloseStayAwake(context, true)
+            FoldCloseActionMode.INSTANT_LOCK -> setFoldCloseStayAwake(context, false)
+        }
+    }
+
+    fun cycleFoldCloseActionMode(context: Context): FoldCloseActionMode {
+        val next = _foldCloseActionMode.value.next()
+        setFoldCloseActionMode(context, next)
+        return next
+    }
+
+    /**
+     * Fires a crisp mechanical watch-crown haptic click/tick on the Z Fold 8 linear actuator
+     * when sweeping across `15°` hinge detents (`EFFECT_CLICK` for major posture thresholds,
+     * `EFFECT_TICK` for minor `15°` steps).
+     */
+    @Suppress("DEPRECATION")
+    fun triggerHingeDetentHaptic(context: Context, tick: HingeDetentTick) {
+        if (tick == HingeDetentTick.NONE || !_hingeDetentHapticsEnabled.value) return
+        try {
+            val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator ?: return
+            if (!vibrator.hasVibrator()) return
+            val effectId = if (tick.isMajorPostureThreshold) {
+                VibrationEffect.EFFECT_CLICK
+            } else {
+                VibrationEffect.EFFECT_TICK
+            }
+            vibrator.vibrate(VibrationEffect.createPredefined(effectId))
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Executes the user's configured [FoldCloseActionMode] when the Z Fold 8 hinge closes shut.
+     */
+    fun executeFoldCloseAction(
+        context: Context,
+        mode: FoldCloseActionMode = _foldCloseActionMode.value
+    ): Boolean {
+        return when (mode) {
+            FoldCloseActionMode.STAY_AWAKE_COVER -> {
+                setFoldCloseStayAwake(context, true)
+            }
+            FoldCloseActionMode.AUTO_VC_VOICE -> {
+                setFoldCloseStayAwake(context, true)
+                launchVc(context, startVoiceTalk = true)
+            }
+            FoldCloseActionMode.TENT_STANDBY -> {
+                setFoldCloseStayAwake(context, true)
+                launchLockScreenCockpit(context)
+            }
+            FoldCloseActionMode.INSTANT_LOCK -> {
+                setFoldCloseStayAwake(context, false)
+                lockScreenNow()
+            }
+        }
+    }
 
     fun isTorchEnabled(): Boolean = _isTorchActive.value
 

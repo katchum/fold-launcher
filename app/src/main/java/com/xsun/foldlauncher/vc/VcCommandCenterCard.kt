@@ -90,6 +90,7 @@ fun VcCommandCenterCard(
     var selectedSessionId by remember { mutableStateOf<String?>(null) }
     var selectedVariant by remember(summary.selectedVariant) { mutableStateOf(summary.selectedVariant) }
     var quickMessageDraft by remember { mutableStateOf("") }
+    var copiedSnippetFeedback by remember { mutableStateOf(false) }
 
     val detectedVariants = remember(context, summary.installedVariants) {
         val probed = VcBridgeClient.resolveInstalledVcVariants(context)
@@ -232,6 +233,29 @@ fun VcCommandCenterCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
+                Text(
+                    text = if (copiedSnippetFeedback) "✓ Copied" else "📋 Copy Status",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (copiedSnippetFeedback) FoldLauncherColors.EmeraldSuccess else VcMintAccent,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(FoldLauncherColors.GlassSurfaceHighlight)
+                        .border(
+                            1.dp,
+                            if (copiedSnippetFeedback) {
+                                FoldLauncherColors.EmeraldSuccess.copy(alpha = 0.55f)
+                            } else {
+                                VcMintAccent.copy(alpha = 0.38f)
+                            },
+                            RoundedCornerShape(10.dp)
+                        )
+                        .clickable {
+                            VcBridgeClient.copyStatusSnippetToClipboard(context, summary)
+                            copiedSnippetFeedback = true
+                        }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                )
                 Text(
                     text = "↻",
                     fontSize = 13.sp,
@@ -394,6 +418,12 @@ fun VcCommandCenterCard(
                 activeColor = FoldLauncherColors.CoralDanger,
                 modifier = Modifier.weight(1f)
             )
+        }
+
+        // 2b. Live Multi-Agent Squad Telemetry Breakdown Bar (`v0.4.0`)
+        val squadTelemetry = remember(summary) { summary.squadTelemetry }
+        if (squadTelemetry.hasSessions || summary.activeAgents.isNotEmpty()) {
+            VcSquadTelemetryBar(telemetry = squadTelemetry)
         }
 
         // 3. 1-Tap Workspace Actions (Talk / Open VC / Split-Screen VC / Ack All)
@@ -987,6 +1017,87 @@ fun VcCommandCenterCard(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VcSquadTelemetryBar(
+    telemetry: VcSquadTelemetry
+) {
+    val barShape = RoundedCornerShape(12.dp)
+    val total = telemetry.totalCount.coerceAtLeast(1)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(barShape)
+            .background(FoldLauncherColors.DeepVoid.copy(alpha = 0.65f))
+            .border(1.dp, FoldLauncherColors.GlassBorder, barShape)
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = "SQUAD TELEMETRY (${telemetry.totalCount})",
+                fontSize = 9.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = VcMintAccent
+            )
+            Text(
+                text = telemetry.summaryLine,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = FoldLauncherColors.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(6.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(FoldLauncherColors.GlassSurfaceHighlight),
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            if (telemetry.workingCount > 0) {
+                Box(
+                    modifier = Modifier
+                        .weight(telemetry.workingCount.toFloat() / total)
+                        .height(6.dp)
+                        .background(FoldLauncherColors.ElectricCyan)
+                )
+            }
+            if (telemetry.completedCount > 0) {
+                Box(
+                    modifier = Modifier
+                        .weight(telemetry.completedCount.toFloat() / total)
+                        .height(6.dp)
+                        .background(FoldLauncherColors.EmeraldSuccess)
+                )
+            }
+            if (telemetry.waitingApprovalCount > 0) {
+                Box(
+                    modifier = Modifier
+                        .weight(telemetry.waitingApprovalCount.toFloat() / total)
+                        .height(6.dp)
+                        .background(FoldLauncherColors.AmberWarning)
+                )
+            }
+            if (telemetry.errorCount > 0) {
+                Box(
+                    modifier = Modifier
+                        .weight(telemetry.errorCount.toFloat() / total)
+                        .height(6.dp)
+                        .background(FoldLauncherColors.CoralDanger)
+                )
             }
         }
     }

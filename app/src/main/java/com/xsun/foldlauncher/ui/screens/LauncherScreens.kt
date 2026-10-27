@@ -20,12 +20,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -75,6 +77,7 @@ import com.xsun.foldlauncher.ui.components.AppIconTile
 import com.xsun.foldlauncher.ui.components.AppPairsQuickCard
 import com.xsun.foldlauncher.ui.components.NativeDashboardCards
 import com.xsun.foldlauncher.ui.components.PersistentTaskbarDock
+import com.xsun.foldlauncher.ui.components.SystemQuickTileWidget
 import com.xsun.foldlauncher.ui.components.TopStatusBar
 import com.xsun.foldlauncher.ui.theme.FoldLauncherColors
 import com.xsun.foldlauncher.ui.theme.IconShapePreset
@@ -176,6 +179,56 @@ private fun AppDrawerCategoryPillsBar(
     }
 }
 
+/**
+ * v0.4.0 Interactive App Drawer Tile with a 1-tap `📌` (pinned) / `📍` (unpinned) Pin-to-Dock button
+ * in the top-right corner so the user can customize their persistent Z Fold 8 / S23 Ultra dock live.
+ */
+@Composable
+private fun DrawerAppTileWithDockPin(
+    app: AppEntry,
+    isDockPinned: Boolean,
+    iconShapePreset: IconShapePreset,
+    compact: Boolean = false,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    onTogglePinDock: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(modifier = modifier) {
+        AppIconTile(
+            app = app,
+            iconShapePreset = iconShapePreset,
+            showLabel = true,
+            compact = compact,
+            onClick = onClick,
+            onLongClick = onLongClick
+        )
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 2.dp, end = 4.dp)
+                .size(22.dp)
+                .clip(CircleShape)
+                .background(
+                    if (isDockPinned) FoldLauncherColors.CyanGlow
+                    else FoldLauncherColors.GlassSurfaceElevated.copy(alpha = 0.88f)
+                )
+                .border(
+                    1.dp,
+                    if (isDockPinned) FoldLauncherColors.ElectricCyan else FoldLauncherColors.GlassBorder,
+                    CircleShape
+                )
+                .clickable(onClick = onTogglePinDock),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = if (isDockPinned) "📌" else "📍",
+                fontSize = 10.sp
+            )
+        }
+    }
+}
+
 @Composable
 private fun TentModeStandbyBannerCard(
     hingeAngleDegrees: Float?,
@@ -248,8 +301,8 @@ private fun TentModeStandbyBannerCard(
 }
 
 /**
- * v0.3.0 1-Tap Workspace Profile Pill Bar (`🌐 All Panels`, `⚡ VC & Dev`, `🎯 Minimal Focus`, `🌑 Pure OLED`)
- * plus instant Hardware Torch & Dual-Screen Cover Mirror quick pills.
+ * v0.4.0 1-Tap Workspace Profile Pill Bar (`🌐 All Panels`, `⚡ VC & Dev`, `🎯 Minimal Focus`, `🌑 Pure OLED`)
+ * plus instant Hardware Torch, Dual-Screen Cover Mirror, Hinge Detent Haptics & Fold-Close Action Mode pills.
  */
 @Composable
 fun WorkspaceProfilePillBar(
@@ -262,6 +315,10 @@ fun WorkspaceProfilePillBar(
     isKeyguardLocked: Boolean = false,
     showLockCockpit: Boolean = false,
     onToggleLockCockpit: (() -> Unit)? = null,
+    hingeHapticsEnabled: Boolean = true,
+    onToggleHingeHaptics: (() -> Unit)? = null,
+    foldCloseModeLabel: String = "📱 Keep Cover Awake",
+    onCycleFoldCloseActionMode: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -380,6 +437,50 @@ fun WorkspaceProfilePillBar(
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     color = if (active) FoldLauncherColors.EmeraldSuccess else FoldLauncherColors.TextSecondary
+                )
+            }
+        }
+
+        // v0.4.0 Hinge Detent Haptics Pill
+        if (onToggleHingeHaptics != null) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(
+                        if (hingeHapticsEnabled) FoldLauncherColors.CyanGlow else surfaceColor
+                    )
+                    .border(
+                        1.dp,
+                        if (hingeHapticsEnabled) FoldLauncherColors.ElectricCyan else FoldLauncherColors.GlassBorder,
+                        RoundedCornerShape(14.dp)
+                    )
+                    .clickable(onClick = onToggleHingeHaptics)
+                    .padding(horizontal = 11.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = if (hingeHapticsEnabled) "📳 Haptics: ON" else "📳 Haptics: OFF",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (hingeHapticsEnabled) FoldLauncherColors.CyanBright else FoldLauncherColors.TextSecondary
+                )
+            }
+        }
+
+        // v0.4.0 Fold-Close Action Mode Pill
+        if (onCycleFoldCloseActionMode != null) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(surfaceColor)
+                    .border(1.dp, FoldLauncherColors.ElectricCyan.copy(alpha = 0.55f), RoundedCornerShape(14.dp))
+                    .clickable(onClick = onCycleFoldCloseActionMode)
+                    .padding(horizontal = 11.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = foldCloseModeLabel,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = FoldLauncherColors.CyanBright
                 )
             }
         }
@@ -583,6 +684,12 @@ fun CoverOrSlabHomeScreen(
     onToggleDualScreenPresentation: (() -> Unit)? = null,
     isKeyguardLocked: Boolean = false,
     onUnlockAndSplitVcTermux: (() -> Unit)? = null,
+    pinnedDockPackages: Set<String> = emptySet(),
+    onTogglePinDockPackage: ((String) -> Unit)? = null,
+    hingeHapticsEnabled: Boolean = true,
+    onToggleHingeHaptics: (() -> Unit)? = null,
+    foldCloseModeLabel: String = "📱 Keep Cover Awake",
+    onCycleFoldCloseActionMode: (() -> Unit)? = null,
     allApps: List<AppEntry>,
     pinnedCoverApps: List<AppEntry>,
     dockApps: List<AppEntry>,
@@ -696,7 +803,7 @@ fun CoverOrSlabHomeScreen(
                 modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.7f)
             )
 
-            // v0.3.0 Workspace Profile Pill Bar + Hardware Torch & Lock Cockpit Controls
+            // v0.4.0 Workspace Profile Pill Bar + Hardware Torch, Haptics, Fold-Close & Lock Cockpit Controls
             WorkspaceProfilePillBar(
                 workspaceProfile = workspaceProfile,
                 onSelectWorkspaceProfile = { profile ->
@@ -708,7 +815,11 @@ fun CoverOrSlabHomeScreen(
                 onToggleDualScreenPresentation = onToggleDualScreenPresentation,
                 isKeyguardLocked = isKeyguardLocked,
                 showLockCockpit = showLockCockpit,
-                onToggleLockCockpit = { showLockCockpit = !showLockCockpit }
+                onToggleLockCockpit = { showLockCockpit = !showLockCockpit },
+                hingeHapticsEnabled = hingeHapticsEnabled,
+                onToggleHingeHaptics = onToggleHingeHaptics,
+                foldCloseModeLabel = foldCloseModeLabel,
+                onCycleFoldCloseActionMode = onCycleFoldCloseActionMode
             )
 
             if (isKeyguardLocked || showLockCockpit) {
@@ -816,6 +927,22 @@ fun CoverOrSlabHomeScreen(
                                 onLaunchAppPair = onLaunchAppPair,
                                 modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.95f)
                             )
+                            SystemQuickTileWidget(
+                                isAccessibilityActive = isAccessibilityActive,
+                                isWriteSecureSettingsGranted = isWriteSecureSettingsGranted,
+                                lockScreenRotationEnabled = lockScreenRotationEnabled,
+                                onToggleLockRotation = onToggleLockRotation,
+                                onEnforceGboardDeX = onEnforceGboardDeX,
+                                onLockScreenNow = onLockScreenNow,
+                                onOpenWallpaperPicker = onOpenWallpaperPicker,
+                                onOpenDefaultLauncherPrompt = onOpenDefaultLauncherPrompt,
+                                isDefaultLauncher = isDefaultLauncher,
+                                hingeHapticsEnabled = hingeHapticsEnabled,
+                                foldCloseModeLabel = foldCloseModeLabel,
+                                onToggleHingeHaptics = { onToggleHingeHaptics?.invoke() },
+                                onCycleFoldCloseMode = { onCycleFoldCloseActionMode?.invoke() },
+                                modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.88f)
+                            )
                         } else {
                             NativeDashboardCards(
                                 postureState = postureState,
@@ -840,7 +967,11 @@ fun CoverOrSlabHomeScreen(
                                 onToggleRadialArc = {
                                     arcStartExpanded = true
                                     arcTriggerGeneration++
-                                }
+                                },
+                                hingeHapticsEnabled = hingeHapticsEnabled,
+                                foldCloseModeLabel = foldCloseModeLabel,
+                                onToggleHingeHaptics = { onToggleHingeHaptics?.invoke() },
+                                onCycleFoldCloseMode = { onCycleFoldCloseActionMode?.invoke() }
                             )
                         }
                     }
@@ -914,13 +1045,14 @@ fun CoverOrSlabHomeScreen(
                         items = filteredApps,
                         key = { "${it.packageName}/${it.activityName}" }
                     ) { app ->
-                        AppIconTile(
+                        DrawerAppTileWithDockPin(
                             app = app,
+                            isDockPinned = app.isDockPinned || app.packageName in pinnedDockPackages,
                             iconShapePreset = iconShapePreset,
-                            showLabel = true,
                             compact = false,
                             onClick = { onAppClick(app) },
-                            onLongClick = { onAppLongClick(app) }
+                            onLongClick = { onAppLongClick(app) },
+                            onTogglePinDock = { onTogglePinDockPackage?.invoke(app.packageName) }
                         )
                     }
                 }
@@ -991,6 +1123,12 @@ fun UnfoldedInnerDashboardScreen(
     onToggleDualScreenPresentation: (() -> Unit)? = null,
     isKeyguardLocked: Boolean = false,
     onUnlockAndSplitVcTermux: (() -> Unit)? = null,
+    pinnedDockPackages: Set<String> = emptySet(),
+    onTogglePinDockPackage: ((String) -> Unit)? = null,
+    hingeHapticsEnabled: Boolean = true,
+    onToggleHingeHaptics: (() -> Unit)? = null,
+    foldCloseModeLabel: String = "📱 Keep Cover Awake",
+    onCycleFoldCloseActionMode: (() -> Unit)? = null,
     allApps: List<AppEntry>,
     pinnedInnerApps: List<AppEntry>,
     dockApps: List<AppEntry>,
@@ -1118,7 +1256,7 @@ fun UnfoldedInnerDashboardScreen(
                 modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.65f)
             )
 
-            // v0.3.0 Workspace Profile Pill Bar + Hardware Torch, Cover Mirror & Lock Cockpit
+            // v0.4.0 Workspace Profile Pill Bar + Hardware Torch, Cover Mirror, Haptics, Fold-Close & Lock Cockpit
             WorkspaceProfilePillBar(
                 workspaceProfile = workspaceProfile,
                 onSelectWorkspaceProfile = { profile ->
@@ -1130,7 +1268,11 @@ fun UnfoldedInnerDashboardScreen(
                 onToggleDualScreenPresentation = onToggleDualScreenPresentation,
                 isKeyguardLocked = isKeyguardLocked,
                 showLockCockpit = showLockCockpit,
-                onToggleLockCockpit = { showLockCockpit = !showLockCockpit }
+                onToggleLockCockpit = { showLockCockpit = !showLockCockpit },
+                hingeHapticsEnabled = hingeHapticsEnabled,
+                onToggleHingeHaptics = onToggleHingeHaptics,
+                foldCloseModeLabel = foldCloseModeLabel,
+                onCycleFoldCloseActionMode = onCycleFoldCloseActionMode
             )
 
             if (isKeyguardLocked || showLockCockpit) {
@@ -1217,6 +1359,22 @@ fun UnfoldedInnerDashboardScreen(
                             onLaunchAppPair = onLaunchAppPair,
                             modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 1.0f)
                         )
+                        SystemQuickTileWidget(
+                            isAccessibilityActive = isAccessibilityActive,
+                            isWriteSecureSettingsGranted = isWriteSecureSettingsGranted,
+                            lockScreenRotationEnabled = lockScreenRotationEnabled,
+                            onToggleLockRotation = onToggleLockRotation,
+                            onEnforceGboardDeX = onEnforceGboardDeX,
+                            onLockScreenNow = onLockScreenNow,
+                            onOpenWallpaperPicker = onOpenWallpaperPicker,
+                            onOpenDefaultLauncherPrompt = onOpenDefaultLauncherPrompt,
+                            isDefaultLauncher = isDefaultLauncher,
+                            hingeHapticsEnabled = hingeHapticsEnabled,
+                            foldCloseModeLabel = foldCloseModeLabel,
+                            onToggleHingeHaptics = { onToggleHingeHaptics?.invoke() },
+                            onCycleFoldCloseMode = { onCycleFoldCloseActionMode?.invoke() },
+                            modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.92f)
+                        )
                     } else {
                         NativeDashboardCards(
                             postureState = postureState,
@@ -1241,7 +1399,11 @@ fun UnfoldedInnerDashboardScreen(
                             onToggleRadialArc = {
                                 arcStartExpanded = true
                                 arcTriggerGeneration++
-                            }
+                            },
+                            hingeHapticsEnabled = hingeHapticsEnabled,
+                            foldCloseModeLabel = foldCloseModeLabel,
+                            onToggleHingeHaptics = { onToggleHingeHaptics?.invoke() },
+                            onCycleFoldCloseMode = { onCycleFoldCloseActionMode?.invoke() }
                         )
                     }
 
@@ -1397,13 +1559,14 @@ fun UnfoldedInnerDashboardScreen(
                                 items = filteredApps,
                                 key = { "${it.packageName}/${it.activityName}" }
                             ) { app ->
-                                AppIconTile(
+                                DrawerAppTileWithDockPin(
                                     app = app,
+                                    isDockPinned = app.isDockPinned || app.packageName in pinnedDockPackages,
                                     iconShapePreset = iconShapePreset,
-                                    showLabel = true,
                                     compact = false,
                                     onClick = { onAppClick(app) },
-                                    onLongClick = { onAppLongClick(app) }
+                                    onLongClick = { onAppLongClick(app) },
+                                    onTogglePinDock = { onTogglePinDockPackage?.invoke(app.packageName) }
                                 )
                             }
                         }
@@ -1476,6 +1639,12 @@ fun FlexTabletopHomeScreen(
     onToggleDualScreenPresentation: (() -> Unit)? = null,
     isKeyguardLocked: Boolean = false,
     onUnlockAndSplitVcTermux: (() -> Unit)? = null,
+    pinnedDockPackages: Set<String> = emptySet(),
+    onTogglePinDockPackage: ((String) -> Unit)? = null,
+    hingeHapticsEnabled: Boolean = true,
+    onToggleHingeHaptics: (() -> Unit)? = null,
+    foldCloseModeLabel: String = "📱 Keep Cover Awake",
+    onCycleFoldCloseActionMode: (() -> Unit)? = null,
     allApps: List<AppEntry>,
     favoriteApps: List<AppEntry>,
     dockApps: List<AppEntry>,
@@ -1590,7 +1759,11 @@ fun FlexTabletopHomeScreen(
                 onToggleDualScreenPresentation = onToggleDualScreenPresentation,
                 isKeyguardLocked = isKeyguardLocked,
                 showLockCockpit = showLockCockpit,
-                onToggleLockCockpit = { showLockCockpit = !showLockCockpit }
+                onToggleLockCockpit = { showLockCockpit = !showLockCockpit },
+                hingeHapticsEnabled = hingeHapticsEnabled,
+                onToggleHingeHaptics = onToggleHingeHaptics,
+                foldCloseModeLabel = foldCloseModeLabel,
+                onCycleFoldCloseActionMode = onCycleFoldCloseActionMode
             )
 
             if (isKeyguardLocked || showLockCockpit) {
@@ -1662,6 +1835,22 @@ fun FlexTabletopHomeScreen(
                     onLaunchAppPair = onLaunchAppPair,
                     modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.95f)
                 )
+                SystemQuickTileWidget(
+                    isAccessibilityActive = isAccessibilityActive,
+                    isWriteSecureSettingsGranted = isWriteSecureSettingsGranted,
+                    lockScreenRotationEnabled = lockScreenRotationEnabled,
+                    onToggleLockRotation = onToggleLockRotation,
+                    onEnforceGboardDeX = onEnforceGboardDeX,
+                    onLockScreenNow = onLockScreenNow,
+                    onOpenWallpaperPicker = onOpenWallpaperPicker,
+                    onOpenDefaultLauncherPrompt = onOpenDefaultLauncherPrompt,
+                    isDefaultLauncher = isDefaultLauncher,
+                    hingeHapticsEnabled = hingeHapticsEnabled,
+                    foldCloseModeLabel = foldCloseModeLabel,
+                    onToggleHingeHaptics = { onToggleHingeHaptics?.invoke() },
+                    onCycleFoldCloseMode = { onCycleFoldCloseActionMode?.invoke() },
+                    modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.88f)
+                )
             } else {
                 NativeDashboardCards(
                     postureState = postureState,
@@ -1682,7 +1871,11 @@ fun FlexTabletopHomeScreen(
                     customAppPairs = appPairs,
                     onLaunchAppPair = onLaunchAppPair,
                     spatialTiltState = spatialTilt,
-                    onOpenSpotlight = onOpenSearch
+                    onOpenSpotlight = onOpenSearch,
+                    hingeHapticsEnabled = hingeHapticsEnabled,
+                    foldCloseModeLabel = foldCloseModeLabel,
+                    onToggleHingeHaptics = { onToggleHingeHaptics?.invoke() },
+                    onCycleFoldCloseMode = { onCycleFoldCloseActionMode?.invoke() }
                 )
             }
         }
@@ -1788,13 +1981,14 @@ fun FlexTabletopHomeScreen(
                         items = filteredDeckApps,
                         key = { "${it.packageName}/${it.activityName}" }
                     ) { app ->
-                        AppIconTile(
+                        DrawerAppTileWithDockPin(
                             app = app,
+                            isDockPinned = app.isDockPinned || app.packageName in pinnedDockPackages,
                             iconShapePreset = iconShapePreset,
-                            showLabel = true,
                             compact = true,
                             onClick = { onAppClick(app) },
-                            onLongClick = { onAppLongClick(app) }
+                            onLongClick = { onAppLongClick(app) },
+                            onTogglePinDock = { onTogglePinDockPackage?.invoke(app.packageName) }
                         )
                     }
                 }

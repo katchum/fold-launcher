@@ -23,7 +23,6 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.util.TypedValue
-import android.view.Display
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -31,6 +30,8 @@ import android.view.accessibility.AccessibilityEvent
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.xsun.foldlauncher.display.DualScreenPresentationController
+import com.xsun.foldlauncher.posture.FoldCloseActionMode
+import com.xsun.foldlauncher.posture.HingeDetentTick
 import com.xsun.foldlauncher.posture.PostureClassifier
 import com.xsun.foldlauncher.vc.VcBackgroundMonitor
 import com.xsun.foldlauncher.vc.VcPackages
@@ -51,7 +52,8 @@ import kotlin.math.roundToInt
  *    launcher's VC background monitor knows when `dev.agentconversation.vci` or
  *    `dev.agentconversation.preview` is in the foreground vs. background.
  * 2. Streams the Z Fold 8 hardware hinge angle sensor (`Sensor.TYPE_HINGE_ANGLE = 36`, `0°..180°`)
- *    into `hingeAngleFlow` for the Floating Micro-HUD Pill and posture engine.
+ *    into `hingeAngleFlow`, firing mechanical watch-crown haptic ticks (`15°` detents & major
+ *    posture thresholds) and executing the user's `FoldCloseActionMode` when folded shut.
  * 3. Renders a high-contrast `TYPE_ACCESSIBILITY_OVERLAY` Lock-Screen HUD Pill with
  *    `FLAG_SHOW_WHEN_LOCKED` on `ACTION_SCREEN_ON` when `KeyguardManager.isKeyguardLocked` is true
  *    (or launches `MainActivity` in Show-When-Locked Cockpit mode if `autoCockpitOnWake` is enabled).
@@ -78,12 +80,15 @@ class FoldAccessibilityService : AccessibilityService() {
     private var lockHudClockText: TextView? = null
     private var lockHudMetaText: TextView? = null
 
+    private var lastDetentReferenceAngle: Float? = null
+
     var autoGuardDexKeyboard: Boolean = true
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         loadLockHudPreferences(this)
+        SystemTweaker.loadHingePreferences(this)
         registerImeGuardObserver()
         registerHingeAngleSensor()
         registerScreenLockReceiver()
@@ -385,6 +390,21 @@ class FoldAccessibilityService : AccessibilityService() {
                 val clamped = raw.coerceIn(0f, 180f)
                 val current = _hingeAngleFlow.value
                 if (current == null || abs(clamped - current) >= 0.5f) {
+                    val refAngle = lastDetentReferenceAngle ?: current
+                    if (refAngle != null) {
+                        val tick = PostureClassifier.computeHingeDetentCrossed(refAngle, clamped)
+                        if (tick != HingeDetentTick.NONE) {
+                            lastDetentReferenceAngle = clamped
+                            SystemTweaker.triggerHingeDetentHaptic(this@FoldAccessibilityService, tick)
+                        }
+                        if (PostureClassifier.isFoldCloseTransition(refAngle, clamped)) {
+                            lastDetentReferenceAngle = clamped
+                            SystemTweaker.executeFoldCloseAction(this@FoldAccessibilityService)
+                        }
+                    } else {
+                        lastDetentReferenceAngle = clamped
+                    }
+
                     _hingeAngleFlow.value = clamped
                     if (lockHudView != null) {
                         updateLockHudText()
@@ -414,6 +434,7 @@ class FoldAccessibilityService : AccessibilityService() {
         }
         sensorManager = null
         hingeSensorListener = null
+        lastDetentReferenceAngle = null
     }
 
     private fun registerImeGuardObserver() {
@@ -495,11 +516,26 @@ class FoldAccessibilityService : AccessibilityService() {
         private val _autoCockpitOnWake = MutableStateFlow(false)
         val autoCockpitOnWake: StateFlow<Boolean> = _autoCockpitOnWake.asStateFlow()
 
+        val hingeDetentHapticsEnabled: StateFlow<Boolean>
+            get() = SystemTweaker.hingeDetentHapticsEnabled
+
+        val foldCloseActionMode: StateFlow<FoldCloseActionMode>
+            get() = SystemTweaker.foldCloseActionMode
+
+        fun setHingeDetentHapticsEnabled(context: Context, enabled: Boolean) {
+            SystemTweaker.setHingeDetentHapticsEnabled(context, enabled)
+        }
+
+        fun setFoldCloseActionMode(context: Context, mode: FoldCloseActionMode) {
+            SystemTweaker.setFoldCloseActionMode(context, mode)
+        }
+
         fun loadLockHudPreferences(context: Context) {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             _lockScreenHudEnabled.value = prefs.getBoolean(KEY_LOCK_HUD_ENABLED, true)
             _alwaysShowMicroHud.value = prefs.getBoolean(KEY_ALWAYS_MICRO_HUD, false)
             _autoCockpitOnWake.value = prefs.getBoolean(KEY_AUTO_COCKPIT_ON_WAKE, false)
+            SystemTweaker.loadHingePreferences(context)
         }
 
         fun setLockScreenHudEnabled(context: Context, enabled: Boolean) {

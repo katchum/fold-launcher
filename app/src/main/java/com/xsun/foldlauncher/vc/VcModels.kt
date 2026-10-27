@@ -229,6 +229,53 @@ data class VcAgentStatus(
 }
 
 /**
+ * Multi-agent squad telemetry breakdown across active VC sessions (`v0.4.0`).
+ */
+data class VcSquadTelemetry(
+    val workingCount: Int = 0,
+    val completedCount: Int = 0,
+    val waitingApprovalCount: Int = 0,
+    val errorCount: Int = 0,
+    val totalCount: Int = 0
+) {
+    val hasSessions: Boolean
+        get() = totalCount > 0
+
+    val summaryLine: String
+        get() = buildString {
+            append("🟢 $workingCount Working • ✅ $completedCount Idle/Done • ⚠️ $waitingApprovalCount Approval")
+            if (errorCount > 0) {
+                append(" • ❌ $errorCount Failed")
+            }
+        }
+}
+
+/**
+ * Pure helper computing [VcSquadTelemetry] from a list of [VcAgentStatus] sessions.
+ */
+fun computeSquadTelemetry(agents: List<VcAgentStatus>): VcSquadTelemetry {
+    var working = 0
+    var completed = 0
+    var waitingApproval = 0
+    var errors = 0
+    for (agent in agents) {
+        when {
+            agent.needsApproval || agent.state == VcRunState.AWAITING_APPROVAL -> waitingApproval++
+            agent.isFailed || agent.state == VcRunState.FAILED -> errors++
+            agent.isWorking || agent.state == VcRunState.WORKING -> working++
+            else -> completed++
+        }
+    }
+    return VcSquadTelemetry(
+        workingCount = working,
+        completedCount = completed,
+        waitingApprovalCount = waitingApproval,
+        errorCount = errors,
+        totalCount = agents.size
+    )
+}
+
+/**
  * Immutable live summary of the VC host for the Launcher UI (`VcCommandCenterCard`)
  * and `VcBackgroundMonitor`.
  */
@@ -274,6 +321,59 @@ data class VcLiveSummary(
     fun resolvePinnedAgent(overridePinnedSessionId: String? = pinnedSessionId): VcAgentStatus? {
         val pinId = overridePinnedSessionId?.takeIf { it.isNotBlank() } ?: return null
         return activeAgents.firstOrNull { it.sessionId == pinId }
+    }
+
+    val squadTelemetry: VcSquadTelemetry
+        get() = if (activeAgents.isNotEmpty()) {
+            computeSquadTelemetry(activeAgents)
+        } else {
+            val total = totalSessions
+            val done = (total - workingCount - approvalCount - failedCount).coerceAtLeast(0)
+            VcSquadTelemetry(
+                workingCount = workingCount,
+                completedCount = done,
+                waitingApprovalCount = approvalCount,
+                errorCount = failedCount,
+                totalCount = total
+            )
+        }
+
+    fun computeSquadTelemetry(agents: List<VcAgentStatus> = activeAgents): VcSquadTelemetry {
+        return com.xsun.foldlauncher.vc.computeSquadTelemetry(agents)
+    }
+
+    fun buildMarkdownStatusSnippet(): String {
+        val telemetry = squadTelemetry
+        return buildString {
+            appendLine("### VC Squad Status (${selectedVariant.shortBadge})")
+            appendLine("- **Summary**: $headlineSummary")
+            appendLine("- **Squad**: ${telemetry.summaryLine} (Total: ${telemetry.totalCount})")
+            if (activeAgents.isNotEmpty()) {
+                appendLine("- **Active Sessions**:")
+                for (agent in activeAgents.take(8)) {
+                    val stateIcon = when {
+                        agent.needsApproval -> "⚠️"
+                        agent.isWorking -> "🟢"
+                        agent.isFailed -> "❌"
+                        else -> "✅"
+                    }
+                    val pinTag = if (agent.sessionId == pinnedSessionId) " 📌" else ""
+                    appendLine("  - $stateIcon **${agent.name}** (${agent.project} · ${agent.role})$pinTag — `${agent.status}`")
+                }
+            }
+            if (attentionItems.isNotEmpty()) {
+                appendLine("- **Top Attention**:")
+                for (item in attentionItems.take(3)) {
+                    appendLine("  - [${item.kind.label}] **${item.agentName}**: ${item.text}")
+                }
+            }
+        }.trim()
+    }
+
+    companion object {
+        fun computeSquadTelemetry(agents: List<VcAgentStatus>): VcSquadTelemetry {
+            return com.xsun.foldlauncher.vc.computeSquadTelemetry(agents)
+        }
     }
 
     val hasUrgentAttention: Boolean

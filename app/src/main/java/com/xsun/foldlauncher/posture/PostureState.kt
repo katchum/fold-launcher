@@ -49,6 +49,30 @@ enum class PostureOverride(val displayName: String, val shortLabel: String) {
     TENT_MODE("Tent Standby", "TENT")
 }
 
+/**
+ * Mechanical watch-crown haptic detent tick classifications when sweeping the Z Fold 8 hinge (`0°..180°`).
+ */
+enum class HingeDetentTick(val label: String, val isMajorPostureThreshold: Boolean) {
+    NONE("None", false),
+    MINOR_15_DEG("15° Micro-Tick", false),
+    MAJOR_POSTURE_THRESHOLD("Posture Threshold Click", true)
+}
+
+/**
+ * Configurable behavior executed when the Z Fold 8 hinge closes (`> 8° -> <= 8°`).
+ */
+enum class FoldCloseActionMode(val label: String, val badge: String, val description: String) {
+    STAY_AWAKE_COVER("Keep Cover Awake", "📱", "Continue seamlessly on Z Fold 8 Cover Screen"),
+    AUTO_VC_VOICE("Auto-Talk to VC", "🎙️", "Launch VC Hands-Free Voice when folded shut"),
+    TENT_STANDBY("OLED Standby", "⛺", "Show low-power AMOLED clock HUD"),
+    INSTANT_LOCK("Instant Lock", "🔒", "Lock device immediately on fold close");
+
+    fun next(): FoldCloseActionMode {
+        val entries = values()
+        return entries[(ordinal + 1) % entries.size]
+    }
+}
+
 data class FoldingStateSnapshot(
     val isHalfOpened: Boolean = false,
     val isHorizontalHinge: Boolean = true,
@@ -124,6 +148,66 @@ object PostureClassifier {
     const val UNFOLDED_MIN_SMALLEST_WIDTH_DP = 580
     const val UNFOLDED_MIN_WIDTH_DP = 600
     const val TYPE_HINGE_ANGLE_SENSOR = 36
+
+    private val MAJOR_POSTURE_THRESHOLDS_DEG = floatArrayOf(15f, 75f, 155f)
+    private const val DETENT_HYSTERESIS_DEG = 1.5f
+
+    /**
+     * Pure mechanical watch-crown detent detector for the Z Fold 8 hinge (`0°..180°`).
+     *
+     * - Returns [HingeDetentTick.MAJOR_POSTURE_THRESHOLD] when crossing `15°` (Fold/Tent),
+     *   `75°` (Tent/Flex), or `155°` (Flex/Expanded) with at least `1.5°` delta.
+     * - Returns [HingeDetentTick.MINOR_15_DEG] when crossing any other `stepDegrees` (`15°`)
+     *   multiple (`30°`, `45°`, `60°`, `90°`, `105°`, `120°`, `135°`, `150°`, `165°`).
+     * - Returns [HingeDetentTick.NONE] otherwise.
+     */
+    fun computeHingeDetentCrossed(
+        previousAngleDeg: Float,
+        currentAngleDeg: Float,
+        stepDegrees: Int = 15
+    ): HingeDetentTick {
+        if (stepDegrees <= 0) return HingeDetentTick.NONE
+        val prev = previousAngleDeg.coerceIn(0f, 180f)
+        val curr = currentAngleDeg.coerceIn(0f, 180f)
+        if (abs(curr - prev) < DETENT_HYSTERESIS_DEG) return HingeDetentTick.NONE
+
+        for (majorThreshold in MAJOR_POSTURE_THRESHOLDS_DEG) {
+            if (crossedThreshold(prev, curr, majorThreshold)) {
+                return HingeDetentTick.MAJOR_POSTURE_THRESHOLD
+            }
+        }
+
+        var angle = stepDegrees
+        while (angle < 180) {
+            val threshold = angle.toFloat()
+            if (MAJOR_POSTURE_THRESHOLDS_DEG.none { abs(it - threshold) < 0.1f }) {
+                if (crossedThreshold(prev, curr, threshold)) {
+                    return HingeDetentTick.MINOR_15_DEG
+                }
+            }
+            angle += stepDegrees
+        }
+
+        return HingeDetentTick.NONE
+    }
+
+    /**
+     * Returns true when the hinge closes across `closeThresholdDeg` (default `8°`).
+     */
+    fun isFoldCloseTransition(
+        previousAngleDeg: Float,
+        currentAngleDeg: Float,
+        closeThresholdDeg: Float = 8f
+    ): Boolean {
+        return previousAngleDeg > closeThresholdDeg &&
+            currentAngleDeg <= closeThresholdDeg &&
+            (previousAngleDeg - currentAngleDeg) >= DETENT_HYSTERESIS_DEG
+    }
+
+    private fun crossedThreshold(prev: Float, curr: Float, threshold: Float): Boolean {
+        return (prev < threshold && curr >= threshold) ||
+            (prev > threshold && curr <= threshold)
+    }
 
     /**
      * Snapshot-based classification overload supporting hardware hinge sensor (`0°..180°`)
@@ -329,6 +413,16 @@ object PostureClassifier {
         )
     }
 }
+
+fun computeHingeDetentCrossed(
+    previousAngleDeg: Float,
+    currentAngleDeg: Float,
+    stepDegrees: Int = 15
+): HingeDetentTick = PostureClassifier.computeHingeDetentCrossed(
+    previousAngleDeg = previousAngleDeg,
+    currentAngleDeg = currentAngleDeg,
+    stepDegrees = stepDegrees
+)
 
 @Composable
 fun rememberHingeAngleDegrees(): Float? {

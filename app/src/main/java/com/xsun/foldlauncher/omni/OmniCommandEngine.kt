@@ -61,7 +61,7 @@ import org.json.JSONObject
 
 /**
  * Target system, hardware torch, dual-screen presentation, workspace profile, posture simulator,
- * or launcher toggle triggered by a `> ...` or `posture: ...` Omni-Command.
+ * hinge haptics, fold-close action, or launcher toggle triggered by a `> ...` or `posture: ...` Omni-Command.
  */
 enum class SystemToggleTarget(val defaultActionId: String) {
     DEX_GBOARD("dex_gboard"),
@@ -78,7 +78,9 @@ enum class SystemToggleTarget(val defaultActionId: String) {
     POSTURE_AUTO("posture_auto"),
     TOGGLE_TORCH("toggle_torch"),
     TOGGLE_COVER_PRESENTATION("toggle_cover_presentation"),
-    SWITCH_WORKSPACE_PROFILE("switch_workspace_profile")
+    SWITCH_WORKSPACE_PROFILE("switch_workspace_profile"),
+    TOGGLE_HINGE_HAPTICS("toggle_hinge_haptics"),
+    SET_FOLD_CLOSE_ACTION("set_fold_close_action")
 }
 
 /**
@@ -134,7 +136,7 @@ sealed class OmniAction {
 
     /**
      * Executes a live system/DeX setting tweak, hardware torch toggle, Z Fold 8 dual-screen cover presentation,
-     * workspace profile switch, posture simulator override, or launcher overlay toggle.
+     * workspace profile switch, hinge haptics toggle, fold-close action, posture simulator override, or launcher overlay toggle.
      */
     data class SystemCommand(
         val target: SystemToggleTarget,
@@ -148,12 +150,37 @@ sealed class OmniAction {
         val actionType: SystemActionType get() = target
         val type: SystemActionType get() = target
         val profileKey: String get() = parameter
+        val foldCloseMode: String get() = parameter
         val desiredTorchState: Boolean?
             get() = when (parameter.lowercase(Locale.US)) {
                 "on", "true", "1" -> true
                 "off", "false", "0" -> false
                 else -> null
             }
+    }
+
+    /**
+     * Dispatches a shell command snippet to Termux (`termux: <cmd>`, `sh: <cmd>`, or `termux-split: <cmd>`),
+     * copying [shellCommand] to the clipboard and launching `com.termux` (or `VC + Termux` split-screen when [openSplitWithVc] is true).
+     */
+    data class TermuxCommand(
+        val shellCommand: String,
+        val openSplitWithVc: Boolean = false
+    ) : OmniAction() {
+        val command: String get() = shellCommand
+        override val title: String =
+            if (shellCommand.isBlank()) {
+                if (openSplitWithVc) "Launch VC + Termux Split-Screen" else "Open Termux Console"
+            } else {
+                if (openSplitWithVc) "Termux Split (VC + Termux): $shellCommand"
+                else "Termux Shell: $shellCommand"
+            }
+        override val subtitle: String =
+            if (openSplitWithVc) "Copies command to clipboard & launches VC + Termux (${OmniCommandEngine.TERMUX_PACKAGE}) 50/50"
+            else "Copies command to clipboard & launches Termux (${OmniCommandEngine.TERMUX_PACKAGE})"
+        override val badge: String = if (openSplitWithVc) "TERMUX SPLIT" else "TERMUX SHELL"
+        override val copyText: String = shellCommand
+        override val actionId: String = if (openSplitWithVc) "termux_split_command" else "termux_command"
     }
 
     /**
@@ -221,7 +248,7 @@ sealed class OmniAction {
     /**
      * Quick VC Macro Command (`vc: status`, `vc: approve`, `vc: ship`, `vc: test`).
      * Subclasses [SendToVc] so existing `is OmniAction.SendToVc` handlers automatically dispatch [promptText]
-     * while callers matching `is OmniCommandResult.VcQuickMacro` or `is OmniAction.VcQuickMacro` can inspect [macroKey].
+     * while callers matching `is OmniAction.VcQuickMacro` can inspect [macroKey].
      */
     class VcQuickMacro(
         override val macroKey: String,
@@ -376,6 +403,12 @@ object OmniCommandEngine {
     private val PROFILE_PREFIX_REGEX =
         Regex("^profile(?:\\s*:\\s*|\\s+)(.*)$", RegexOption.IGNORE_CASE)
 
+    private val FOLD_PREFIX_REGEX =
+        Regex("^fold(?:\\s*:\\s*|\\s+)(stay|voice|tent|lock)$", RegexOption.IGNORE_CASE)
+
+    private val TERMUX_COMMAND_REGEX =
+        Regex("^(termux-split|sh-split|tty-split|termux|sh|tty)\\s*:\\s*(.*)$", RegexOption.IGNORE_CASE)
+
     private val VC_COMMAND_REGEX =
         Regex("^(?:vc\\s*:\\s*|@vc\\s*:?\\s*|vc\\s+)(.*)$", RegexOption.IGNORE_CASE)
 
@@ -438,31 +471,41 @@ object OmniCommandEngine {
 
         val results = mutableListOf<OmniAction>()
 
-        // 1. Live System, DeX Tweaker, Torch, Dual-Screen Presentation, Workspace Profile & Posture Commands
-        if (trimmed.startsWith(">") || POSTURE_PREFIX_REGEX.matches(trimmed) || PROFILE_PREFIX_REGEX.matches(trimmed)) {
+        // 1. Live System, DeX Tweaker, Torch, Dual-Screen Presentation, Workspace Profile, Hinge Haptics, Fold-Close & Posture Commands
+        if (trimmed.startsWith(">") ||
+            POSTURE_PREFIX_REGEX.matches(trimmed) ||
+            PROFILE_PREFIX_REGEX.matches(trimmed) ||
+            FOLD_PREFIX_REGEX.matches(trimmed)
+        ) {
             results.addAll(parseSystemCommands(trimmed))
             return results
         }
 
-        // 2. Ad-Hoc Split-Screen App Pair Command (`split: <app1> + <app2>` or `<app1> | <app2>`)
+        // 2. Termux / ADB Shell Snippet Dispatcher (`termux: <cmd>`, `sh: <cmd>`, `termux-split: <cmd>`)
+        parseTermuxCommand(trimmed)?.let { termuxAction ->
+            results.add(termuxAction)
+            return results
+        }
+
+        // 3. Ad-Hoc Split-Screen App Pair Command (`split: <app1> + <app2>` or `<app1> | <app2>`)
         parseSplitCommand(trimmed, installedApps)?.let { splitAction ->
             results.add(splitAction)
             return results
         }
 
-        // 3. VC Agent Direct Dispatch & VC Quick Macros (`vc: status`, `vc: approve`, `vc: ship`, `vc: test`, `vc: <prompt>`)
+        // 4. VC Agent Direct Dispatch & VC Quick Macros (`vc: status`, `vc: approve`, `vc: ship`, `vc: test`, `vc: <prompt>`)
         parseVcCommand(trimmed)?.let { vcAction ->
             results.add(vcAction)
             return results
         }
 
-        // 4. Clipboard Vault Filter (`clip: <search>`)
+        // 5. Clipboard Vault Filter (`clip: <search>`)
         parseClipboardQuery(trimmed, clipboardItems)?.let { clipAction ->
             results.add(clipAction)
             return results
         }
 
-        // 5. Developer & Unit Conversions (Hex/Dec/Bin/RGB, Epoch, px@dpi / 2448x1848@420dpi, km/mi, kg/lb, C/F, Base64)
+        // 6. Developer & Unit Conversions (Hex/Dec/Bin/RGB, Epoch, px@dpi / 2448x1848@420dpi, km/mi, kg/lb, C/F, Base64)
         evaluateDeveloperQuery(trimmed, nowEpochMs)?.let { devAction ->
             results.add(devAction)
         }
@@ -549,13 +592,11 @@ object OmniCommandEngine {
         apps: List<AppEntry>,
         excludePackage: String?
     ): AppEntry? {
-        // 1. Check built-in Z Fold 8 Multi-VC / Termux / Chrome aliases first
         val aliasApp = resolveAppAlias(token, apps)
         if (aliasApp != null && (excludePackage == null || aliasApp.packageName != excludePackage)) {
             return aliasApp
         }
 
-        // 2. Fuzzy-match against installedApps via SearchEngine
         if (apps.isNotEmpty()) {
             val candidates = SearchEngine.rankApps(apps, token, limit = 5)
             val chosen = if (excludePackage != null) {
@@ -573,14 +614,19 @@ object OmniCommandEngine {
      * Parses `> ...` live system & DeX tweaker commands, hardware torch (`> torch`, `> flashlight`,
      * `> light on`, `> light off`), Z Fold 8 dual-screen cover presentation (`> dual`, `> cover hud`,
      * `> presentation`), workspace profile switcher (`> profile all`, `> profile vc`, `> profile focus`,
-     * `> profile oled`), and posture simulator commands (`> posture ...` / `posture: ...`).
+     * `> profile oled`), Z Fold 8 hinge haptics (`> haptics`, `> hinge haptics`, `> detents`),
+     * fold-close actions (`> fold stay`, `> fold voice`, `> fold tent`, `> fold lock`),
+     * and posture simulator commands (`> posture ...` / `posture: ...`).
      */
     fun parseSystemCommands(rawQuery: String): List<OmniAction.SystemCommand> {
         val trimmed = rawQuery.trim()
         val isChevron = trimmed.startsWith(">")
         val posturePrefixMatch = POSTURE_PREFIX_REGEX.matchEntire(trimmed)
         val profilePrefixMatch = PROFILE_PREFIX_REGEX.matchEntire(trimmed)
-        if (!isChevron && posturePrefixMatch == null && profilePrefixMatch == null) return emptyList()
+        val foldPrefixMatch = FOLD_PREFIX_REGEX.matchEntire(trimmed)
+        if (!isChevron && posturePrefixMatch == null && profilePrefixMatch == null && foldPrefixMatch == null) {
+            return emptyList()
+        }
 
         val coreSystemCommands = listOf(
             OmniAction.SystemCommand(
@@ -766,6 +812,55 @@ object OmniCommandEngine {
             )
         )
 
+        val hingeHapticsCmd = OmniAction.SystemCommand(
+            target = SystemToggleTarget.TOGGLE_HINGE_HAPTICS,
+            triggerCommand = "> haptics",
+            title = "Toggle Z Fold 8 Hinge Angle Haptic Detents",
+            subtitle = "Fires crisp tactile haptic clicks when crossing 90°, 115° Flex, and 180° Flat detents",
+            badge = "HINGE HAPTICS",
+            actionId = "toggle_hinge_haptics",
+            parameter = "toggle"
+        )
+
+        val foldCloseActionCommands = listOf(
+            OmniAction.SystemCommand(
+                target = SystemToggleTarget.SET_FOLD_CLOSE_ACTION,
+                triggerCommand = "> fold stay",
+                title = "Fold-Close Action: Keep Cover Screen Awake",
+                subtitle = "Continuity onto outer Cover Screen when folding Z Fold 8 shut (fold_close_stay)",
+                badge = "FOLD STAY",
+                actionId = "fold_close_stay",
+                parameter = "stay"
+            ),
+            OmniAction.SystemCommand(
+                target = SystemToggleTarget.SET_FOLD_CLOSE_ACTION,
+                triggerCommand = "> fold voice",
+                title = "Fold-Close Action: Launch VC Voice Talk on Fold",
+                subtitle = "Automatically starts hands-free VC Voice Talk when folding Z Fold 8 shut (fold_close_voice)",
+                badge = "FOLD VOICE",
+                actionId = "fold_close_voice",
+                parameter = "voice"
+            ),
+            OmniAction.SystemCommand(
+                target = SystemToggleTarget.SET_FOLD_CLOSE_ACTION,
+                triggerCommand = "> fold tent",
+                title = "Fold-Close Action: Enter Tent Standby HUD",
+                subtitle = "Switches to low-power OLED Tent Mode Standby HUD when folding (fold_close_tent)",
+                badge = "FOLD TENT",
+                actionId = "fold_close_tent",
+                parameter = "tent"
+            ),
+            OmniAction.SystemCommand(
+                target = SystemToggleTarget.SET_FOLD_CLOSE_ACTION,
+                triggerCommand = "> fold lock",
+                title = "Fold-Close Action: Lock Screen Immediately",
+                subtitle = "Locks the device immediately when folding Z Fold 8 shut (fold_close_lock)",
+                badge = "FOLD LOCK",
+                actionId = "fold_close_lock",
+                parameter = "lock"
+            )
+        )
+
         if (posturePrefixMatch != null) {
             val postureArg = posturePrefixMatch.groupValues[1].trim().lowercase(Locale.US)
             if (postureArg.isEmpty()) return postureCommands
@@ -776,6 +871,11 @@ object OmniCommandEngine {
             val profileArg = profilePrefixMatch.groupValues[1].trim().lowercase(Locale.US)
             if (profileArg.isEmpty()) return workspaceProfileCommands
             return matchWorkspaceProfileCommands(profileArg, workspaceProfileCommands)
+        }
+
+        if (foldPrefixMatch != null) {
+            val foldArg = foldPrefixMatch.groupValues[1].trim().lowercase(Locale.US)
+            return matchFoldCloseCommands(foldArg, foldCloseActionCommands)
         }
 
         val body = trimmed.removePrefix(">").trim().lowercase(Locale.US)
@@ -799,7 +899,25 @@ object OmniCommandEngine {
             return listOf(coverPresentationCmd)
         }
 
-        // 3. Workspace Profile Switcher Commands (`> profile all`, `> profile vc`, `> profile focus`, `> profile oled`)
+        // 3. Z Fold 8 Hinge Haptics & Detents Command (`> haptics`, `> hinge haptics`, `> detents`)
+        if (body == "haptics" ||
+            body == "hinge haptics" ||
+            body == "detents" ||
+            body == "hinge detents" ||
+            body == "haptic"
+        ) {
+            return listOf(hingeHapticsCmd)
+        }
+
+        // 4. Z Fold 8 Fold-Close Action Commands (`> fold stay`, `> fold voice`, `> fold tent`, `> fold lock`)
+        if (body.startsWith("fold ") || body.startsWith("fold:")) {
+            val sub = body.removePrefix("fold").removePrefix(":").trim()
+            if (sub.isEmpty()) return foldCloseActionCommands
+            val matchedFold = matchFoldCloseCommands(sub, foldCloseActionCommands)
+            if (matchedFold.isNotEmpty()) return matchedFold
+        }
+
+        // 5. Workspace Profile Switcher Commands (`> profile all`, `> profile vc`, `> profile focus`, `> profile oled`)
         if (body == "profile" || body == "profile:" || body == "profiles") {
             return workspaceProfileCommands
         }
@@ -810,7 +928,7 @@ object OmniCommandEngine {
             if (matchedProfile.isNotEmpty()) return matchedProfile
         }
 
-        // 4. Posture Simulator Commands (`> posture ...`, `> flex`, `> unfold`, `> tent`, `> cover`)
+        // 6. Posture Simulator Commands (`> posture ...`, `> flex`, `> unfold`, `> tent`, `> cover`)
         if (body == "posture" || body == "posture:") {
             return postureCommands
         }
@@ -836,7 +954,7 @@ object OmniCommandEngine {
         }
         if (directPostureMatch.isNotEmpty()) return directPostureMatch
 
-        // 5. Core System & DeX Tweaker Commands
+        // 7. Core System & DeX Tweaker Commands
         val exactFiltered = when {
             body == "dex gboard" || body == "gboard" || body == "dex ime" || body == "dex" || body == "ime" ->
                 coreSystemCommands.filter { it.target == SystemToggleTarget.DEX_GBOARD }
@@ -862,7 +980,8 @@ object OmniCommandEngine {
         if (exactFiltered.isNotEmpty()) return exactFiltered
 
         val allCommands = coreSystemCommands +
-            listOf(torchToggleCmd, torchOnCmd, torchOffCmd, coverPresentationCmd) +
+            listOf(torchToggleCmd, torchOnCmd, torchOffCmd, coverPresentationCmd, hingeHapticsCmd) +
+            foldCloseActionCommands +
             workspaceProfileCommands +
             postureCommands
 
@@ -871,6 +990,25 @@ object OmniCommandEngine {
                 cmd.title.lowercase(Locale.US).contains(body) ||
                 cmd.badge.lowercase(Locale.US).contains(body) ||
                 cmd.actionId.lowercase(Locale.US).contains(body)
+        }
+    }
+
+    private fun matchFoldCloseCommands(
+        query: String,
+        foldCommands: List<OmniAction.SystemCommand>
+    ): List<OmniAction.SystemCommand> {
+        val exact = when (query) {
+            "stay", "awake", "continue", "continuity" -> foldCommands.filter { it.parameter == "stay" }
+            "voice", "talk", "vc", "mic" -> foldCommands.filter { it.parameter == "voice" }
+            "tent", "standby", "hud" -> foldCommands.filter { it.parameter == "tent" }
+            "lock", "sleep", "off" -> foldCommands.filter { it.parameter == "lock" }
+            else -> emptyList()
+        }
+        if (exact.isNotEmpty()) return exact
+        return foldCommands.filter { cmd ->
+            cmd.parameter.contains(query) ||
+                cmd.title.lowercase(Locale.US).contains(query) ||
+                cmd.actionId.lowercase(Locale.US).contains(query)
         }
     }
 
@@ -919,7 +1057,27 @@ object OmniCommandEngine {
     }
 
     /**
-     * Parses `vc: status`, `vc: approve`, `vc: ship`, `vc: test` into [OmniCommandResult.VcQuickMacro],
+     * Parses `termux: <cmd>`, `sh: <cmd>`, `tty: <cmd>`, or `termux-split: <cmd>` into [OmniAction.TermuxCommand].
+     */
+    fun parseTermuxCommand(rawQuery: String): OmniAction.TermuxCommand? {
+        val trimmed = rawQuery.trim()
+        val match = TERMUX_COMMAND_REGEX.matchEntire(trimmed) ?: return null
+        val prefix = match.groupValues[1].lowercase(Locale.US)
+        val rawCmd = match.groupValues[2].trim()
+        val splitViaFlag = rawCmd.startsWith("--split ") || rawCmd.startsWith("!split ")
+        val openSplitWithVc = prefix.endsWith("-split") || splitViaFlag
+        val cleanedCmd = rawCmd
+            .removePrefix("--split ")
+            .removePrefix("!split ")
+            .trim()
+        return OmniAction.TermuxCommand(
+            shellCommand = cleanedCmd,
+            openSplitWithVc = openSplitWithVc
+        )
+    }
+
+    /**
+     * Parses `vc: status`, `vc: approve`, `vc: ship`, `vc: test` into [OmniAction.VcQuickMacro],
      * or general `vc: <prompt>` / `@vc <prompt>` into [OmniAction.SendToVc].
      */
     fun parseVcCommand(rawQuery: String): OmniAction.SendToVc? {
@@ -930,7 +1088,6 @@ object OmniCommandEngine {
         val match = VC_COMMAND_REGEX.matchEntire(trimmed) ?: return null
         val rawPrompt = match.groupValues[1].trim()
 
-        // Check built-in VC Quick Macros (`vc: status`, `vc: approve`, `vc: ship`, `vc: test`)
         val macroKeyCandidate = rawPrompt.lowercase(Locale.US)
         val macroPrompt = VC_QUICK_MACROS[macroKeyCandidate]
         if (macroPrompt != null) {
@@ -1019,19 +1176,10 @@ object OmniCommandEngine {
         val trimmed = rawQuery.trim()
         if (trimmed.isEmpty()) return null
 
-        // 1. Base64 encode / decode
         evaluateBase64(trimmed)?.let { return it }
-
-        // 2. Color Hex RGB breakdown (`#1DC323` or `#FF38BDF8`)
         evaluateColorHex(trimmed)?.let { return it }
-
-        // 3. Hex / Binary / Decimal base conversions (`0xFF`, `255 in hex`, `0b1111`)
         evaluateRadixConversion(trimmed)?.let { return it }
-
-        // 4. Unix Epoch Timestamp <-> ISO-8601 (`now`, `1793065200`, ISO string)
         evaluateEpochTimestamp(trimmed, nowEpochMs)?.let { return it }
-
-        // 5. Android Density (`1080px at 450dpi`, `2448px @ 420dpi`, `1248px to dp`, `2448x1848 @ 420dpi`) & Physical Unit Conversions
         evaluateUnitConversion(trimmed)?.let { return it }
 
         return null
@@ -1481,7 +1629,9 @@ object OmniCommandEngine {
         onPostureCommand: ((String) -> Unit)? = null,
         onToggleTorch: ((Boolean?) -> Unit)? = null,
         onToggleCoverPresentation: (() -> Unit)? = null,
-        onSwitchWorkspaceProfile: ((String) -> Unit)? = null
+        onSwitchWorkspaceProfile: ((String) -> Unit)? = null,
+        onToggleHingeHaptics: (() -> Unit)? = null,
+        onSetFoldCloseAction: ((String) -> Unit)? = null
     ): Boolean {
         return when (action) {
             is OmniAction.LaunchAdHocSplit -> {
@@ -1577,6 +1727,64 @@ object OmniCommandEngine {
                         onPostureCommand?.invoke(action.actionId)
                         onStatusMessage?.invoke("Switched Workspace Profile: ${profileKey.uppercase(Locale.US)}")
                         true
+                    }
+                    SystemToggleTarget.TOGGLE_HINGE_HAPTICS -> {
+                        onToggleHingeHaptics?.invoke()
+                        onPostureCommand?.invoke(action.actionId)
+                        onStatusMessage?.invoke("Toggled Z Fold 8 Hinge Angle Haptic Detents")
+                        true
+                    }
+                    SystemToggleTarget.SET_FOLD_CLOSE_ACTION -> {
+                        val mode = action.foldCloseMode.ifBlank { "stay" }
+                        if (mode == "stay") {
+                            SystemTweaker.setFoldCloseStayAwake(context, true)
+                        } else if (mode == "lock") {
+                            SystemTweaker.setFoldCloseStayAwake(context, false)
+                        }
+                        onSetFoldCloseAction?.invoke(mode)
+                        onPostureCommand?.invoke(action.actionId)
+                        onStatusMessage?.invoke("Fold-Close Action set to: ${mode.uppercase(Locale.US)}")
+                        true
+                    }
+                }
+            }
+            is OmniAction.TermuxCommand -> {
+                if (action.shellCommand.isNotBlank()) {
+                    ClipboardVault.copyToSystemClipboard(context, action.shellCommand, "Termux Command")
+                    clipboardVault?.addOrBumpClip(
+                        text = action.shellCommand,
+                        label = "Termux Shell Snippet",
+                        category = "Termux"
+                    )
+                }
+                if (action.openSplitWithVc) {
+                    val vcPkg = SystemTweaker.findInstalledVcPackage(context) ?: VC_PROD_PACKAGE_Z_FOLD8
+                    val launched = SystemTweaker.launchSplitScreenPair(
+                        context = context,
+                        primaryPackage = vcPkg,
+                        secondaryPackage = TERMUX_PACKAGE
+                    )
+                    onStatusMessage?.invoke(
+                        if (launched) "Copied command & launched VC + Termux in Split-Screen"
+                        else "Copied command to clipboard"
+                    )
+                    launched
+                } else {
+                    val termuxIntent = context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE)?.apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    if (termuxIntent != null) {
+                        try {
+                            context.startActivity(termuxIntent)
+                            onStatusMessage?.invoke("Copied command & opened Termux")
+                            true
+                        } catch (_: Exception) {
+                            onStatusMessage?.invoke("Copied command to clipboard")
+                            false
+                        }
+                    } else {
+                        onStatusMessage?.invoke("Copied command to clipboard (Termux not installed)")
+                        false
                     }
                 }
             }
@@ -1897,8 +2105,8 @@ class ClipboardVault(
 }
 
 /**
- * Renders Omni-Command Palette cards (Ad-Hoc Split-Screen, `>` System/DeX/Torch/Dual/Profile/Posture Tweaker commands,
- * `vc:` Agent Dispatch & Quick Macros, Developer/Unit Conversions, and `clip:` Clipboard Vault results)
+ * Renders Omni-Command Palette cards (Ad-Hoc Split-Screen, `>` System/DeX/Torch/Dual/Profile/Haptics/Fold/Posture Tweaker commands,
+ * `termux:` / `sh:` Shell Dispatcher, `vc:` Agent Dispatch & Quick Macros, Developer/Unit Conversions, and `clip:` Clipboard Vault results)
  * for Spotlight Search and the Home Dashboard.
  */
 @Composable
@@ -1985,6 +2193,18 @@ fun OmniCommandResultsCard(
                         }
                     )
                 }
+                is OmniAction.TermuxCommand -> {
+                    TermuxCommandActionCard(
+                        action = action,
+                        onClick = {
+                            if (action.shellCommand.isNotBlank()) {
+                                composeClipboard.setText(AnnotatedString(action.shellCommand))
+                            }
+                            OmniCommandEngine.execute(context, action)
+                            onExecuteAction(action)
+                        }
+                    )
+                }
                 is OmniAction.SendToVc -> {
                     VcDispatchActionCard(
                         action = action,
@@ -2033,12 +2253,13 @@ private fun OmniQuickSyntaxStrip(
         listOf(
             "split: vc + compare" to "⚡ vc + compare",
             "vc: ship" to "🚀 vc: ship",
+            "termux: " to "💻 termux: cmd",
+            "> haptics" to "📳 > haptics",
+            "> fold voice" to "🎙 > fold voice",
             "> torch" to "🔦 > torch",
             "> dual" to "🪞 > dual HUD",
             "> profile vc" to "🗂 > profile vc",
-            "> posture flex" to "📐 > posture flex",
-            "clip: " to "📋 clip: vault ($clipboardCount)",
-            "2448x1848 @ 420dpi" to "📱 Fold8 px→dp"
+            "clip: " to "📋 clip: vault ($clipboardCount)"
         )
     }
 
@@ -2191,6 +2412,75 @@ private fun SystemCommandActionRow(
             fontWeight = FontWeight.ExtraBold,
             color = FoldLauncherColors.EmeraldSuccess
         )
+    }
+}
+
+@Composable
+private fun TermuxCommandActionCard(
+    action: OmniAction.TermuxCommand,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(
+                Brush.horizontalGradient(
+                    colors = listOf(
+                        FoldLauncherColors.EmeraldSuccess.copy(alpha = 0.24f),
+                        FoldLauncherColors.GlassSurfaceElevated
+                    )
+                )
+            )
+            .border(1.5.dp, FoldLauncherColors.EmeraldSuccess, RoundedCornerShape(20.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                OmniBadgePill(text = action.badge, color = FoldLauncherColors.EmeraldSuccess)
+                Text(
+                    text = if (action.openSplitWithVc) "VC + TERMUX SPLIT DISPATCH" else "TERMUX SHELL SNIPPET",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = FoldLauncherColors.CyanBright
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = if (action.shellCommand.isBlank()) "Type shell command after termux: …" else "$ ${action.shellCommand}",
+                fontSize = 14.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                color = FoldLauncherColors.TextPrimary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = action.subtitle,
+                fontSize = 11.sp,
+                color = FoldLauncherColors.TextSecondary
+            )
+        }
+        Spacer(modifier = Modifier.width(10.dp))
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(FoldLauncherColors.EmeraldSuccess)
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            Text(
+                text = if (action.openSplitWithVc) "Split ↵" else "Termux ↗",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = Color(0xFF02131D)
+            )
+        }
     }
 }
 

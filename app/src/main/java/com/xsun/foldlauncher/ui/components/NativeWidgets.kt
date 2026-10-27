@@ -39,6 +39,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -48,7 +49,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -95,6 +98,21 @@ val DefaultZFold8AppPairPresets: List<AppPair> = listOf(
         primaryPackage = VcPackages.PREVIEW,
         secondaryPackage = VcPackages.CHROME_PACKAGE
     )
+)
+
+/**
+ * Z Fold 8 Fold-Close Behavior Cycler Modes (`v0.4.0`):
+ * Cycles through:
+ * 1. `📱 Keep Cover Awake`
+ * 2. `🎙️ Auto-Talk to VC`
+ * 3. `⛺ OLED Standby`
+ * 4. `🔒 Instant Lock`
+ */
+val DefaultZFold8FoldCloseModes: List<String> = listOf(
+    "📱 Keep Cover Awake",
+    "🎙️ Auto-Talk to VC",
+    "⛺ OLED Standby",
+    "🔒 Instant Lock"
 )
 
 private data class HardwareSystemTelemetry(
@@ -258,13 +276,29 @@ fun NativeDashboardCards(
     onToggleTorch: (() -> Unit)? = null,
     onUnlockAndSplitVcTermux: (() -> Unit)? = null,
     onQuickApproveVc: (() -> Unit)? = null,
-    onToggleDualScreenCompanion: (() -> Unit)? = null
+    onToggleDualScreenCompanion: (() -> Unit)? = null,
+    hingeHapticsEnabled: Boolean = true,
+    foldCloseModeLabel: String = "📱 Keep Cover Awake",
+    onToggleHingeHaptics: () -> Unit = {},
+    onCycleFoldCloseMode: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
     val vcMonitor = remember(context) { VcBackgroundMonitor.getInstance(context) }
     val monitorSummary by vcMonitor.liveSummary.collectAsState()
     val monitorConfig by vcMonitor.config.collectAsState()
     val lastSendFeedback by vcMonitor.lastSendFeedback.collectAsState()
+
+    var localHingeHaptics by remember(hingeHapticsEnabled) { mutableStateOf(hingeHapticsEnabled) }
+    var localFoldCloseIndex by remember(foldCloseModeLabel) {
+        val idx = DefaultZFold8FoldCloseModes.indexOfFirst {
+            it.equals(foldCloseModeLabel, ignoreCase = true)
+        }
+        mutableIntStateOf(if (idx >= 0) idx else 0)
+    }
+    val effectiveFoldCloseLabel = DefaultZFold8FoldCloseModes.getOrElse(localFoldCloseIndex) {
+        foldCloseModeLabel
+    }
 
     val effectiveVcSummary = vcSummaryOverride ?: monitorSummary
     val effectiveVcConfig = vcConfigOverride ?: monitorConfig
@@ -490,6 +524,29 @@ fun NativeDashboardCards(
             availableRamGb = effectiveAvailRamGb,
             totalRamGb = effectiveTotalRamGb,
             onToggleTorch = effectiveToggleTorch,
+            hingeHapticsEnabled = localHingeHaptics,
+            foldCloseModeLabel = effectiveFoldCloseLabel,
+            onToggleHingeHaptics = {
+                localHingeHaptics = !localHingeHaptics
+                if (localHingeHaptics) {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                }
+                onToggleHingeHaptics()
+            },
+            onCycleFoldCloseMode = {
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                localFoldCloseIndex = (localFoldCloseIndex + 1) % DefaultZFold8FoldCloseModes.size
+                val nextMode = DefaultZFold8FoldCloseModes[localFoldCloseIndex]
+                if (nextMode.contains("Keep Cover Awake", ignoreCase = true) ||
+                    nextMode.contains("Auto-Talk", ignoreCase = true) ||
+                    nextMode.contains("Standby", ignoreCase = true)
+                ) {
+                    SystemTweaker.setFoldCloseStayAwake(context, true)
+                } else if (nextMode.contains("Instant Lock", ignoreCase = true)) {
+                    SystemTweaker.setFoldCloseStayAwake(context, false)
+                }
+                onCycleFoldCloseMode()
+            },
             modifier = Modifier.spatialParallaxCard(tilt = tilt, depthLayer = 1.0f)
         )
 
@@ -808,9 +865,140 @@ private fun CockpitActionPill(
 }
 
 /**
- * Enhanced `SystemQuickTileWidget` for v0.3.0:
- * Displays a live Thermal / RAM pill (`31.5°C • 9.4 / 16 GB RAM`) and a 1-tap `🔦 Torch` quick-tile button,
- * plus optional Z Fold 8 quick tiles.
+ * Interactive Z Fold 8 Hinge Mechanics Strip (`v0.4.0`):
+ * - 1-tap `⚙️ Hinge Detents: ON/OFF` chip (toggles mechanical watch-crown 15° hinge haptics)
+ * - 1-tap `📐 On Fold Close: 📱 Keep Cover Awake` cycler pill
+ *   (`📱 Keep Cover Awake` -> `🎙️ Auto-Talk to VC` -> `⛺ OLED Standby` -> `🔒 Instant Lock`)
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun HingeMechanicsStrip(
+    hingeHapticsEnabled: Boolean = true,
+    foldCloseModeLabel: String = "📱 Keep Cover Awake",
+    onToggleHingeHaptics: () -> Unit = {},
+    onCycleFoldCloseMode: () -> Unit = {},
+    modifier: Modifier = Modifier
+) {
+    val haptics = LocalHapticFeedback.current
+    val stripShape = RoundedCornerShape(14.dp)
+    val pillShape = RoundedCornerShape(12.dp)
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(stripShape)
+            .background(
+                Brush.horizontalGradient(
+                    colors = listOf(
+                        FoldLauncherColors.IndigoAccent.copy(alpha = 0.18f),
+                        FoldLauncherColors.DeepVoid.copy(alpha = 0.72f)
+                    )
+                )
+            )
+            .border(1.dp, FoldLauncherColors.GlassBorderStrong, stripShape)
+            .padding(horizontal = 11.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = "HINGE MECHANICS · 15° CROWN DETENTS & FOLD-CLOSE",
+                fontSize = 10.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = FoldLauncherColors.CyanBright
+            )
+            Text(
+                text = "TAP TO CYCLE ↻",
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                color = FoldLauncherColors.TextSecondary
+            )
+        }
+
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // 1. 1-Tap Mechanical Watch-Crown 15° Hinge Detents Chip
+            Row(
+                modifier = Modifier
+                    .clip(pillShape)
+                    .background(
+                        if (hingeHapticsEnabled) FoldLauncherColors.CyanGlow
+                        else FoldLauncherColors.GlassSurfaceHighlight
+                    )
+                    .border(
+                        1.dp,
+                        if (hingeHapticsEnabled) FoldLauncherColors.ElectricCyan
+                        else FoldLauncherColors.GlassBorder,
+                        pillShape
+                    )
+                    .clickable {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onToggleHingeHaptics()
+                    }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (hingeHapticsEnabled) FoldLauncherColors.EmeraldSuccess
+                            else FoldLauncherColors.TextMuted
+                        )
+                )
+                Text(
+                    text = if (hingeHapticsEnabled) "⚙️ Hinge Detents: ON" else "⚙️ Hinge Detents: OFF",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (hingeHapticsEnabled) FoldLauncherColors.CyanBright else FoldLauncherColors.TextSecondary
+                )
+            }
+
+            // 2. 1-Tap Fold-Close Behavior Cycler Pill
+            Row(
+                modifier = Modifier
+                    .clip(pillShape)
+                    .background(FoldLauncherColors.IndigoAccent.copy(alpha = 0.24f))
+                    .border(1.dp, FoldLauncherColors.IndigoAccent, pillShape)
+                    .clickable {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onCycleFoldCloseMode()
+                    }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Text(
+                    text = "📐 On Fold Close: $foldCloseModeLabel",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = FoldLauncherColors.TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "↻",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = FoldLauncherColors.ElectricCyan
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Enhanced `SystemQuickTileWidget` for v0.4.0:
+ * Displays a live Thermal / RAM pill (`31.5°C • 9.4 / 16 GB RAM`), a 1-tap `🔦 Torch` quick-tile button,
+ * and the interactive Z Fold 8 Hinge Mechanics Strip (`⚙️ Hinge Detents: ON/OFF` + `📐 On Fold Close`).
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -821,11 +1009,20 @@ fun SystemQuickTileWidget(
     availableRamGb: Float = 9.4f,
     totalRamGb: Float = 16.0f,
     onToggleTorch: () -> Unit = {},
+    hingeHapticsEnabled: Boolean = true,
+    foldCloseModeLabel: String = "📱 Keep Cover Awake",
+    onToggleHingeHaptics: () -> Unit = {},
+    onCycleFoldCloseMode: () -> Unit = {},
     hingeAngleDegrees: Float? = null,
+    isAccessibilityActive: Boolean = false,
+    isWriteSecureSettingsGranted: Boolean = false,
+    isDefaultLauncher: Boolean = true,
     lockScreenRotationEnabled: Boolean = false,
     onToggleLockRotation: (() -> Unit)? = null,
     onEnforceGboardDeX: (() -> Unit)? = null,
-    onLockScreenNow: (() -> Unit)? = null
+    onLockScreenNow: (() -> Unit)? = null,
+    onOpenWallpaperPicker: (() -> Unit)? = null,
+    onOpenDefaultLauncherPrompt: (() -> Unit)? = null
 ) {
     val tempFormatted = remember(batteryTempCelsius) {
         String.format(Locale.US, "%.1f°C", batteryTempCelsius)
@@ -901,6 +1098,14 @@ fun SystemQuickTileWidget(
             }
         }
 
+        // Interactive Z Fold 8 Hinge Mechanics Strip (Detents + Fold-Close Behavior Cycler)
+        HingeMechanicsStrip(
+            hingeHapticsEnabled = hingeHapticsEnabled,
+            foldCloseModeLabel = foldCloseModeLabel,
+            onToggleHingeHaptics = onToggleHingeHaptics,
+            onCycleFoldCloseMode = onCycleFoldCloseMode
+        )
+
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -928,15 +1133,29 @@ fun SystemQuickTileWidget(
             if (onEnforceGboardDeX != null) {
                 QuickTweakPill(
                     title = "⌨ Enforce Gboard in DeX",
-                    active = false,
+                    active = isWriteSecureSettingsGranted,
                     onClick = onEnforceGboardDeX
                 )
             }
             if (onLockScreenNow != null) {
                 QuickTweakPill(
                     title = "🔒 Lock Screen",
-                    active = false,
+                    active = isAccessibilityActive,
                     onClick = onLockScreenNow
+                )
+            }
+            if (onOpenWallpaperPicker != null) {
+                QuickTweakPill(
+                    title = "✦ Wallpaper",
+                    active = false,
+                    onClick = onOpenWallpaperPicker
+                )
+            }
+            if (!isDefaultLauncher && onOpenDefaultLauncherPrompt != null) {
+                QuickTweakPill(
+                    title = "★ Set Default Home",
+                    active = false,
+                    onClick = onOpenDefaultLauncherPrompt
                 )
             }
         }
@@ -946,6 +1165,7 @@ fun SystemQuickTileWidget(
 /**
  * Z Fold 8 System Dashboard Card with live 120Hz VRR & Hinge Angle Sensor Telemetry Gauge
  * (`120Hz VRR • Hinge 180°`), live Thermal / RAM pill (`31.5°C • 9.4 / 16 GB RAM`),
+ * interactive Hinge Mechanics Strip (`⚙️ Hinge Detents: ON/OFF` + `📐 On Fold Close`),
  * 1-tap `🔦 Torch` quick-tile button, and quick hardware/DeX/HUD controls.
  */
 @OptIn(ExperimentalLayoutApi::class)
@@ -970,7 +1190,11 @@ fun SystemDashboardCard(
     batteryTempCelsius: Float = 31.5f,
     availableRamGb: Float = 9.4f,
     totalRamGb: Float = 16.0f,
-    onToggleTorch: () -> Unit = {}
+    onToggleTorch: () -> Unit = {},
+    hingeHapticsEnabled: Boolean = true,
+    foldCloseModeLabel: String = "📱 Keep Cover Awake",
+    onToggleHingeHaptics: () -> Unit = {},
+    onCycleFoldCloseMode: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val hudState by FloatingHudController.state.collectAsState()
@@ -1147,6 +1371,14 @@ fun SystemDashboardCard(
                 )
             }
         }
+
+        // Interactive Z Fold 8 Hinge Mechanics Strip (15° Watch-Crown Detents + Fold-Close Cycler)
+        HingeMechanicsStrip(
+            hingeHapticsEnabled = hingeHapticsEnabled,
+            foldCloseModeLabel = foldCloseModeLabel,
+            onToggleHingeHaptics = onToggleHingeHaptics,
+            onCycleFoldCloseMode = onCycleFoldCloseMode
+        )
 
         FlowRow(
             modifier = Modifier.fillMaxWidth(),

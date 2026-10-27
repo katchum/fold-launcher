@@ -1,5 +1,7 @@
 package com.xsun.foldlauncher.vc
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -629,6 +631,20 @@ object VcBridgeClient {
             steerIfWorking = steerIfWorking,
             activeAgents = activeAgents
         )
+    }
+
+    /**
+     * Copies a concise markdown summary of all active VC sessions and squad telemetry to the
+     * system [ClipboardManager] (`v0.4.0`).
+     */
+    fun copyStatusSnippetToClipboard(context: Context, summary: VcLiveSummary): String {
+        val snippet = summary.buildMarkdownStatusSnippet()
+        try {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            clipboard?.setPrimaryClip(ClipData.newPlainText("VC Squad Status", snippet))
+        } catch (_: Exception) {
+        }
+        return snippet
     }
 
     /**

@@ -15,6 +15,9 @@
     <!-- Allows swipe-down on home screen to expand notification panel -->
     <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
 
+    <!-- Allows mechanical watch-crown hinge detent haptics (Vibrator.vibrate) -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
     <!-- Allows 1-tap app uninstall from launcher context menu -->
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
 

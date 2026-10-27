@@ -159,6 +159,9 @@ private fun FoldLauncherRoot(
     val isTorchEnabled by viewModel.isTorchEnabled.collectAsState()
     val isDualScreenPresentationActive by viewModel.isDualScreenPresentationActive.collectAsState()
     val isKeyguardLocked by viewModel.isKeyguardLocked.collectAsState()
+    val pinnedDockPackages by viewModel.pinnedDockPackages.collectAsState()
+    val hingeHapticsEnabled by viewModel.hingeHapticsEnabled.collectAsState()
+    val foldCloseModeLabel by viewModel.foldCloseModeLabel.collectAsState()
 
     val allApps by viewModel.allApps.collectAsState()
     val hiddenApps by viewModel.hiddenApps.collectAsState()
@@ -228,6 +231,12 @@ private fun FoldLauncherRoot(
                         onToggleDualScreenPresentation = viewModel::toggleDualScreenPresentation,
                         isKeyguardLocked = isKeyguardLocked,
                         onUnlockAndSplitVcTermux = { viewModel.unlockAndSplitVcTermux(activity) },
+                        pinnedDockPackages = pinnedDockPackages,
+                        onTogglePinDockPackage = viewModel::togglePinAppToDock,
+                        hingeHapticsEnabled = hingeHapticsEnabled,
+                        onToggleHingeHaptics = viewModel::toggleHingeHaptics,
+                        foldCloseModeLabel = foldCloseModeLabel,
+                        onCycleFoldCloseActionMode = viewModel::cycleFoldCloseActionMode,
                         allApps = allApps,
                         pinnedCoverApps = pinnedCoverApps,
                         dockApps = dockApps,
@@ -278,6 +287,12 @@ private fun FoldLauncherRoot(
                         onToggleDualScreenPresentation = viewModel::toggleDualScreenPresentation,
                         isKeyguardLocked = isKeyguardLocked,
                         onUnlockAndSplitVcTermux = { viewModel.unlockAndSplitVcTermux(activity) },
+                        pinnedDockPackages = pinnedDockPackages,
+                        onTogglePinDockPackage = viewModel::togglePinAppToDock,
+                        hingeHapticsEnabled = hingeHapticsEnabled,
+                        onToggleHingeHaptics = viewModel::toggleHingeHaptics,
+                        foldCloseModeLabel = foldCloseModeLabel,
+                        onCycleFoldCloseActionMode = viewModel::cycleFoldCloseActionMode,
                         allApps = allApps,
                         favoriteApps = pinnedInnerApps,
                         dockApps = dockApps,
@@ -327,6 +342,12 @@ private fun FoldLauncherRoot(
                         onToggleDualScreenPresentation = viewModel::toggleDualScreenPresentation,
                         isKeyguardLocked = isKeyguardLocked,
                         onUnlockAndSplitVcTermux = { viewModel.unlockAndSplitVcTermux(activity) },
+                        pinnedDockPackages = pinnedDockPackages,
+                        onTogglePinDockPackage = viewModel::togglePinAppToDock,
+                        hingeHapticsEnabled = hingeHapticsEnabled,
+                        onToggleHingeHaptics = viewModel::toggleHingeHaptics,
+                        foldCloseModeLabel = foldCloseModeLabel,
+                        onCycleFoldCloseActionMode = viewModel::cycleFoldCloseActionMode,
                         allApps = allApps,
                         pinnedInnerApps = pinnedInnerApps,
                         dockApps = dockApps,

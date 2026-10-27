@@ -291,6 +291,12 @@ class VcBackgroundMonitor private constructor(context: Context) {
         )
     }
 
+    fun copyStatusSnippetToClipboard(): String {
+        val snippet = VcBridgeClient.copyStatusSnippetToClipboard(appContext, _liveSummary.value)
+        _lastSendFeedback.value = "✓ Copied VC status to clipboard"
+        return snippet
+    }
+
     fun launchVc(
         sessionId: String? = null,
         startVoiceTalk: Boolean = false,

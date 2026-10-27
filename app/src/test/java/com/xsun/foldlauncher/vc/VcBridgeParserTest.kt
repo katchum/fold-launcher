@@ -354,4 +354,42 @@ class VcBridgeParserTest {
         assertEquals("Android launcher", summary.activeAgents[0].project)
         assertTrue(summary.activeAgents[0].isWorking)
     }
+
+    @Test
+    fun `v0_4_0 computeSquadTelemetry and buildMarkdownStatusSnippet summarize squad accurately`() {
+        val agents = listOf(
+            VcAgentStatus(sessionId = "s1", name = "Coordinator", project = "Launcher", role = "general", status = "working"),
+            VcAgentStatus(sessionId = "s2", name = "VC Bridge", project = "Launcher", role = "worker", status = "working"),
+            VcAgentStatus(sessionId = "s3", name = "QA Agent", project = "Launcher", role = "worker", status = "idle", approvalCount = 1),
+            VcAgentStatus(sessionId = "s4", name = "UI Polish", project = "Launcher", role = "worker", status = "completed"),
+            VcAgentStatus(sessionId = "s5", name = "Broken Worker", project = "Launcher", role = "worker", status = "failed")
+        )
+
+        val telemetry = computeSquadTelemetry(agents)
+        assertEquals(2, telemetry.workingCount)
+        assertEquals(1, telemetry.completedCount)
+        assertEquals(1, telemetry.waitingApprovalCount)
+        assertEquals(1, telemetry.errorCount)
+        assertEquals(5, telemetry.totalCount)
+        assertTrue(telemetry.hasSessions)
+        assertTrue(telemetry.summaryLine.contains("🟢 2 Working"))
+        assertTrue(telemetry.summaryLine.contains("✅ 1 Idle/Done"))
+        assertTrue(telemetry.summaryLine.contains("⚠️ 1 Approval"))
+
+        val summary = VcLiveSummary(
+            workingCount = 2,
+            approvalCount = 1,
+            failedCount = 1,
+            activeAgents = agents,
+            pinnedSessionId = "s1",
+            connectionState = VcConnectionState.LIVE
+        )
+        assertEquals(telemetry, summary.squadTelemetry)
+        assertEquals(telemetry, VcLiveSummary.computeSquadTelemetry(agents))
+
+        val snippet = summary.buildMarkdownStatusSnippet()
+        assertTrue(snippet.contains("VC Squad Status"))
+        assertTrue(snippet.contains("Coordinator"))
+        assertTrue(snippet.contains("📌"))
+    }
 }

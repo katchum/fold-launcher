@@ -1,6 +1,6 @@
-# Fold8 Launcher (`com.xsun.foldlauncher`) — `v0.3.0`
+# Fold8 Launcher (`com.xsun.foldlauncher`) — `v0.4.0`
 
-**Ultra-Fast, Zero-Bloat 120Hz Adaptive Home Launcher, Dual-Display OLED Companion, Lock-Screen Cockpit & VC Command Center for Samsung Galaxy Z Fold 8 and Android Slab Phones**
+**Ultra-Fast, Zero-Bloat 120Hz Adaptive Home Launcher, Watch-Crown Hinge Haptics, Fold-Close Router, Dual-Display OLED Companion & VC Squad Command Center for Samsung Galaxy Z Fold 8 and Android Slab Phones**
 
 [![Android CI](https://github.com/katchum/fold-launcher/actions/workflows/android-ci.yml/badge.svg)](https://github.com/katchum/fold-launcher/actions/workflows/android-ci.yml)
 
@@ -10,71 +10,56 @@ Fold8 Launcher is a lightweight, 120Hz-native Jetpack Compose home screen replac
 
 ---
 
-## What's New in `v0.3.0`
+## What's New in `v0.4.0`
 
-### 1. Z Fold 8 Secondary Display OLED Companion (`CoverScreenPresentation.kt` & `DualScreenPresentationController`)
-- **Dual-Display `android.app.Presentation` Engine**: Uses `DisplayManager` to detect secondary displays on the unfolded Galaxy Z Fold 8 and drives a dedicated **120Hz Cover-Screen OLED Companion** (`CoverScreenPresentation`) while you work on the 7.6"+ inner display.
-- Displays a zero-glare `#000000` AMOLED Hero Clock, live hinge angle (`0°..180°`), hardware thermal/battery current telemetry, and live VC agent status (`Working`, `To Approve`, `Unread`) on the rear/cover screen.
+### 1. Mechanical Watch-Crown Hinge Haptic Detents (`HingeDetentTick`, `computeHingeDetentCrossed`, `triggerHingeDetentHaptic`)
+- **Tactile Hinge Feedback**: Turns the Galaxy Z Fold 8 physical hinge into a precision mechanical watch crown as you open or close the display (`0°..180°`):
+  - **Major Posture Detents (`15°`, `75°`, `155°`)**: Fires crisp `VibrationEffect.EFFECT_CLICK` haptics when crossing the Cover (`15°`), Flex/Tent (`75°`), and Unfolded Inner (`155°`) posture thresholds.
+  - **Minor Watch-Crown Ticks (every `15°` increment)**: Fires subtle `VibrationEffect.EFFECT_TICK` detents across `30°`, `45°`, `60°`, `90°`, `105°`, `120°`, `135°`, and `170°`.
+- Toggleable in 1 tap from the System Tweaker card or via Omni-Bar (`> haptics` / `> detents`).
 
-### 2. Dedicated Lock-Screen Ambient Cockpit Card (`LockScreenCockpitCard`)
-- **1-Tap Keyguard Dismiss & Split Workspace (`KeyguardManager.requestDismissKeyguard`)**: Directly from the lock screen, tap **`Unlock & Split VC + Termux`** to trigger biometric/credential dismissal and immediately launch VC + Termux side-by-side (`FLAG_ACTIVITY_LAUNCH_ADJACENT`).
-- **Inline Lock-Screen VC Approval**: Inspect and approve/acknowledge pending VC agent actions right on the lock screen without navigating through app drawers.
+### 2. Configurable Fold-Close Action Router (`FoldCloseActionMode` & `isFoldCloseTransition`)
+- **Smart Hinge-Close Continuity (`isFoldCloseTransition`)**: Detects when the Galaxy Z Fold 8 hinge transitions from unfolded/flex (`>= 45°`) to closed (`< 15°`) and executes your chosen `FoldCloseActionMode`:
+  - **`STAY_AWAKE_COVER`**: Smoothly transitions to the Cover Screen (`COMPACT` mode) without locking.
+  - **`AUTO_VC_VOICE`**: Automatically launches VC Voice Talk (`dev.agentconversation.widget.TALK`) on the Cover Screen so you can keep talking to your agents one-handed while walking.
+  - **`TENT_STANDBY`**: Switches into the low-power `#000000` AMOLED `TentModeStandbyHud`.
+  - **`INSTANT_LOCK`**: Immediately locks the device via `FoldAccessibilityService` (`GLOBAL_ACTION_LOCK_SCREEN`).
+- Configurable from the System Tweaker card or via Omni-Bar (`> fold <stay|voice|tent|lock>`).
 
-### 3. Zero-Permission Hardware Torch (`CameraManager.setTorchMode`) & Live Hardware Telemetry (`HardwareTelemetrySnapshot`)
-- **Instant Hardware Flashlight / Torch**: Zero-permission `CameraManager.setTorchMode` integration (`SystemTweaker`) controllable from the Quick Action cards, Floating HUD Pill, Lock-Screen Cockpit, and Omni-Bar (`> torch`).
-- **Live Hardware Telemetry (`HardwareTelemetrySnapshot`)**: Real-time battery current (`mA` via `BatteryManager.BATTERY_PROPERTY_current_now`), thermal reading (`°C`), available/total RAM (`ActivityManager.MemoryInfo`), and 120Hz frame pacing.
+### 3. Interactive Custom Dock Pinning (`pinnedDockPackages`)
+- **1-Tap Pin-to-Dock (`📌` / `📍`)**: Every app tile in the App Drawer and workspace grid now includes an interactive Pin-to-Dock toggle badge (`📌`/`📍`) backed by persistent `pinnedDockPackages` in `LauncherPreferences`, letting you customize your persistent 120Hz `TaskbarDock` on the fly.
 
-### 4. Workspace Profiles (`ALL`, `VC_DEV`, `FOCUS`, `OLED_BLACK`)
-- Switch the entire launcher workspace in 1 tap or via Omni-Bar (`> profile <all|vc|focus|oled>`):
-  - **`ALL`**: Full dual-hemisphere dashboard, widgets, and categorized app grid.
-  - **`VC_DEV`**: Prioritizes VC Command Center, dev/terminal tools (`VC`, `Termux`, `ADB`, `Chrome`), and multi-instance split combos.
-  - **`FOCUS`**: Minimalist distraction-free layout hiding non-essential cards and social clutter.
-  - **`OLED_BLACK`**: Pure `#000000` zero-smear AMOLED canvas with burn-in pixel shift for maximum battery savings on the 7.6"+ inner display.
+### 4. Multi-Agent Squad Telemetry Bar (`VcSquadTelemetry` & `VcSquadTelemetryBar`) & 1-Tap Markdown Status Copy (`buildMarkdownStatusSnippet`)
+- **`VcSquadTelemetryBar`**: Segmented 120Hz visual progress bar inside `VcCommandCenterCard` showing real-time squad distribution across **Approval Needed** (Amber), **Working** (Cyan), **Failed** (Coral), and **Idle/Completed** (Emerald) agents.
+- **1-Tap `📋 Copy Status` (`buildMarkdownStatusSnippet`)**: Generates a clean, structured Markdown status report of all active VC agents, pending approvals, and unread attention items and copies it straight to the system clipboard.
 
-### 5. 1-Tap VC Prompt Macros (`VcPromptMacro`) & Pinned Coordinator Session (`pinnedSessionId`)
-- **1-Tap Prompt Macros**: Dispatch common agent instructions in a single tap from `VcCommandCenterCard`:
-  - `Status`
-  - `Approve & Go`
-  - `Verify CI/Tests`
-  - `Ship Release`
-  - `Keep Building`
-- **Pinned Coordinator Session (`pinnedSessionId`)**: Pin your primary Coordinator/General session so 1-tap macros, quick-send messages, and Omni-Bar `vc:` commands always route to the right session even when multiple sub-agents are active.
-
-### 6. AMOLED 3:2 Lissajous Burn-In Protection Pixel-Shift (`computeOledPixelShiftOffset`)
-- Continuously computes a bounded 3:2 Lissajous sub-pixel/pixel trajectory (`computeOledPixelShiftOffset`) for persistent OLED HUD elements (Tent Mode Standby HUD, Cover Screen Presentation, and Lock-Screen Micro-HUD) to prevent static sub-pixel wear on LTPO AMOLED panels.
-
-### 7. Omni-Bar `v0.3.0` Commands (`OmniCommandEngine`)
-- **`> torch`** (or `flashlight`): Toggles hardware camera torch via `CameraManager.setTorchMode`.
-- **`> dual`**: Toggles the Z Fold 8 Secondary Display OLED Companion (`DualScreenPresentationController`).
-- **`> profile <all|vc|focus|oled>`**: Switches the active `WorkspaceProfile`.
-- **`vc: status|approve|ship|test`**: Dispatches instant `VcPromptMacro` commands directly from Spotlight to the pinned or active VC session.
+### 5. Omni-Bar Termux / Shell Snippet Dispatcher & Hinge Commands (`OmniCommandEngine`)
+- **Termux & Shell Snippet Dispatcher**:
+  - `termux: <cmd>` / `sh: <cmd>`: Copies the shell snippet to the clipboard and launches Termux (`com.termux`) ready to paste/execute.
+  - `termux-split: <cmd>`: Copies the shell snippet and launches **VC + Termux** side-by-side in Z Fold 8 dual-pane split-screen mode (`FLAG_ACTIVITY_LAUNCH_ADJACENT`).
+- **Hinge & Fold-Close Commands**:
+  - `> haptics` or `> detents`: Toggles Mechanical Watch-Crown Hinge Haptic Detents.
+  - `> fold <stay|voice|tent|lock>`: Sets the active `FoldCloseActionMode`.
 
 ---
 
-## Highlights from `v0.2.0` & `v0.1.0`
+## Highlights from `v0.3.0`, `v0.2.0` & `v0.1.0`
 
-- **Hardware `Sensor.TYPE_HINGE_ANGLE` (`0°..180°`), Z Fold 8 Cover Landscape Fix (`1248x1972` / `475dp x 751dp`), and Interactive `PostureOverride` Switcher (`AUTO` / `FLEX` / `INNER` / `COVER` / `TENT`)**.
-- **Z Fold 8 One UI 9.0 Lock Screen & Continuity**: Instant Face Unlock bypass (`face_stay_on_lock_screen = 0`), lock-screen shortcut remapping (`lock_application_shortcut`) to VC and Fold8 Launcher, and `TYPE_ACCESSIBILITY_OVERLAY` + `FLAG_SHOW_WHEN_LOCKED` Lock-Screen Micro-HUD Pill.
-- **Multi-Instance VC Switcher (`PROD` / `PREVIEW` / `COMPARE`) & 1-Tap Split Combos**: `VC + Termux`, `Prod + Compare`, `Prod + Preview`, and `VC + Chrome`.
-- **120Hz Tent Mode Standby HUD (`TentModeStandbyHud`), Flex 2-Finger Trackpad Scroll Strip, Category Filter Pills, and 2D `px`-to-`dp` `@ 420dpi` Calculator**.
+- **Z Fold 8 Secondary Display OLED Companion (`CoverScreenPresentation.kt` & `DualScreenPresentationController`)**: Drives a 120Hz `#000000` AMOLED companion HUD on the secondary display (`DisplayManager` + `android.app.Presentation`) while unfolded.
+- **Dedicated Lock-Screen Ambient Cockpit Card (`LockScreenCockpitCard`)**: `KeyguardManager.requestDismissKeyguard` 1-tap **`Unlock & Split VC + Termux`** and inline lock-screen VC approval.
+- **Zero-Permission Hardware Torch (`CameraManager.setTorchMode`) & Live Hardware Telemetry (`HardwareTelemetrySnapshot`)**.
+- **Workspace Profiles (`ALL`, `VC_DEV`, `FOCUS`, `OLED_BLACK`) & 3:2 Lissajous Burn-In Pixel-Shift (`computeOledPixelShiftOffset`)**.
+- **1-Tap VC Prompt Macros (`Status`, `Approve & Go`, `Verify CI/Tests`, `Ship Release`, `Keep Building`), Pinned Coordinator Session (`pinnedSessionId`), Multi-Instance VC Switcher (`PROD`/`PREVIEW`/`COMPARE`), and 4 Split-Screen Combos (`VC+Termux`, `Prod+Compare`, `Prod+Preview`, `VC+Chrome`)**.
+- **Hardware `Sensor.TYPE_HINGE_ANGLE` (`0°..180°`), Z Fold 8 Cover Landscape Fix (`1248x1972` / `475dp x 751dp`), and Interactive `PostureOverride` Switcher (`AUTO`/`FLEX`/`INNER`/`COVER`/`TENT`)**.
 - **Samsung DeX Gboard Auto-Guard (`FoldAccessibilityService`) & Non-Root Landscape Rotation**.
 
 ---
 
 ## One-Time Non-Root ADB Setup & Debloat Scripts
 
-### 1. Grant Permissions & Configure One UI 9.0 Lock Screen / DeX / Rotation (`scripts/adb-setup-fold8.sh`)
 ```bash
-chmod +x scripts/adb-setup-fold8.sh
+chmod +x scripts/adb-setup-fold8.sh scripts/adb-debloat-fold8.sh
 ./scripts/adb-setup-fold8.sh
-
-# Optional: also disable Samsung Honeyboard for user 0 so One UI can never fall back to it
-./scripts/adb-setup-fold8.sh --disable-honeyboard
-```
-
-### 2. Safe Non-Root Samsung Bloatware Removal (`scripts/adb-debloat-fold8.sh`)
-```bash
-chmod +x scripts/adb-debloat-fold8.sh
 ./scripts/adb-debloat-fold8.sh
 ```
 
@@ -89,9 +74,6 @@ chmod +x scripts/adb-debloat-fold8.sh
 # Run Android Lint checks
 ./gradlew lintDebug
 
-# Build Debug APK (package: com.xsun.foldlauncher.debug)
-./gradlew assembleDebug
-
-# Build R8-minified, resource-shrunk Release APK (package: com.xsun.foldlauncher)
-./gradlew assembleRelease
+# Build Debug & R8-Minified Release APKs
+./gradlew assembleDebug assembleRelease
 ```

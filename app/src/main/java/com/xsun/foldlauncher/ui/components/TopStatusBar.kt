@@ -124,7 +124,11 @@ fun TopStatusBar(
     onCyclePostureOverride: (() -> Unit)? = null,
     isKeyguardLocked: Boolean? = null,
     isTorchOn: Boolean = false,
-    onToggleTorch: (() -> Unit)? = null
+    onToggleTorch: (() -> Unit)? = null,
+    hingeHapticsEnabled: Boolean = true,
+    foldCloseModeLabel: String? = null,
+    onToggleHingeHaptics: (() -> Unit)? = null,
+    onCycleFoldCloseMode: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current

@@ -1,10 +1,10 @@
-# VC-Launcher Integration & Non-Foreground Bridge Architecture (`v0.3.0`)
+# VC-Launcher Integration & Non-Foreground Bridge Architecture (`v0.4.0`)
 
 ## 1. Executive Summary
 
 The **Fold8 & Slab Launcher** (`com.xsun.foldlauncher`) includes a purpose-built native integration module (`com.xsun.foldlauncher.vc`) for **VC (`vc-host` / `dev.agentconversation.*`)**.
 
-When VC is not the foreground application on Android, its WebView conversation loop pauses and its native widgets and deep-link activities remain un-exported to third-party launchers. Because the home launcher and its companion `FoldAccessibilityService` are permanently resident in memory and have real-time visibility into foreground window transitions, secondary displays, and lock-screen state, **Fold8 & Slab Launcher** acts as an always-ready **VC Background Bridge, Multi-Instance Switcher, 1-Tap Prompt Macro Dispatcher, Dual-Display OLED Companion & Lock-Screen Cockpit**.
+When VC is not the foreground application on Android, its WebView conversation loop pauses and its native widgets and deep-link activities remain un-exported to third-party launchers. Because the home launcher and its companion `FoldAccessibilityService` are permanently resident in memory and have real-time visibility into foreground window transitions, physical hinge-close transitions, secondary displays, and lock-screen state, **Fold8 & Slab Launcher** acts as an always-ready **VC Background Bridge, Multi-Agent Squad Telemetry Dashboard, Fold-Close Voice Router, Dual-Display OLED Companion & Lock-Screen Cockpit**.
 
 ---
 
@@ -32,48 +32,30 @@ Inspection of `/home/xsun/projects/vc-host` (`docs/foreground-polling.md`, `docs
   - **`PROD` (`dev.agentconversation.vci`)**: `SystemTweaker.VC_PROD_PACKAGE` — Primary production VC client.
   - **`PREVIEW` (`dev.agentconversation.preview`)**: `SystemTweaker.VC_PREVIEW_PACKAGE` — Everyday preview/staging build.
   - **`COMPARE` (`dev.agentconversation.compare`)**: `SystemTweaker.VC_COMPARE_PACKAGE` — Side-by-side comparison build on Galaxy Z Fold 8.
-  - Additional fallback IDs: `dev.agentconversation`, `dev.agentconversation.preview.preflight`, `com.example.agentconversation`.
 - **Talk Intent Action**: `dev.agentconversation.widget.TALK` (`SystemTweaker.VC_TALK_ACTION`).
 - **Live Tailscale VC Host**: `http://100.96.188.90:8080` (`SystemTweaker.DEFAULT_VC_HOST_URL`), with `http://127.0.0.1:4327` supported for `adb reverse` loopback.
 
 ---
 
-## 3. Concrete Architecture & `v0.3.0` Capabilities (`com.xsun.foldlauncher.vc`)
+## 3. Concrete Architecture & `v0.4.0` Capabilities (`com.xsun.foldlauncher.vc`)
 
-### 3.1 Data Models, Multi-Instance Target, Prompt Macros & Pinned Coordinator (`VcModels.kt`)
+### 3.1 Multi-Agent Squad Telemetry (`VcSquadTelemetry`) & Markdown Status Export (`buildMarkdownStatusSnippet`)
+- **`VcSquadTelemetry` (`v0.4.0`)**: Aggregates active agent roster metrics into a normalized squad telemetry breakdown (`totalAgents`, `workingCount`, `approvalCount`, `failedCount`, `idleOrCompletedCount`, `workingFraction`, `approvalFraction`, `failedFraction`, `idleFraction`, and `activeRatioPercent`).
+- **`VcSquadTelemetryBar` (`v0.4.0`)**: Renders a 120Hz segmented progress bar inside `VcCommandCenterCard` color-coded by agent state (`AmberWarning` for approvals, `ElectricCyan` for working, `CoralDanger` for failed, `EmeraldSuccess` for completed/idle) along with live squad utilization percentage.
+- **1-Tap Markdown Status Copy (`buildMarkdownStatusSnippet` & `📋 Copy Status`)**: Formats a concise, structured Markdown snapshot of connection status, squad telemetry counters, active/pinned agents, and top unread attention items, copying it directly to the Android clipboard in 1 tap.
+
+### 3.2 Fold-Close Auto-VC Voice Handoff (`FoldCloseActionMode.AUTO_VC_VOICE`) & Termux Split Dispatcher
+- **Fold-Close to VC Voice (`FoldCloseActionMode.AUTO_VC_VOICE`)**: When the user folds the Galaxy Z Fold 8 shut (`isFoldCloseTransition` from `>= 45°` to `< 15°`) with `AUTO_VC_VOICE` active (`> fold voice`), the launcher automatically triggers `SystemTweaker.launchVc(..., startVoiceTalk = true)` on the Cover Display so the user can seamlessly continue their conversation by voice while on the move.
+- **Omni-Bar Termux / Shell Snippet Dispatcher (`termux:`, `sh:`, `termux-split:`)**:
+  - `termux: <cmd>` / `sh: <cmd>`: Copies `<cmd>` to the clipboard and opens `com.termux`.
+  - `termux-split: <cmd>`: Copies `<cmd>` to the clipboard and launches the active VC instance + `com.termux` side-by-side (`FLAG_ACTIVITY_LAUNCH_ADJACENT`).
+
+### 3.3 Data Models, Multi-Instance Target, Prompt Macros & Pinned Coordinator (`VcModels.kt`)
 - **`VcInstanceTarget` (`PROD`, `PREVIEW`, `COMPARE`)**: Selects which installed VC package (`dev.agentconversation.vci`, `dev.agentconversation.preview`, or `dev.agentconversation.compare`) is the active launch & voice target.
 - **`VcSplitPreset`**: Defines 4 1-tap Z Fold 8 dual-pane split-screen workspace combinations (`VC_TERMUX`, `PROD_COMPARE`, `PROD_PREVIEW`, `VC_CHROME`).
-- **`VcPromptMacro` (`v0.3.0`)**: Built-in 1-tap prompt macros for rapid hands-free agent orchestration from the home screen, lock screen, or Omni-Bar:
-  - **`STATUS` (`Status`)**: Requests a concise live progress & blocker summary across active workers.
-  - **`APPROVE_AND_GO` (`Approve & Go`)**: Approves pending items and instructs agents to proceed to verification.
-  - **`VERIFY_CI` (`Verify CI/Tests`)**: Instructs the target session to run unit tests, lint, and GitHub Actions CI checks.
-  - **`SHIP_RELEASE` (`Ship Release`)**: Instructs the target session to tag, package APKs, and publish the release.
-  - **`KEEP_BUILDING` (`Keep Building`)**: Instructs the coordinator/worker to continue autonomous execution on the next milestone.
-- **Pinned Coordinator Session (`pinnedSessionId` in `VcConnectionConfig` / `LauncherPreferences`)**:
-  - Allows pinning a primary Coordinator or General session ID (`pinnedSessionId`) so 1-tap macros, quick-send messages, and Omni-Bar `vc: status|approve|ship|test` commands always target the pinned session by default (with automatic fallback to the most urgent approval/working session).
+- **`VcPromptMacro`**: Built-in 1-tap prompt macros (`Status`, `Approve & Go`, `Verify CI/Tests`, `Ship Release`, `Keep Building`).
+- **Pinned Coordinator Session (`pinnedSessionId`)**: Pins a primary Coordinator or General session ID so 1-tap macros, quick-send messages, and Omni-Bar `vc:` commands always route to the pinned session by default.
 
-### 3.2 Zero-Dependency HTTP & Multi-Instance Intent Bridge (`VcBridgeClient.kt` & `SystemTweaker.kt`)
-- Uses `java.net.HttpURLConnection` + `org.json.JSONObject` with `minSdk = 29` safe `readBoundedBytes` streaming:
-  - **Delta & Full Attention Polling (`fetchLiveSummary`)**: Calls `GET /api/attention?since=<cursor>&rosterTag=<tag>` and merges delta events into the in-memory summary (`reset: true` handling and 200-read-event capping), with `GET /api/snapshot` fallback.
-  - **Inline Quick-Send, Live Steer & Prompt Macro Dispatch (`sendQuickMessage` / `sendPromptMacro`)**: Calls `POST /api/sessions/<sessionId>/message` (or `/steer` when the target agent is `working`) directly from `VcCommandCenterCard`, `LockScreenCockpitCard`, or `OmniCommandEngine` (`vc: status|approve|ship|test`).
-  - **Mark Attention Read (`markAttentionRead`)**: Calls `POST /api/attention` with `{"id": "<eventId>"}` or `{"all": true}`.
-  - **1-Tap Z Fold 8 Dual-Pane Split-Screen Workspace Combos (`FLAG_ACTIVITY_LAUNCH_ADJACENT`)**:
-    1. **`VC + Termux`**
-    2. **`Prod + Compare`** (`dev.agentconversation.vci` + `dev.agentconversation.compare`)
-    3. **`Prod + Preview`** (`dev.agentconversation.vci` + `dev.agentconversation.preview`)
-    4. **`VC + Chrome`**
-
-### 3.3 Lock-Screen Ambient Cockpit (`LockScreenCockpitCard`) & Secondary Display OLED Companion (`CoverScreenPresentation`)
-- **Dedicated Lock-Screen Ambient Cockpit Card (`LockScreenCockpitCard`)**:
-  - Displayed when `KeyguardManager.isKeyguardLocked` is active over the One UI 9.0 lock screen (`MainActivity.setShowWhenLocked(true)`).
-  - Provides a 1-tap **`Unlock & Split VC + Termux`** button powered by `KeyguardManager.requestDismissKeyguard(activity, KeyguardDismissCallback)` that dismisses the keyguard and immediately launches the dual-pane VC + Termux split workspace.
-  - Supports **Inline Lock-Screen VC Approval** (`Approve & Go` / `Ack`) directly from the lock screen.
-- **Z Fold 8 Secondary Display OLED Companion (`CoverScreenPresentation.kt` & `DualScreenPresentationController`)**:
-  - Uses `DisplayManager` + `android.app.Presentation` to project a live `#000000` AMOLED companion HUD onto the Z Fold 8 secondary/cover display (`> dual` in Omni-Bar or toggle in System Tweaker), showing live VC `Working` / `Approve` / `Unread` counters and active agent status protected by 3:2 Lissajous burn-in pixel shift (`computeOledPixelShiftOffset`).
-
-### 3.4 120Hz Home Screen `VcCommandCenterCard` (`VcCommandCenterCard.kt`)
-- **Multi-Instance Switcher Bar**: 1-tap `PROD` (`vci`) / `PREVIEW` / `COMPARE` selector pills.
-- **Pinned Session Indicator & Pin Toggle**: Visual pin badge (`📌`) on agent chips so you can lock your primary Coordinator session as the default target.
-- **1-Tap VC Prompt Macro Strip**: Horizontal quick-fire chips (`Status`, `Approve & Go`, `Verify CI/Tests`, `Ship Release`, `Keep Building`).
-- **Inline Pending Approval Banner**: High-visibility amber banner whenever `approvalCount > 0`, with 1-tap jump and 1-tap `Ack`.
-- **1-Tap Dual-Pane Split-Screen Row**: `◫ VC+Termux`, `◫ Prod+Compare`, `◫ Prod+Preview`, and `◫ VC+Chrome`.
+### 3.4 Lock-Screen Ambient Cockpit (`LockScreenCockpitCard`) & Secondary Display OLED Companion (`CoverScreenPresentation`)
+- **Dedicated Lock-Screen Ambient Cockpit Card (`LockScreenCockpitCard`)**: Provides a 1-tap **`Unlock & Split VC + Termux`** button (`KeyguardManager.requestDismissKeyguard`) and **Inline Lock-Screen VC Approval** directly over the One UI 9.0 lock screen.
+- **Z Fold 8 Secondary Display OLED Companion (`CoverScreenPresentation.kt` & `DualScreenPresentationController`)**: Projects a live `#000000` AMOLED companion HUD onto the Z Fold 8 secondary/cover display (`> dual`) protected by 3:2 Lissajous burn-in pixel shift (`computeOledPixelShiftOffset`).

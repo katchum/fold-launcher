@@ -62,12 +62,16 @@ enum class WorkspaceProfile(val label: String, val badge: String) {
 }
 
 /**
- * Consolidated v0.3.0 UI state snapshot for workspace profile, posture override,
- * hardware torch, dual-screen presentation, and lock-screen keyguard state.
+ * Consolidated v0.4.0 UI state snapshot for workspace profile, posture override,
+ * custom dock pinning, hinge detent haptics, fold-close action mode, hardware torch,
+ * dual-screen presentation, and lock-screen keyguard state.
  */
 data class LauncherUiState(
     val workspaceProfile: WorkspaceProfile = WorkspaceProfile.ALL,
     val postureOverride: PostureOverride = PostureOverride.AUTO,
+    val pinnedDockPackages: Set<String> = emptySet(),
+    val hingeHapticsEnabled: Boolean = true,
+    val foldCloseModeLabel: String = "📱 Keep Cover Awake",
     val isTorchEnabled: Boolean = false,
     val isDualScreenPresentationActive: Boolean = false,
     val isKeyguardLocked: Boolean = false,
@@ -84,7 +88,22 @@ data class LauncherUiState(
 
 class LauncherViewModel(application: Application) : AndroidViewModel(application) {
 
+    companion object {
+        private const val PREFS_NAME = "fold_launcher_prefs"
+        private const val KEY_PINNED_DOCK = "pinned_dock_packages"
+        private const val KEY_HINGE_HAPTICS = "hinge_haptics_enabled"
+        private const val KEY_FOLD_CLOSE_MODE = "fold_close_action_mode"
+
+        val FOLD_CLOSE_MODES: List<String> = listOf(
+            "📱 Keep Cover Awake",
+            "🎙️ Auto-Talk to VC",
+            "⛺ OLED Standby",
+            "🔒 Instant Lock"
+        )
+    }
+
     private val appContext: Context = application.applicationContext
+    private val rawPrefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     val preferences = LauncherPreferences(appContext)
     val repository = AppRepository(appContext, preferences)
     val clipboardVault = ClipboardVault(appContext)
@@ -94,6 +113,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _hiddenPackages = MutableStateFlow(preferences.hiddenPackages)
     val hiddenPackages: StateFlow<Set<String>> = _hiddenPackages.asStateFlow()
+
+    // v0.4.0 Interactive Custom Dock Pinning State (`"pinned_dock_packages"`)
+    private val _pinnedDockPackages = MutableStateFlow(preferences.pinnedDockPackages)
+    val pinnedDockPackages: StateFlow<Set<String>> = _pinnedDockPackages.asStateFlow()
 
     val allApps: StateFlow<List<AppEntry>> = combine(
         _allInstalledApps,
@@ -127,12 +150,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    val dockApps: StateFlow<List<AppEntry>> = allApps
-        .map { apps ->
-            val explicit = apps.filter { it.isDockPinned }
-            if (explicit.isNotEmpty()) explicit.take(7) else apps.take(5)
-        }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    val dockApps: StateFlow<List<AppEntry>> = combine(
+        allApps,
+        _pinnedDockPackages
+    ) { apps, pinnedPkgs ->
+        val explicit = apps.filter { it.isDockPinned || it.packageName in pinnedPkgs }
+        if (explicit.isNotEmpty()) explicit.take(7) else apps.take(5)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     private val _recentSessionPackages = MutableStateFlow<List<String>>(emptyList())
 
@@ -214,6 +238,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     // v0.3.0 Workspace Profile state (ALL, VC_DEV, FOCUS, OLED_BLACK)
     private val _workspaceProfile = MutableStateFlow(WorkspaceProfile.ALL)
     val workspaceProfile: StateFlow<WorkspaceProfile> = _workspaceProfile.asStateFlow()
+
+    // v0.4.0 Hinge Detent Haptics & Fold-Close Action Mode state (persisted in SharedPreferences)
+    private val _hingeHapticsEnabled = MutableStateFlow(rawPrefs.getBoolean(KEY_HINGE_HAPTICS, true))
+    val hingeHapticsEnabled: StateFlow<Boolean> = _hingeHapticsEnabled.asStateFlow()
+
+    private val _foldCloseModeLabel = MutableStateFlow(
+        rawPrefs.getString(KEY_FOLD_CLOSE_MODE, FOLD_CLOSE_MODES.first()) ?: FOLD_CLOSE_MODES.first()
+    )
+    val foldCloseModeLabel: StateFlow<String> = _foldCloseModeLabel.asStateFlow()
 
     // v0.3.0 Hardware Torch, Dual-Screen Cover Presentation & Lock-Screen Keyguard Telemetry
     private val _isTorchEnabled = MutableStateFlow(SystemTweaker.isTorchEnabled())
@@ -345,6 +378,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _uiState.value = LauncherUiState(
             workspaceProfile = _workspaceProfile.value,
             postureOverride = _postureOverride.value,
+            pinnedDockPackages = _pinnedDockPackages.value,
+            hingeHapticsEnabled = _hingeHapticsEnabled.value,
+            foldCloseModeLabel = _foldCloseModeLabel.value,
             isTorchEnabled = _isTorchEnabled.value,
             isDualScreenPresentationActive = _isDualScreenPresentationActive.value,
             isKeyguardLocked = _isKeyguardLocked.value,
@@ -396,6 +432,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             }
             _allInstalledApps.value = loaded
             _hiddenPackages.value = preferences.hiddenPackages
+            _pinnedDockPackages.value = preferences.pinnedDockPackages
+            syncUiStateSnapshot()
         }
     }
 
@@ -405,6 +443,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val pinnedDock = preferences.pinnedDockPackages
         val counts = preferences.launchCounts
         _hiddenPackages.value = preferences.hiddenPackages
+        _pinnedDockPackages.value = pinnedDock
 
         _allInstalledApps.value = _allInstalledApps.value.map { entry ->
             entry.copy(
@@ -414,6 +453,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 isDockPinned = entry.packageName in pinnedDock
             )
         }
+        syncUiStateSnapshot()
     }
 
     // Search & Sheet Controls
@@ -518,6 +558,59 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             WorkspaceProfile.OLED_BLACK -> WorkspaceProfile.ALL
         }
         setWorkspaceProfile(next)
+    }
+
+    // v0.4.0 Hinge Detent Haptics & Fold-Close Action Mode Controls
+    fun setHingeHapticsEnabled(enabled: Boolean) {
+        _hingeHapticsEnabled.value = enabled
+        rawPrefs.edit().putBoolean(KEY_HINGE_HAPTICS, enabled).apply()
+        syncUiStateSnapshot()
+        val feedback = if (enabled) "📳 Hinge Detent Haptics: ON" else "📳 Hinge Detent Haptics: OFF"
+        _omniStatusMessage.value = feedback
+        try {
+            Toast.makeText(appContext, feedback, Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) {
+        }
+    }
+
+    fun toggleHingeHaptics() {
+        setHingeHapticsEnabled(!_hingeHapticsEnabled.value)
+    }
+
+    fun setFoldCloseActionMode(modeOrQuery: String) {
+        val trimmed = modeOrQuery.trim()
+        val resolved = when {
+            trimmed in FOLD_CLOSE_MODES -> trimmed
+            trimmed.contains("talk", ignoreCase = true) || trimmed.contains("vc", ignoreCase = true) ->
+                "🎙️ Auto-Talk to VC"
+            trimmed.contains("tent", ignoreCase = true) || trimmed.contains("oled", ignoreCase = true) ||
+                trimmed.contains("standby", ignoreCase = true) -> "⛺ OLED Standby"
+            trimmed.contains("lock", ignoreCase = true) -> "🔒 Instant Lock"
+            trimmed.contains("awake", ignoreCase = true) || trimmed.contains("cover", ignoreCase = true) ->
+                "📱 Keep Cover Awake"
+            else -> {
+                val currentIdx = FOLD_CLOSE_MODES.indexOf(_foldCloseModeLabel.value)
+                FOLD_CLOSE_MODES[(if (currentIdx >= 0) currentIdx + 1 else 0) % FOLD_CLOSE_MODES.size]
+            }
+        }
+        _foldCloseModeLabel.value = resolved
+        rawPrefs.edit().putString(KEY_FOLD_CLOSE_MODE, resolved).apply()
+        val keepCoverAwake = resolved.contains("Keep Cover Awake", ignoreCase = true) ||
+            resolved.contains("Auto-Talk", ignoreCase = true)
+        SystemTweaker.setFoldCloseStayAwake(appContext, keepCoverAwake)
+        syncUiStateSnapshot()
+        val feedback = "Fold-Close Mode: $resolved"
+        _omniStatusMessage.value = feedback
+        try {
+            Toast.makeText(appContext, feedback, Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) {
+        }
+    }
+
+    fun cycleFoldCloseActionMode() {
+        val currentIdx = FOLD_CLOSE_MODES.indexOf(_foldCloseModeLabel.value)
+        val next = FOLD_CLOSE_MODES[(if (currentIdx >= 0) currentIdx + 1 else 0) % FOLD_CLOSE_MODES.size]
+        setFoldCloseActionMode(next)
     }
 
     // v0.3.0 Hardware Torch, Dual-Screen Presentation & Lock-Screen Cockpit Actions
@@ -637,12 +730,71 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 setWorkspaceProfile(WorkspaceProfile.OLED_BLACK)
                 true
             }
+            "toggle_hinge_haptics", "hinge_haptics", "haptics" -> {
+                toggleHingeHaptics()
+                true
+            }
+            "hinge_haptics_on" -> {
+                setHingeHapticsEnabled(true)
+                true
+            }
+            "hinge_haptics_off" -> {
+                setHingeHapticsEnabled(false)
+                true
+            }
+            "set_fold_close_action", "fold_close_action", "cycle_fold_close" -> {
+                cycleFoldCloseActionMode()
+                true
+            }
+            "fold_close_awake", "fold_close_cover" -> {
+                setFoldCloseActionMode("📱 Keep Cover Awake")
+                true
+            }
+            "fold_close_vc", "fold_close_talk" -> {
+                setFoldCloseActionMode("🎙️ Auto-Talk to VC")
+                true
+            }
+            "fold_close_standby", "fold_close_oled" -> {
+                setFoldCloseActionMode("⛺ OLED Standby")
+                true
+            }
+            "fold_close_lock" -> {
+                setFoldCloseActionMode("🔒 Instant Lock")
+                true
+            }
             else -> false
+        }
+    }
+
+    private fun handleSystemOrTermuxOmniAction(action: OmniAction) {
+        if (action is OmniAction.SystemCommand) {
+            when (action.target.name) {
+                "TOGGLE_HINGE_HAPTICS" -> {
+                    when (action.parameter.lowercase()) {
+                        "on", "true", "1" -> setHingeHapticsEnabled(true)
+                        "off", "false", "0" -> setHingeHapticsEnabled(false)
+                        else -> toggleHingeHaptics()
+                    }
+                }
+                "SET_FOLD_CLOSE_ACTION" -> {
+                    if (action.parameter.isNotBlank()) {
+                        setFoldCloseActionMode(action.parameter)
+                    } else {
+                        cycleFoldCloseActionMode()
+                    }
+                }
+            }
+        } else if (action::class.java.simpleName == "TermuxCommand" ||
+            action.actionId.startsWith("termux", ignoreCase = true)
+        ) {
+            preferences.incrementLaunchCount(VcPackages.TERMUX_PACKAGE)
+            syncAppFlagsInMemory()
         }
     }
 
     // Omni-Command & Clipboard Vault Operations
     fun executeOmniAction(action: OmniAction) {
+        handleSystemOrTermuxOmniAction(action)
         when (action) {
             is OmniAction.LaunchAdHocSplit -> {
                 preferences.incrementLaunchCount(action.primaryApp.packageName)
@@ -660,7 +812,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 }
                 closeSearch()
             }
-            else -> {}
+            else -> {
+                if (action::class.java.simpleName == "TermuxCommand" ||
+                    action.actionId.startsWith("termux", ignoreCase = true)
+                ) {
+                    closeSearch()
+                }
+            }
         }
 
         OmniCommandEngine.execute(
@@ -688,6 +846,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
      */
     fun onOmniActionFromSpotlight(action: OmniAction) {
         handlePostureCommandId(action.actionId)
+        handleSystemOrTermuxOmniAction(action)
         when (action) {
             is OmniAction.LaunchAdHocSplit -> {
                 preferences.incrementLaunchCount(action.primaryApp.packageName)
@@ -709,7 +868,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 refreshSystemCompanionState()
                 closeSearch()
             }
-            else -> {}
+            else -> {
+                if (action::class.java.simpleName == "TermuxCommand" ||
+                    action.actionId.startsWith("termux", ignoreCase = true)
+                ) {
+                    closeSearch()
+                }
+            }
         }
     }
 
@@ -933,15 +1098,35 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         syncAppFlagsInMemory()
     }
 
-    fun togglePinDock(app: AppEntry) {
+    /**
+     * v0.4.0 Interactive Custom Dock Pinning (`"pinned_dock_packages"` in SharedPreferences).
+     * Allows 1-tap pinning/unpinning of any app to the persistent Z Fold 8 / S23 Ultra Home Dock.
+     */
+    fun togglePinAppToDock(packageName: String) {
+        if (packageName.isBlank()) return
         val current = preferences.pinnedDockPackages.toMutableSet()
-        if (app.packageName in current) {
-            current.remove(app.packageName)
+        val nowPinned = if (packageName in current) {
+            current.remove(packageName)
+            false
         } else {
-            current.add(app.packageName)
+            current.add(packageName)
+            true
         }
         preferences.pinnedDockPackages = current
+        rawPrefs.edit().putStringSet(KEY_PINNED_DOCK, current.toSet()).apply()
+        _pinnedDockPackages.value = current.toSet()
         syncAppFlagsInMemory()
+        val label = _allInstalledApps.value.firstOrNull { it.packageName == packageName }?.label ?: packageName
+        val feedback = if (nowPinned) "📌 Pinned $label to Dock" else "📍 Unpinned $label from Dock"
+        _omniStatusMessage.value = feedback
+        try {
+            Toast.makeText(appContext, feedback, Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) {
+        }
+    }
+
+    fun togglePinDock(app: AppEntry) {
+        togglePinAppToDock(app.packageName)
     }
 
     fun hideApp(app: AppEntry) {

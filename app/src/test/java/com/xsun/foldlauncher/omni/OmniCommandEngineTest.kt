@@ -2,6 +2,7 @@ package com.xsun.foldlauncher.omni
 
 import com.xsun.foldlauncher.model.AppEntry
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -168,6 +169,57 @@ class OmniCommandEngineTest {
             assertEquals(expectedProfileKey, cmd.profileKey)
             assertEquals("profile_$expectedProfileKey", cmd.actionId)
         }
+    }
+
+    @Test
+    fun parseSystemCommands_hingeHapticsAndFoldCloseActions_resolveExpectedTargets() {
+        // 1. Z Fold 8 Hinge Haptics & Detents Commands
+        for (query in listOf("> haptics", "> hinge haptics", "> detents")) {
+            val cmds = OmniCommandEngine.parseSystemCommands(query)
+            assertEquals("Expected 1 command for $query", 1, cmds.size)
+            val cmd = cmds.first()
+            assertEquals(SystemToggleTarget.TOGGLE_HINGE_HAPTICS, cmd.target)
+            assertEquals("toggle_hinge_haptics", cmd.actionId)
+        }
+
+        // 2. Z Fold 8 Fold-Close Action Commands
+        val expectedFoldModes = mapOf(
+            "> fold stay" to "stay",
+            "> fold voice" to "voice",
+            "> fold tent" to "tent",
+            "> fold lock" to "lock"
+        )
+        for ((query, mode) in expectedFoldModes) {
+            val cmds = OmniCommandEngine.parseSystemCommands(query)
+            assertEquals("Expected 1 command for $query", 1, cmds.size)
+            val cmd = cmds.first()
+            assertEquals(SystemToggleTarget.SET_FOLD_CLOSE_ACTION, cmd.target)
+            assertEquals("fold_close_$mode", cmd.actionId)
+            assertEquals(mode, cmd.parameter)
+            assertEquals(mode, cmd.foldCloseMode)
+        }
+    }
+
+    @Test
+    fun parseTermuxCommand_standardShAndSplitVariants_resolvesShellCommandAndSplitFlag() {
+        val termuxCmd = OmniCommandEngine.parseTermuxCommand("termux: top -n 1")
+        assertNotNull(termuxCmd)
+        assertEquals("top -n 1", termuxCmd!!.shellCommand)
+        assertFalse(termuxCmd.openSplitWithVc)
+        assertEquals("top -n 1", termuxCmd.copyText)
+
+        val shCmd = OmniCommandEngine.evaluatePrimary("sh: git status -sb")
+        assertTrue(shCmd is OmniAction.TermuxCommand)
+        val asTermux = shCmd as OmniAction.TermuxCommand
+        assertEquals("git status -sb", asTermux.shellCommand)
+        assertFalse(asTermux.openSplitWithVc)
+
+        val splitCmd = OmniCommandEngine.evaluatePrimary("termux-split: tail -f ~/.vc/agent.log")
+        assertTrue(splitCmd is OmniAction.TermuxCommand)
+        val asSplit = splitCmd as OmniAction.TermuxCommand
+        assertEquals("tail -f ~/.vc/agent.log", asSplit.shellCommand)
+        assertTrue(asSplit.openSplitWithVc)
+        assertEquals("termux_split_command", asSplit.actionId)
     }
 
     @Test
