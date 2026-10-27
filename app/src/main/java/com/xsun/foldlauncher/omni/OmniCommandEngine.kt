@@ -4,6 +4,8 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -58,7 +60,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Target system, posture simulator, or launcher toggle triggered by a `> ...` or `posture: ...` Omni-Command.
+ * Target system, hardware torch, dual-screen presentation, workspace profile, posture simulator,
+ * or launcher toggle triggered by a `> ...` or `posture: ...` Omni-Command.
  */
 enum class SystemToggleTarget(val defaultActionId: String) {
     DEX_GBOARD("dex_gboard"),
@@ -72,8 +75,21 @@ enum class SystemToggleTarget(val defaultActionId: String) {
     POSTURE_INNER("posture_inner"),
     POSTURE_COVER("posture_cover"),
     POSTURE_TENT("posture_tent"),
-    POSTURE_AUTO("posture_auto")
+    POSTURE_AUTO("posture_auto"),
+    TOGGLE_TORCH("toggle_torch"),
+    TOGGLE_COVER_PRESENTATION("toggle_cover_presentation"),
+    SWITCH_WORKSPACE_PROFILE("switch_workspace_profile")
 }
+
+/**
+ * Type alias so callers referencing `SystemActionType` or `SystemToggleTarget` share the exact same enum.
+ */
+typealias SystemActionType = SystemToggleTarget
+
+/**
+ * Type alias so callers referencing `OmniCommandResult` or `OmniAction` share the exact same sealed hierarchy.
+ */
+typealias OmniCommandResult = OmniAction
 
 /**
  * Represents a captured clipboard entry or a pinned developer snippet in [ClipboardVault].
@@ -117,8 +133,8 @@ sealed class OmniAction {
     }
 
     /**
-     * Executes a live system/DeX setting tweak, Z Fold 8 posture simulator override,
-     * or launcher overlay toggle (`> dex gboard`, `> rotation on`, `> lock`, `> hud`, `> arc`, `> posture flex`, `posture: inner`).
+     * Executes a live system/DeX setting tweak, hardware torch toggle, Z Fold 8 dual-screen cover presentation,
+     * workspace profile switch, posture simulator override, or launcher overlay toggle.
      */
     data class SystemCommand(
         val target: SystemToggleTarget,
@@ -126,24 +142,106 @@ sealed class OmniAction {
         override val title: String,
         override val subtitle: String,
         override val badge: String = "SYSTEM",
-        override val actionId: String = target.defaultActionId
-    ) : OmniAction()
+        override val actionId: String = target.defaultActionId,
+        val parameter: String = ""
+    ) : OmniAction() {
+        val actionType: SystemActionType get() = target
+        val type: SystemActionType get() = target
+        val profileKey: String get() = parameter
+        val desiredTorchState: Boolean?
+            get() = when (parameter.lowercase(Locale.US)) {
+                "on", "true", "1" -> true
+                "off", "false", "0" -> false
+                else -> null
+            }
+    }
 
     /**
      * Dispatches a prompt directly to the VC agent app (`vc: <prompt>` or `@vc <prompt>`).
+     * Extended by [VcQuickMacro] for instant macro expansion (`vc: status`, `vc: approve`, `vc: ship`, `vc: test`).
      */
-    data class SendToVc(
+    open class SendToVc(
         val prompt: String,
         val startVoiceTalk: Boolean = false,
-        val adjacentSplitScreen: Boolean = false
+        val adjacentSplitScreen: Boolean = false,
+        open val macroKey: String? = null
     ) : OmniAction() {
-        override val title: String =
-            if (prompt.isBlank()) "Open VC Agent Console" else "VC Dispatch: \"$prompt\""
+        open val promptText: String get() = prompt
+        val isQuickMacro: Boolean get() = !macroKey.isNullOrBlank()
+
+        override val title: String = when {
+            !macroKey.isNullOrBlank() -> "VC Macro [$macroKey]: \"$prompt\""
+            prompt.isBlank() -> "Open VC Agent Console"
+            else -> "VC Dispatch: \"$prompt\""
+        }
         override val subtitle: String =
             "Copy prompt & launch VC (${OmniCommandEngine.VC_PROD_PACKAGE_Z_FOLD8})"
-        override val badge: String = "VC AGENT"
+        override val badge: String = if (!macroKey.isNullOrBlank()) "VC MACRO" else "VC AGENT"
         override val copyText: String = prompt
-        override val actionId: String = "vc_dispatch"
+        override val actionId: String = if (!macroKey.isNullOrBlank()) "vc_macro_$macroKey" else "vc_dispatch"
+
+        operator fun component1(): String = prompt
+        operator fun component2(): Boolean = startVoiceTalk
+        operator fun component3(): Boolean = adjacentSplitScreen
+        operator fun component4(): String? = macroKey
+
+        fun copy(
+            prompt: String = this.prompt,
+            startVoiceTalk: Boolean = this.startVoiceTalk,
+            adjacentSplitScreen: Boolean = this.adjacentSplitScreen,
+            macroKey: String? = this.macroKey
+        ): SendToVc = SendToVc(
+            prompt = prompt,
+            startVoiceTalk = startVoiceTalk,
+            adjacentSplitScreen = adjacentSplitScreen,
+            macroKey = macroKey
+        )
+
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is SendToVc) return false
+            return prompt == other.prompt &&
+                startVoiceTalk == other.startVoiceTalk &&
+                adjacentSplitScreen == other.adjacentSplitScreen &&
+                macroKey == other.macroKey
+        }
+
+        override fun hashCode(): Int {
+            var result = prompt.hashCode()
+            result = 31 * result + startVoiceTalk.hashCode()
+            result = 31 * result + adjacentSplitScreen.hashCode()
+            result = 31 * result + (macroKey?.hashCode() ?: 0)
+            return result
+        }
+
+        override fun toString(): String =
+            "SendToVc(prompt=$prompt, startVoiceTalk=$startVoiceTalk, adjacentSplitScreen=$adjacentSplitScreen, macroKey=$macroKey)"
+    }
+
+    /**
+     * Quick VC Macro Command (`vc: status`, `vc: approve`, `vc: ship`, `vc: test`).
+     * Subclasses [SendToVc] so existing `is OmniAction.SendToVc` handlers automatically dispatch [promptText]
+     * while callers matching `is OmniCommandResult.VcQuickMacro` or `is OmniAction.VcQuickMacro` can inspect [macroKey].
+     */
+    class VcQuickMacro(
+        override val macroKey: String,
+        override val promptText: String
+    ) : SendToVc(
+        prompt = promptText,
+        startVoiceTalk = false,
+        adjacentSplitScreen = false,
+        macroKey = macroKey
+    ) {
+        override val badge: String = "VC MACRO · ${macroKey.uppercase(Locale.US)}"
+        override val actionId: String = "vc_macro_${macroKey.lowercase(Locale.US)}"
+
+        fun copy(
+            macroKey: String = this.macroKey,
+            promptText: String = this.promptText
+        ): VcQuickMacro = VcQuickMacro(macroKey = macroKey, promptText = promptText)
+
+        override fun toString(): String =
+            "VcQuickMacro(macroKey=$macroKey, promptText=$promptText)"
     }
 
     /**
@@ -199,6 +297,19 @@ object OmniCommandEngine {
     const val VC_COMPARE_PACKAGE_Z_FOLD8 = "dev.agentconversation.compare"
     const val TERMUX_PACKAGE = "com.termux"
     const val CHROME_PACKAGE = "com.android.chrome"
+
+    /**
+     * Built-in VC Quick Macro definitions (`vc: status`, `vc: approve`, `vc: ship`, `vc: test`).
+     */
+    val VC_QUICK_MACROS: Map<String, String> = mapOf(
+        "status" to "Status check: summarize active workers, CI status, and any pending blockers.",
+        "approve" to "Approved. Proceed with the current plan and ship the changes.",
+        "ship" to "Run full verification, commit, push, and merge to main.",
+        "test" to "Run ./gradlew testDebugUnitTest lintDebug assembleDebug and report results."
+    )
+
+    @Volatile
+    private var torchEnabledState: Boolean = false
 
     private data class BuiltInAliasSpec(
         val packageName: String,
@@ -262,6 +373,9 @@ object OmniCommandEngine {
     private val POSTURE_PREFIX_REGEX =
         Regex("^posture(?:\\s*:\\s*|\\s+)(.*)$", RegexOption.IGNORE_CASE)
 
+    private val PROFILE_PREFIX_REGEX =
+        Regex("^profile(?:\\s*:\\s*|\\s+)(.*)$", RegexOption.IGNORE_CASE)
+
     private val VC_COMMAND_REGEX =
         Regex("^(?:vc\\s*:\\s*|@vc\\s*:?\\s*|vc\\s+)(.*)$", RegexOption.IGNORE_CASE)
 
@@ -324,20 +438,19 @@ object OmniCommandEngine {
 
         val results = mutableListOf<OmniAction>()
 
-        // 1. Live System, DeX Tweaker & Z Fold 8 Posture Simulator Commands (`> ...` or `posture: ...`)
-        if (trimmed.startsWith(">") || POSTURE_PREFIX_REGEX.matches(trimmed)) {
+        // 1. Live System, DeX Tweaker, Torch, Dual-Screen Presentation, Workspace Profile & Posture Commands
+        if (trimmed.startsWith(">") || POSTURE_PREFIX_REGEX.matches(trimmed) || PROFILE_PREFIX_REGEX.matches(trimmed)) {
             results.addAll(parseSystemCommands(trimmed))
             return results
         }
 
         // 2. Ad-Hoc Split-Screen App Pair Command (`split: <app1> + <app2>` or `<app1> | <app2>`)
-        // Checked before VC dispatch so `vc | compare` and `split: vc + compare` resolve as Split-Screen!
         parseSplitCommand(trimmed, installedApps)?.let { splitAction ->
             results.add(splitAction)
             return results
         }
 
-        // 3. VC Agent Direct Dispatch (`vc: <prompt>` or `@vc <prompt>`)
+        // 3. VC Agent Direct Dispatch & VC Quick Macros (`vc: status`, `vc: approve`, `vc: ship`, `vc: test`, `vc: <prompt>`)
         parseVcCommand(trimmed)?.let { vcAction ->
             results.add(vcAction)
             return results
@@ -369,7 +482,7 @@ object OmniCommandEngine {
 
     /**
      * Resolves built-in Z Fold 8 Multi-VC (`vc`/`prod`, `vcprev`/`preview`, `vccomp`/`compare`),
-     * Termux (`termux`/`tty`/`sh`), and Chrome (`chrome`/`web`) aliases, preferring an matching
+     * Termux (`termux`/`tty`/`sh`), and Chrome (`chrome`/`web`) aliases, preferring a matching
      * [AppEntry] from [installedApps] when present and synthesizing one when absent.
      */
     fun resolveAppAlias(query: String, installedApps: List<AppEntry> = emptyList()): AppEntry? {
@@ -457,14 +570,17 @@ object OmniCommandEngine {
     }
 
     /**
-     * Parses `> ...` live system & DeX tweaker commands AND `> posture ...` / `posture: ...`
-     * Z Fold 8 posture simulator commands.
+     * Parses `> ...` live system & DeX tweaker commands, hardware torch (`> torch`, `> flashlight`,
+     * `> light on`, `> light off`), Z Fold 8 dual-screen cover presentation (`> dual`, `> cover hud`,
+     * `> presentation`), workspace profile switcher (`> profile all`, `> profile vc`, `> profile focus`,
+     * `> profile oled`), and posture simulator commands (`> posture ...` / `posture: ...`).
      */
     fun parseSystemCommands(rawQuery: String): List<OmniAction.SystemCommand> {
         val trimmed = rawQuery.trim()
         val isChevron = trimmed.startsWith(">")
         val posturePrefixMatch = POSTURE_PREFIX_REGEX.matchEntire(trimmed)
-        if (!isChevron && posturePrefixMatch == null) return emptyList()
+        val profilePrefixMatch = PROFILE_PREFIX_REGEX.matchEntire(trimmed)
+        if (!isChevron && posturePrefixMatch == null && profilePrefixMatch == null) return emptyList()
 
         val coreSystemCommands = listOf(
             OmniAction.SystemCommand(
@@ -532,7 +648,8 @@ object OmniCommandEngine {
                 title = "Switch Launcher to Flex / Tabletop Mode 115°",
                 subtitle = "Simulates half-opened Z Fold 8 Flex posture (action: posture_flex)",
                 badge = "POSTURE FLEX",
-                actionId = "posture_flex"
+                actionId = "posture_flex",
+                parameter = "flex"
             ),
             OmniAction.SystemCommand(
                 target = SystemToggleTarget.POSTURE_INNER,
@@ -540,7 +657,8 @@ object OmniCommandEngine {
                 title = "Force Z Fold 8 Inner 2-Column Canvas",
                 subtitle = "Overrides posture to unfolded 7.6\"+ EXPANDED tablet canvas (action: posture_inner)",
                 badge = "POSTURE INNER",
-                actionId = "posture_inner"
+                actionId = "posture_inner",
+                parameter = "inner"
             ),
             OmniAction.SystemCommand(
                 target = SystemToggleTarget.POSTURE_COVER,
@@ -548,7 +666,8 @@ object OmniCommandEngine {
                 title = "Force Z Fold 8 Cover Compact Mode",
                 subtitle = "Overrides posture to folded cover screen COMPACT layout (action: posture_cover)",
                 badge = "POSTURE COVER",
-                actionId = "posture_cover"
+                actionId = "posture_cover",
+                parameter = "cover"
             ),
             OmniAction.SystemCommand(
                 target = SystemToggleTarget.POSTURE_TENT,
@@ -556,7 +675,8 @@ object OmniCommandEngine {
                 title = "Enter Z Fold 8 Tent Mode Standby HUD",
                 subtitle = "Switches to low-power OLED Tent Mode Standby HUD (action: posture_tent)",
                 badge = "POSTURE TENT",
-                actionId = "posture_tent"
+                actionId = "posture_tent",
+                parameter = "tent"
             ),
             OmniAction.SystemCommand(
                 target = SystemToggleTarget.POSTURE_AUTO,
@@ -564,7 +684,85 @@ object OmniCommandEngine {
                 title = "Restore Hardware Sensor Auto-Posture",
                 subtitle = "Clears manual posture override & resumes live hinge sensor tracking (action: posture_auto)",
                 badge = "POSTURE AUTO",
-                actionId = "posture_auto"
+                actionId = "posture_auto",
+                parameter = "auto"
+            )
+        )
+
+        val torchToggleCmd = OmniAction.SystemCommand(
+            target = SystemToggleTarget.TOGGLE_TORCH,
+            triggerCommand = "> torch",
+            title = "Toggle Hardware Flashlight / Torch",
+            subtitle = "Toggles rear camera LED flashlight via CameraManager.setTorchMode",
+            badge = "TORCH",
+            actionId = "toggle_torch",
+            parameter = "toggle"
+        )
+        val torchOnCmd = OmniAction.SystemCommand(
+            target = SystemToggleTarget.TOGGLE_TORCH,
+            triggerCommand = "> light on",
+            title = "Turn Hardware Flashlight / Torch ON",
+            subtitle = "Enables rear camera LED torch immediately",
+            badge = "TORCH ON",
+            actionId = "torch_on",
+            parameter = "on"
+        )
+        val torchOffCmd = OmniAction.SystemCommand(
+            target = SystemToggleTarget.TOGGLE_TORCH,
+            triggerCommand = "> light off",
+            title = "Turn Hardware Flashlight / Torch OFF",
+            subtitle = "Disables rear camera LED torch immediately",
+            badge = "TORCH OFF",
+            actionId = "torch_off",
+            parameter = "off"
+        )
+
+        val coverPresentationCmd = OmniAction.SystemCommand(
+            target = SystemToggleTarget.TOGGLE_COVER_PRESENTATION,
+            triggerCommand = "> dual",
+            title = "Toggle Z Fold 8 Dual-Screen Cover Presentation HUD",
+            subtitle = "Projects live VC telemetry & status HUD onto the outer Cover Screen while unfolded",
+            badge = "DUAL SCREEN",
+            actionId = "toggle_cover_presentation",
+            parameter = "toggle"
+        )
+
+        val workspaceProfileCommands = listOf(
+            OmniAction.SystemCommand(
+                target = SystemToggleTarget.SWITCH_WORKSPACE_PROFILE,
+                triggerCommand = "> profile all",
+                title = "Switch Workspace Profile: All Apps",
+                subtitle = "Shows full app catalog & all dashboard widgets (profile: all)",
+                badge = "PROFILE ALL",
+                actionId = "profile_all",
+                parameter = "all"
+            ),
+            OmniAction.SystemCommand(
+                target = SystemToggleTarget.SWITCH_WORKSPACE_PROFILE,
+                triggerCommand = "> profile vc",
+                title = "Switch Workspace Profile: VC Agent Ops",
+                subtitle = "Prioritizes VC Prod, VC Preview, VC Compare, Termux & GitHub tools (profile: vc)",
+                badge = "PROFILE VC",
+                actionId = "profile_vc",
+                parameter = "vc"
+            ),
+            OmniAction.SystemCommand(
+                target = SystemToggleTarget.SWITCH_WORKSPACE_PROFILE,
+                triggerCommand = "> profile focus",
+                title = "Switch Workspace Profile: Deep Focus",
+                subtitle = "Hides distractions and keeps productivity & terminal apps only (profile: focus)",
+                badge = "PROFILE FOCUS",
+                actionId = "profile_focus",
+                parameter = "focus"
+            ),
+            OmniAction.SystemCommand(
+                target = SystemToggleTarget.SWITCH_WORKSPACE_PROFILE,
+                triggerCommand = "> profile oled",
+                title = "Switch Workspace Profile: True OLED Minimal",
+                subtitle = "Zero-chrome pure #000000 OLED canvas for maximum battery & focus (profile: oled)",
+                badge = "PROFILE OLED",
+                actionId = "profile_oled",
+                parameter = "oled"
             )
         )
 
@@ -574,10 +772,45 @@ object OmniCommandEngine {
             return matchPostureCommands(postureArg, postureCommands)
         }
 
+        if (profilePrefixMatch != null) {
+            val profileArg = profilePrefixMatch.groupValues[1].trim().lowercase(Locale.US)
+            if (profileArg.isEmpty()) return workspaceProfileCommands
+            return matchWorkspaceProfileCommands(profileArg, workspaceProfileCommands)
+        }
+
         val body = trimmed.removePrefix(">").trim().lowercase(Locale.US)
         if (body.isEmpty()) return coreSystemCommands
 
-        // Check posture simulator commands (`> posture ...`, `> flex`, `> unfold`, `> tent`, `> cover`)
+        // 1. Hardware Torch / Flashlight Commands (`> torch`, `> flashlight`, `> light on`, `> light off`)
+        when (body) {
+            "torch", "flashlight", "light", "flash" -> return listOf(torchToggleCmd)
+            "light on", "torch on", "flashlight on" -> return listOf(torchOnCmd)
+            "light off", "torch off", "flashlight off" -> return listOf(torchOffCmd)
+        }
+
+        // 2. Z Fold 8 Dual-Screen Cover Presentation Command (`> dual`, `> cover hud`, `> presentation`)
+        if (body == "dual" ||
+            body == "cover hud" ||
+            body == "presentation" ||
+            body == "dual screen" ||
+            body == "cover presentation" ||
+            body == "sub display"
+        ) {
+            return listOf(coverPresentationCmd)
+        }
+
+        // 3. Workspace Profile Switcher Commands (`> profile all`, `> profile vc`, `> profile focus`, `> profile oled`)
+        if (body == "profile" || body == "profile:" || body == "profiles") {
+            return workspaceProfileCommands
+        }
+        if (body.startsWith("profile ") || body.startsWith("profile:")) {
+            val sub = body.removePrefix("profile").removePrefix(":").trim()
+            if (sub.isEmpty()) return workspaceProfileCommands
+            val matchedProfile = matchWorkspaceProfileCommands(sub, workspaceProfileCommands)
+            if (matchedProfile.isNotEmpty()) return matchedProfile
+        }
+
+        // 4. Posture Simulator Commands (`> posture ...`, `> flex`, `> unfold`, `> tent`, `> cover`)
         if (body == "posture" || body == "posture:") {
             return postureCommands
         }
@@ -603,7 +836,7 @@ object OmniCommandEngine {
         }
         if (directPostureMatch.isNotEmpty()) return directPostureMatch
 
-        // Exact or semantic matching on core system commands
+        // 5. Core System & DeX Tweaker Commands
         val exactFiltered = when {
             body == "dex gboard" || body == "gboard" || body == "dex ime" || body == "dex" || body == "ime" ->
                 coreSystemCommands.filter { it.target == SystemToggleTarget.DEX_GBOARD }
@@ -628,12 +861,35 @@ object OmniCommandEngine {
 
         if (exactFiltered.isNotEmpty()) return exactFiltered
 
-        val allCommands = coreSystemCommands + postureCommands
+        val allCommands = coreSystemCommands +
+            listOf(torchToggleCmd, torchOnCmd, torchOffCmd, coverPresentationCmd) +
+            workspaceProfileCommands +
+            postureCommands
+
         return allCommands.filter { cmd ->
             cmd.triggerCommand.lowercase(Locale.US).contains(body) ||
                 cmd.title.lowercase(Locale.US).contains(body) ||
                 cmd.badge.lowercase(Locale.US).contains(body) ||
                 cmd.actionId.lowercase(Locale.US).contains(body)
+        }
+    }
+
+    private fun matchWorkspaceProfileCommands(
+        query: String,
+        profileCommands: List<OmniAction.SystemCommand>
+    ): List<OmniAction.SystemCommand> {
+        val exact = when (query) {
+            "all", "default", "full" -> profileCommands.filter { it.parameter == "all" }
+            "vc", "agent", "ops", "dev" -> profileCommands.filter { it.parameter == "vc" }
+            "focus", "work", "deep" -> profileCommands.filter { it.parameter == "focus" }
+            "oled", "minimal", "dark", "battery" -> profileCommands.filter { it.parameter == "oled" }
+            else -> emptyList()
+        }
+        if (exact.isNotEmpty()) return exact
+        return profileCommands.filter { cmd ->
+            cmd.parameter.contains(query) ||
+                cmd.title.lowercase(Locale.US).contains(query) ||
+                cmd.actionId.lowercase(Locale.US).contains(query)
         }
     }
 
@@ -663,7 +919,8 @@ object OmniCommandEngine {
     }
 
     /**
-     * Parses `vc: <prompt>` or `@vc <prompt>` agent dispatch commands.
+     * Parses `vc: status`, `vc: approve`, `vc: ship`, `vc: test` into [OmniCommandResult.VcQuickMacro],
+     * or general `vc: <prompt>` / `@vc <prompt>` into [OmniAction.SendToVc].
      */
     fun parseVcCommand(rawQuery: String): OmniAction.SendToVc? {
         val trimmed = rawQuery.trim()
@@ -672,6 +929,17 @@ object OmniCommandEngine {
         }
         val match = VC_COMMAND_REGEX.matchEntire(trimmed) ?: return null
         val rawPrompt = match.groupValues[1].trim()
+
+        // Check built-in VC Quick Macros (`vc: status`, `vc: approve`, `vc: ship`, `vc: test`)
+        val macroKeyCandidate = rawPrompt.lowercase(Locale.US)
+        val macroPrompt = VC_QUICK_MACROS[macroKeyCandidate]
+        if (macroPrompt != null) {
+            return OmniAction.VcQuickMacro(
+                macroKey = macroKeyCandidate,
+                promptText = macroPrompt
+            )
+        }
+
         val voice = rawPrompt.startsWith("--voice ") || rawPrompt.startsWith("!voice ")
         val split = rawPrompt.startsWith("--split ") || rawPrompt.startsWith("!split ")
         val cleanedPrompt = rawPrompt
@@ -685,6 +953,14 @@ object OmniCommandEngine {
             startVoiceTalk = voice,
             adjacentSplitScreen = split
         )
+    }
+
+    /**
+     * Parses a VC Quick Macro command (`vc: status`, `vc: approve`, `vc: ship`, `vc: test`) specifically,
+     * returning `null` if the query is not one of the quick macros.
+     */
+    fun parseVcQuickMacro(rawQuery: String): OmniAction.VcQuickMacro? {
+        return parseVcCommand(rawQuery) as? OmniAction.VcQuickMacro
     }
 
     /**
@@ -816,7 +1092,6 @@ object OmniCommandEngine {
             }
             if (bytes.isEmpty()) return null
             val text = String(bytes, StandardCharsets.UTF_8)
-            // Verify decoded characters are printable UTF-8
             if (text.all { it == '\n' || it == '\r' || it == '\t' || (!it.isISOControl() && it.code != 0xFFFD) }) {
                 text
             } else {
@@ -979,7 +1254,6 @@ object OmniCommandEngine {
             )
         }
 
-        // Also support ISO-8601 -> Unix Epoch (e.g., "2026-10-27T01:40:00Z")
         if (trimmed.length >= 19 && trimmed[4] == '-' && trimmed[7] == '-' && (trimmed[10] == 'T' || trimmed[10] == ' ')) {
             return try {
                 val normalizedIso = if (trimmed[10] == ' ') {
@@ -1046,7 +1320,6 @@ object OmniCommandEngine {
             val dpiBeforeTarget = match.groupValues[3].takeIf { it.isNotEmpty() }?.toDoubleOrNull()
             val targetUnit = match.groupValues[4].lowercase(Locale.US)
             val dpiAfterTarget = match.groupValues[5].takeIf { it.isNotEmpty() }?.toDoubleOrNull()
-            // Require either `@ <dpi>` or `to dp`/`in dp` (or `to px`/`in px`) so bare numbers without context don't misfire
             if (dpiBeforeTarget == null && dpiAfterTarget == null && targetUnit.isEmpty()) return null
 
             val dpi = dpiBeforeTarget ?: dpiAfterTarget ?: DEFAULT_Z_FOLD8_DPI
@@ -1172,6 +1445,30 @@ object OmniCommandEngine {
     }
 
     /**
+     * Toggles or sets the device's rear LED camera torch using Android's [CameraManager].
+     */
+    fun setHardwareTorch(context: Context, desiredState: Boolean? = null): Boolean {
+        return try {
+            val cm = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager ?: return false
+            val targetCameraId = cm.cameraIdList.firstOrNull { id ->
+                val chars = cm.getCameraCharacteristics(id)
+                val hasFlash = chars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                val isBack = chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+                hasFlash && isBack
+            } ?: cm.cameraIdList.firstOrNull { id ->
+                cm.getCameraCharacteristics(id).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+            } ?: return false
+
+            val nextState = desiredState ?: !torchEnabledState
+            cm.setTorchMode(targetCameraId, nextState)
+            torchEnabledState = nextState
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
      * Executes an [OmniAction] on the device using [SystemTweaker], [ClipboardVault], or launcher callbacks.
      */
     fun execute(
@@ -1181,7 +1478,10 @@ object OmniCommandEngine {
         onToggleFloatingHud: (() -> Unit)? = null,
         onToggleThumbArc: (() -> Unit)? = null,
         onStatusMessage: ((String) -> Unit)? = null,
-        onPostureCommand: ((String) -> Unit)? = null
+        onPostureCommand: ((String) -> Unit)? = null,
+        onToggleTorch: ((Boolean?) -> Unit)? = null,
+        onToggleCoverPresentation: (() -> Unit)? = null,
+        onSwitchWorkspaceProfile: ((String) -> Unit)? = null
     ): Boolean {
         return when (action) {
             is OmniAction.LaunchAdHocSplit -> {
@@ -1252,6 +1552,32 @@ object OmniCommandEngine {
                         onStatusMessage?.invoke("${action.title} (${action.actionId})")
                         true
                     }
+                    SystemToggleTarget.TOGGLE_TORCH -> {
+                        val desired = action.desiredTorchState
+                        onToggleTorch?.invoke(desired)
+                        val ok = setHardwareTorch(context, desired)
+                        onStatusMessage?.invoke(
+                            when (desired) {
+                                true -> "Hardware Torch ON"
+                                false -> "Hardware Torch OFF"
+                                null -> if (torchEnabledState) "Hardware Torch ON" else "Hardware Torch OFF"
+                            }
+                        )
+                        ok || onToggleTorch != null
+                    }
+                    SystemToggleTarget.TOGGLE_COVER_PRESENTATION -> {
+                        onToggleCoverPresentation?.invoke()
+                        onPostureCommand?.invoke(action.actionId)
+                        onStatusMessage?.invoke("Toggled Z Fold 8 Dual-Screen Cover Presentation HUD")
+                        true
+                    }
+                    SystemToggleTarget.SWITCH_WORKSPACE_PROFILE -> {
+                        val profileKey = action.profileKey.ifBlank { "all" }
+                        onSwitchWorkspaceProfile?.invoke(profileKey)
+                        onPostureCommand?.invoke(action.actionId)
+                        onStatusMessage?.invoke("Switched Workspace Profile: ${profileKey.uppercase(Locale.US)}")
+                        true
+                    }
                 }
             }
             is OmniAction.SendToVc -> {
@@ -1259,7 +1585,7 @@ object OmniCommandEngine {
                     ClipboardVault.copyToSystemClipboard(context, action.prompt, "VC Prompt")
                     clipboardVault?.addOrBumpClip(
                         text = action.prompt,
-                        label = "VC Dispatch Prompt",
+                        label = if (action.isQuickMacro) "VC Macro (${action.macroKey})" else "VC Dispatch Prompt",
                         category = "VC Prompt"
                     )
                 }
@@ -1571,8 +1897,8 @@ class ClipboardVault(
 }
 
 /**
- * Renders Omni-Command Palette cards (Ad-Hoc Split-Screen, `>` System/DeX/Posture Tweaker commands,
- * `vc:` Agent Dispatch, Developer/Unit Conversions, and `clip:` Clipboard Vault results)
+ * Renders Omni-Command Palette cards (Ad-Hoc Split-Screen, `>` System/DeX/Torch/Dual/Profile/Posture Tweaker commands,
+ * `vc:` Agent Dispatch & Quick Macros, Developer/Unit Conversions, and `clip:` Clipboard Vault results)
  * for Spotlight Search and the Home Dashboard.
  */
 @Composable
@@ -1632,7 +1958,6 @@ fun OmniCommandResultsCard(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // Quick Omni-Command Syntax Pills when user opens Spotlight or types a prefix
         if (actions.isEmpty() && query.isBlank() && showQuickCommandPillsWhenIdle) {
             OmniQuickSyntaxStrip(
                 clipboardCount = clipboardItems.size,
@@ -1707,13 +2032,13 @@ private fun OmniQuickSyntaxStrip(
     val suggestions = remember(clipboardCount) {
         listOf(
             "split: vc + compare" to "⚡ vc + compare",
-            "split: vc + termux" to "🖥 vc + termux",
+            "vc: ship" to "🚀 vc: ship",
+            "> torch" to "🔦 > torch",
+            "> dual" to "🪞 > dual HUD",
+            "> profile vc" to "🗂 > profile vc",
             "> posture flex" to "📐 > posture flex",
-            "> " to "⚙ > system & DeX",
-            "vc: " to "🤖 vc: prompt",
             "clip: " to "📋 clip: vault ($clipboardCount)",
-            "2448x1848 @ 420dpi" to "📱 Fold8 px→dp",
-            "now" to "⏱ epoch now"
+            "2448x1848 @ 420dpi" to "📱 Fold8 px→dp"
         )
     }
 
@@ -1899,7 +2224,7 @@ private fun VcDispatchActionCard(
             ) {
                 OmniBadgePill(text = action.badge, color = FoldLauncherColors.VioletAccent)
                 Text(
-                    text = "DIRECT VC AGENT DISPATCH",
+                    text = if (action.isQuickMacro) "INSTANT VC MACRO DISPATCH" else "DIRECT VC AGENT DISPATCH",
                     fontSize = 10.sp,
                     fontWeight = FontWeight.ExtraBold,
                     color = FoldLauncherColors.CyanBright

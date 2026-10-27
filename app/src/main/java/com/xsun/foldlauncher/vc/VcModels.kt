@@ -68,6 +68,41 @@ enum class VcRunState {
     IDLE
 }
 
+/**
+ * 1-tap VC prompt macros for rapid coordinator/worker dispatch from the Launcher Home Screen.
+ */
+enum class VcPromptMacro(
+    val label: String,
+    val icon: String,
+    val promptText: String
+) {
+    STATUS(
+        "Status",
+        "📊",
+        "Give me a concise status update on current tasks and any blockers."
+    ),
+    APPROVE_CONTINUE(
+        "Approve & Go",
+        "✅",
+        "Approved. Proceed with the next implementation wave."
+    ),
+    RUN_TESTS(
+        "Verify CI/Tests",
+        "🧪",
+        "Run unit tests and verify CI health."
+    ),
+    SHIP_RELEASE(
+        "Ship Release",
+        "🚀",
+        "Cut the next release tag, verify CI, and deploy the APK."
+    ),
+    KEEP_BUILDING(
+        "Keep Building",
+        "🔥",
+        "Keep going with the next wave of high-impact features."
+    )
+}
+
 enum class VcConnectionState {
     UNCONFIGURED,
     CONNECTING,
@@ -156,6 +191,10 @@ data class VcAgentStatus(
     val hasUnreadUpdate: Boolean = false,
     val projectId: String = "general"
 ) {
+    /** Alias for callers referencing `.id` on a VC session/agent entry */
+    val id: String
+        get() = sessionId
+
     val isWorking: Boolean
         get() = status.equals("working", ignoreCase = true)
 
@@ -211,7 +250,8 @@ data class VcLiveSummary(
     val installedVcPackage: String? = null,
     val isVcInForeground: Boolean = false,
     val selectedVariant: VcVariant = VcVariant.PROD,
-    val installedVariants: Set<VcVariant> = emptySet()
+    val installedVariants: Set<VcVariant> = emptySet(),
+    val pinnedSessionId: String? = null
 ) {
     val pendingApprovals: Int
         get() = approvalCount
@@ -224,6 +264,17 @@ data class VcLiveSummary(
 
     val sessions: List<VcAgentStatus>
         get() = activeAgents
+
+    val totalSessions: Int
+        get() = activeAgents.size.coerceAtLeast(runningCount)
+
+    val attentionEvents: List<VcAttentionItem>
+        get() = attentionItems
+
+    fun resolvePinnedAgent(overridePinnedSessionId: String? = pinnedSessionId): VcAgentStatus? {
+        val pinId = overridePinnedSessionId?.takeIf { it.isNotBlank() } ?: return null
+        return activeAgents.firstOrNull { it.sessionId == pinId }
+    }
 
     val hasUrgentAttention: Boolean
         get() = approvalCount > 0 || failedCount > 0

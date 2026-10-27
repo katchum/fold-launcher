@@ -86,6 +86,7 @@ import com.xsun.foldlauncher.vc.VcBackgroundMonitor
 import com.xsun.foldlauncher.vc.VcLiveSummary
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlin.math.PI
@@ -357,7 +358,38 @@ object SpatialMath {
         val nextY = (currentNormalizedY + (deltaYPx / safeH) * sensitivity).coerceIn(0f, 1f)
         return nextX to nextY
     }
+
+    /**
+     * Computes a deterministic 2D Lissajous pixel-shift offset `(dxDp, dyDp)` within
+     * `[-maxRadiusDp, +maxRadiusDp]` from [minuteOfDay] (`0..1439`) to prevent static
+     * AMOLED burn-in on the Galaxy Z Fold 8 and S23 Ultra during Tent Mode or Lock-Screen Cockpit standby.
+     */
+    fun computeOledPixelShiftOffset(
+        minuteOfDay: Int,
+        maxRadiusDp: Float = 6f
+    ): Pair<Float, Float> {
+        if (maxRadiusDp <= 0f) return 0f to 0f
+        val safeRadius = maxRadiusDp.coerceAtMost(24f)
+        val normalizedMinute = ((minuteOfDay % 1440) + 1440) % 1440
+        val baseAngleRad = (normalizedMinute.toFloat() / 60f) * (2f * PI.toFloat())
+        // 3:2 harmonic Lissajous curve with phase offset so pixels trace a smooth 2D orbit
+        val dxDp = (sin(baseAngleRad * 3f) * safeRadius).coerceIn(-safeRadius, safeRadius)
+        val dyDp = (cos(baseAngleRad * 2f) * safeRadius).coerceIn(-safeRadius, safeRadius)
+        return dxDp to dyDp
+    }
 }
+
+/**
+ * Top-level pure function for AMOLED Burn-In Protection Lissajous Pixel-Shift (`[-maxRadiusDp, +maxRadiusDp]`).
+ * Delegates to [SpatialMath.computeOledPixelShiftOffset] so both top-level and `SpatialMath` callers work seamlessly.
+ */
+fun computeOledPixelShiftOffset(
+    minuteOfDay: Int,
+    maxRadiusDp: Float = 6f
+): Pair<Float, Float> = SpatialMath.computeOledPixelShiftOffset(
+    minuteOfDay = minuteOfDay,
+    maxRadiusDp = maxRadiusDp
+)
 
 /**
  * Subscribes to Android's [SensorManager] (`TYPE_GAME_ROTATION_VECTOR` or `TYPE_ACCELEROMETER` fallback,
@@ -642,6 +674,8 @@ fun TentModeStandbyHud(
     onMediaPlayPause: (() -> Unit)? = null,
     onMediaNext: (() -> Unit)? = null,
     onExitTentMode: () -> Unit = {},
+    isTorchOn: Boolean = false,
+    onToggleTorch: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -668,6 +702,13 @@ fun TentModeStandbyHud(
     val dateFormat = remember { SimpleDateFormat("EEE, MMM d", Locale.getDefault()) }
     val formattedTime = remember(currentTimeMillis) { timeFormat.format(Date(currentTimeMillis)) }
     val formattedDate = remember(currentTimeMillis) { dateFormat.format(Date(currentTimeMillis)).uppercase() }
+    val minuteOfDay = remember(currentTimeMillis) {
+        val cal = Calendar.getInstance().apply { timeInMillis = currentTimeMillis }
+        cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+    }
+    val (pixelShiftX, pixelShiftY) = remember(minuteOfDay) {
+        computeOledPixelShiftOffset(minuteOfDay = minuteOfDay, maxRadiusDp = 6f)
+    }
 
     fun dispatchSystemMediaKey(keyCode: Int) {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
@@ -763,13 +804,17 @@ fun TentModeStandbyHud(
             }
         }
 
-        // 2. Center Row: Ultra-Crisp OLED Desk Clock & Date + Next Calendar Event
+        // 2. Center Row: Ultra-Crisp OLED Desk Clock & Date (with Lissajous Burn-In Pixel Shift) + Quick Actions
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .offset(x = pixelShiftX.dp, y = pixelShiftY.dp)
+            ) {
                 Text(
                     text = formattedTime,
                     fontSize = 48.sp,
@@ -787,35 +832,78 @@ fun TentModeStandbyHud(
                 )
             }
 
-            // 1-Tap Talk to VC Voice Button
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(FoldLauncherColors.CyanGlow)
-                    .border(1.2.dp, FoldLauncherColors.ElectricCyan, RoundedCornerShape(18.dp))
-                    .clickable {
-                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                        if (onTalkToVc != null) {
-                            onTalkToVc()
-                        } else {
-                            vcMonitor.launchVcVoiceTalk()
-                        }
-                    }
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                contentAlignment = Alignment.Center
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = "🎙 Talk to VC",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = FoldLauncherColors.CyanBright
-                    )
-                    Text(
-                        text = "Instant Voice Turn",
-                        fontSize = 10.sp,
-                        color = FoldLauncherColors.TextSecondary
-                    )
+                // 1-Tap Bedside Torch Button
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(
+                            if (isTorchOn) {
+                                FoldLauncherColors.AmberWarning.copy(alpha = 0.24f)
+                            } else {
+                                FoldLauncherColors.GlassSurfaceElevated
+                            }
+                        )
+                        .border(
+                            width = 1.2.dp,
+                            color = if (isTorchOn) FoldLauncherColors.AmberWarning else FoldLauncherColors.GlassBorder,
+                            shape = RoundedCornerShape(18.dp)
+                        )
+                        .clickable {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onToggleTorch()
+                        }
+                        .padding(horizontal = 12.dp, vertical = 12.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = if (isTorchOn) "🔦 Torch ON" else "🔦 Torch",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = if (isTorchOn) FoldLauncherColors.AmberWarning else FoldLauncherColors.TextPrimary
+                        )
+                        Text(
+                            text = if (isTorchOn) "Tap to Off" else "Bedside LED",
+                            fontSize = 10.sp,
+                            color = FoldLauncherColors.TextSecondary
+                        )
+                    }
+                }
+
+                // 1-Tap Talk to VC Voice Button
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(FoldLauncherColors.CyanGlow)
+                        .border(1.2.dp, FoldLauncherColors.ElectricCyan, RoundedCornerShape(18.dp))
+                        .clickable {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            if (onTalkToVc != null) {
+                                onTalkToVc()
+                            } else {
+                                vcMonitor.launchVcVoiceTalk()
+                            }
+                        }
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "🎙 Talk to VC",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = FoldLauncherColors.CyanBright
+                        )
+                        Text(
+                            text = "Instant Voice Turn",
+                            fontSize = 10.sp,
+                            color = FoldLauncherColors.TextSecondary
+                        )
+                    }
                 }
             }
         }

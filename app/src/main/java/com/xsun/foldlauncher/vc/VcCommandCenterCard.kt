@@ -76,11 +76,17 @@ fun VcCommandCenterCard(
     modifier: Modifier = Modifier,
     onTalkVc: ((sessionId: String?) -> Unit)? = null,
     onSplitLaunch: ((secondaryPackage: String) -> Unit)? = null,
-    onSelectVariant: ((VcVariant) -> Unit)? = null
+    onSelectVariant: ((VcVariant) -> Unit)? = null,
+    pinnedSessionId: String? = summary.pinnedSessionId,
+    onPinSession: ((sessionId: String?) -> Unit)? = null,
+    onQuickSend: ((sessionId: String?, text: String) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val cardShape = RoundedCornerShape(22.dp)
     var showConfigEditor by remember { mutableStateOf(false) }
+    var localPinnedSessionId by remember(pinnedSessionId, summary.pinnedSessionId) {
+        mutableStateOf(pinnedSessionId ?: summary.pinnedSessionId)
+    }
     var selectedSessionId by remember { mutableStateOf<String?>(null) }
     var selectedVariant by remember(summary.selectedVariant) { mutableStateOf(summary.selectedVariant) }
     var quickMessageDraft by remember { mutableStateOf("") }
@@ -96,10 +102,32 @@ fun VcCommandCenterCard(
         mutableStateOf(config.notifyWhenBackgrounded)
     }
 
-    val selectedAgent = remember(summary.activeAgents, selectedSessionId) {
-        summary.activeAgents.firstOrNull { it.sessionId == selectedSessionId }
-            ?: summary.activeAgents.firstOrNull { it.role.equals("general", ignoreCase = true) }
-            ?: summary.activeAgents.firstOrNull()
+    val pinnedAgent = remember(summary.activeAgents, localPinnedSessionId) {
+        val pinId = localPinnedSessionId?.takeIf { it.isNotBlank() }
+        if (pinId != null) {
+            summary.activeAgents.firstOrNull { it.sessionId == pinId }
+        } else {
+            null
+        }
+    }
+
+    val orderedAgents = remember(summary.activeAgents, localPinnedSessionId) {
+        val pinId = localPinnedSessionId
+        if (pinId.isNullOrBlank()) {
+            summary.activeAgents
+        } else {
+            summary.activeAgents.sortedWith(
+                compareByDescending<VcAgentStatus> { it.sessionId == pinId }
+                    .thenBy { it.priorityOrder }
+            )
+        }
+    }
+
+    val selectedAgent = remember(orderedAgents, selectedSessionId, pinnedAgent) {
+        orderedAgents.firstOrNull { it.sessionId == selectedSessionId }
+            ?: pinnedAgent
+            ?: orderedAgents.firstOrNull { it.role.equals("general", ignoreCase = true) }
+            ?: orderedAgents.firstOrNull()
     }
 
     val approvalSession = remember(summary.sessions, summary.attentionItems) {
@@ -512,8 +540,64 @@ fun VcCommandCenterCard(
             }
         }
 
-        // 4. Active Agents Strip (Tap to target for inline quick-send or double-tap to open)
-        if (summary.activeAgents.isNotEmpty()) {
+        // 4. Pinned Coordinator Bar & Active Agents Strip (Tap to target, 📌 to pin/unpin at top)
+        if (pinnedAgent != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(FoldLauncherColors.CyanGlow.copy(alpha = 0.28f))
+                    .border(1.dp, FoldLauncherColors.ElectricCyan, RoundedCornerShape(12.dp))
+                    .clickable {
+                        selectedSessionId = pinnedAgent.sessionId
+                        onOpenVc(pinnedAgent.sessionId)
+                    }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        text = "📌 PINNED",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = FoldLauncherColors.CyanBright
+                    )
+                    Text(
+                        text = "${pinnedAgent.name} · ${pinnedAgent.project} (${pinnedAgent.role.uppercase(Locale.ROOT)})",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = FoldLauncherColors.TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Text(
+                    text = "Unpin",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = FoldLauncherColors.TextSecondary,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(FoldLauncherColors.GlassSurfaceHighlight)
+                        .clickable {
+                            localPinnedSessionId = null
+                            try {
+                                VcBackgroundMonitor.getInstance(context).setPinnedSessionId(null)
+                            } catch (_: Throwable) {
+                            }
+                            onPinSession?.invoke(null)
+                        }
+                        .padding(horizontal = 7.dp, vertical = 3.dp)
+                )
+            }
+        }
+
+        if (orderedAgents.isNotEmpty()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -521,8 +605,9 @@ fun VcCommandCenterCard(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                summary.activeAgents.take(8).forEach { agent ->
+                orderedAgents.take(8).forEach { agent ->
                     val isSelected = selectedAgent?.sessionId == agent.sessionId
+                    val isPinned = localPinnedSessionId == agent.sessionId
                     val dotColor = when {
                         agent.needsApproval -> FoldLauncherColors.AmberWarning
                         agent.isWorking -> FoldLauncherColors.ElectricCyan
@@ -539,8 +624,11 @@ fun VcCommandCenterCard(
                             )
                             .border(
                                 1.dp,
-                                if (isSelected) FoldLauncherColors.ElectricCyan
-                                else FoldLauncherColors.GlassBorder,
+                                when {
+                                    isPinned -> VcMintAccent
+                                    isSelected -> FoldLauncherColors.ElectricCyan
+                                    else -> FoldLauncherColors.GlassBorder
+                                },
                                 RoundedCornerShape(12.dp)
                             )
                             .clickable {
@@ -563,10 +651,29 @@ fun VcCommandCenterCard(
                         Text(
                             text = "${agent.name} · ${agent.project}",
                             fontSize = 11.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                            fontWeight = if (isSelected || isPinned) FontWeight.Bold else FontWeight.Medium,
                             color = if (isSelected) FoldLauncherColors.CyanBright else FoldLauncherColors.TextPrimary,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = if (isPinned) "📌" else "📍",
+                            fontSize = 10.sp,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable {
+                                    val nextPin = if (isPinned) null else agent.sessionId
+                                    localPinnedSessionId = nextPin
+                                    if (nextPin != null) {
+                                        selectedSessionId = nextPin
+                                    }
+                                    try {
+                                        VcBackgroundMonitor.getInstance(context).setPinnedSessionId(nextPin)
+                                    } catch (_: Throwable) {
+                                    }
+                                    onPinSession?.invoke(nextPin)
+                                }
+                                .padding(horizontal = 2.dp)
                         )
                     }
                 }
@@ -604,11 +711,56 @@ fun VcCommandCenterCard(
             }
         }
 
-        // 6. Inline Quick-Send / Live Steer Bar right on the Home Screen
+        // 6. 1-Tap VC Prompt Macros + Inline Quick-Send / Live Steer Bar right on the Home Screen
         Column(
             modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            val macroTargetAgent = pinnedAgent ?: selectedAgent
+            val macroTargetLabel = macroTargetAgent?.let {
+                if (pinnedAgent != null && it.sessionId == pinnedAgent.sessionId) {
+                    "📌 ${it.name}"
+                } else {
+                    it.name
+                }
+            } ?: "General"
+
+            Text(
+                text = "1-TAP PROMPT MACROS → $macroTargetLabel",
+                fontSize = 9.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = VcMintAccent
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                VcPromptMacro.entries.forEach { macro ->
+                    VcPromptMacroChip(
+                        macro = macro,
+                        onClick = {
+                            val targetSid = macroTargetAgent?.sessionId
+                            if (targetSid != null || config.isConfigured) {
+                                if (onQuickSend != null) {
+                                    onQuickSend(targetSid, macro.promptText)
+                                } else {
+                                    onSendQuickMessage(
+                                        targetSid,
+                                        macro.promptText,
+                                        macroTargetAgent?.isWorking == true
+                                    )
+                                }
+                            } else {
+                                quickMessageDraft = macro.promptText
+                            }
+                        }
+                    )
+                }
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -951,6 +1103,36 @@ private fun VcPendingApprovalBanner(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun VcPromptMacroChip(
+    macro: VcPromptMacro,
+    onClick: () -> Unit
+) {
+    val chipShape = RoundedCornerShape(10.dp)
+    Row(
+        modifier = Modifier
+            .clip(chipShape)
+            .background(FoldLauncherColors.GlassSurfaceHighlight)
+            .border(1.dp, FoldLauncherColors.ElectricCyan.copy(alpha = 0.45f), chipShape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 9.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(
+            text = macro.icon,
+            fontSize = 10.sp
+        )
+        Text(
+            text = macro.label,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            color = FoldLauncherColors.CyanBright,
+            maxLines = 1
+        )
     }
 }
 

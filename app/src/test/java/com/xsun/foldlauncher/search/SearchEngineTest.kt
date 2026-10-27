@@ -1,6 +1,9 @@
 package com.xsun.foldlauncher.search
 
 import com.xsun.foldlauncher.model.AppEntry
+import com.xsun.foldlauncher.posture.DevicePosture
+import com.xsun.foldlauncher.ui.animation.AnimationPhysicsMath
+import com.xsun.foldlauncher.ui.animation.RadialTriggerCorner
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -79,5 +82,27 @@ class SearchEngineTest {
         assertEquals("3.1429", SearchEngine.evaluateInlineMath("22 / 7"))
         assertNull(SearchEngine.evaluateInlineMath("youtube"))
         assertNull(SearchEngine.evaluateInlineMath("10 / 0"))
+    }
+
+    @Test
+    fun animationPhysicsMath_computesPostureRankWaveAndCornerArcTrigger() {
+        assertEquals(0, AnimationPhysicsMath.postureExpansionRank(DevicePosture.COMPACT))
+        assertEquals(1, AnimationPhysicsMath.postureExpansionRank(DevicePosture.FLEX_TABLETOP))
+        assertEquals(2, AnimationPhysicsMath.postureExpansionRank(DevicePosture.EXPANDED))
+
+        val peak = AnimationPhysicsMath.computeGaussianWaveIntensity(index = 5, centerIndex = 5f)
+        val neighbor = AnimationPhysicsMath.computeGaussianWaveIntensity(index = 6, centerIndex = 5f)
+        assertEquals(1.0f, peak, 0.001f)
+        assertTrue(neighbor in 0.4f..0.8f)
+
+        val corner = AnimationPhysicsMath.detectCornerArcTrigger(
+            startX = 950f,
+            startY = 1900f,
+            dragDx = -60f,
+            dragDy = -60f,
+            widthPx = 1000f,
+            heightPx = 2000f
+        )
+        assertEquals(RadialTriggerCorner.BOTTOM_RIGHT, corner)
     }
 }

@@ -1,5 +1,6 @@
 package com.xsun.foldlauncher.ui.components
 
+import android.app.KeyguardManager
 import android.content.Context
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -120,7 +121,10 @@ fun TopStatusBar(
     modifier: Modifier = Modifier,
     hingeAngleDegrees: Float? = null,
     postureOverrideLabel: String? = null,
-    onCyclePostureOverride: (() -> Unit)? = null
+    onCyclePostureOverride: (() -> Unit)? = null,
+    isKeyguardLocked: Boolean? = null,
+    isTorchOn: Boolean = false,
+    onToggleTorch: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
@@ -129,6 +133,13 @@ fun TopStatusBar(
 
     val sensorHingeAngle = rememberHardwareHingeAngleDegrees()
     val effectiveHingeAngle = hingeAngleDegrees ?: sensorHingeAngle
+
+    val effectiveKeyguardLocked = remember(context, nowMillis, isKeyguardLocked) {
+        isKeyguardLocked ?: run {
+            val km = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+            km?.isKeyguardLocked == true
+        }
+    }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -160,9 +171,9 @@ fun TopStatusBar(
 
     val basePostureLabel = when {
         isDeXConnected -> "DeX READY"
-        activeOverrideTag.equals("TENT", ignoreCase = true) -> "${ effectiveHingeAngle?.roundToInt() ?: 48 }° TENT"
-        activeOverrideTag.equals("FLEX", ignoreCase = true) -> "${ effectiveHingeAngle?.roundToInt() ?: 118 }° FLEX"
-        activeOverrideTag.equals("INNER", ignoreCase = true) -> "${ effectiveHingeAngle?.roundToInt() ?: 180 }° UNFOLDED"
+        activeOverrideTag.equals("TENT", ignoreCase = true) -> "${effectiveHingeAngle?.roundToInt() ?: 48}° TENT"
+        activeOverrideTag.equals("FLEX", ignoreCase = true) -> "${effectiveHingeAngle?.roundToInt() ?: 118}° FLEX"
+        activeOverrideTag.equals("INNER", ignoreCase = true) -> "${effectiveHingeAngle?.roundToInt() ?: 180}° UNFOLDED"
         activeOverrideTag.equals("COVER", ignoreCase = true) -> "COVER"
         effectiveHingeAngle != null && effectiveHingeAngle in 25f..75f -> "${effectiveHingeAngle.roundToInt()}° TENT"
         postureState.posture == DevicePosture.EXPANDED && postureState.isBookPosture -> "${anglePrefix}BOOK"
@@ -186,12 +197,17 @@ fun TopStatusBar(
                     )
                 )
             )
-            .border(1.dp, FoldLauncherColors.GlassBorder, RoundedCornerShape(22.dp))
+            .border(
+                1.dp,
+                if (effectiveKeyguardLocked) FoldLauncherColors.AmberWarning.copy(alpha = 0.65f)
+                else FoldLauncherColors.GlassBorder,
+                RoundedCornerShape(22.dp)
+            )
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        // Left cluster: Interactive Hinge Angle & Posture Switcher Pill, Spotlight pill, Settings button
+        // Left cluster: Interactive Hinge Angle & Posture Switcher Pill, Keyguard/Torch badges, Spotlight pill, Settings button
         Row(
             modifier = Modifier.weight(1f, fill = false),
             verticalAlignment = Alignment.CenterVertically,
@@ -260,6 +276,52 @@ fun TopStatusBar(
                         } else {
                             FoldLauncherColors.CyanBright
                         },
+                        maxLines = 1
+                    )
+                }
+            }
+
+            if (effectiveKeyguardLocked) {
+                Box(
+                    modifier = Modifier
+                        .clip(pillShape)
+                        .background(FoldLauncherColors.AmberWarning.copy(alpha = 0.22f))
+                        .border(1.dp, FoldLauncherColors.AmberWarning, pillShape)
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = "🔒 KEYGUARD",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = FoldLauncherColors.AmberWarning,
+                        maxLines = 1
+                    )
+                }
+            }
+
+            if (isTorchOn || onToggleTorch != null) {
+                Box(
+                    modifier = Modifier
+                        .clip(pillShape)
+                        .background(
+                            if (isTorchOn) FoldLauncherColors.AmberWarning.copy(alpha = 0.25f)
+                            else FoldLauncherColors.GlassSurfaceHighlight
+                        )
+                        .border(
+                            1.dp,
+                            if (isTorchOn) FoldLauncherColors.AmberWarning else FoldLauncherColors.GlassBorder,
+                            pillShape
+                        )
+                        .let { base ->
+                            if (onToggleTorch != null) base.clickable(onClick = onToggleTorch) else base
+                        }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = if (isTorchOn) "🔦 ON" else "🔦",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isTorchOn) FoldLauncherColors.AmberWarning else FoldLauncherColors.TextSecondary,
                         maxLines = 1
                     )
                 }

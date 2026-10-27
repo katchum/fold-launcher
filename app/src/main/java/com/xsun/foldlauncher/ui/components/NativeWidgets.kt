@@ -1,5 +1,17 @@
 package com.xsun.foldlauncher.ui.components
 
+import android.app.Activity
+import android.app.ActivityManager
+import android.app.KeyguardManager
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.os.BatteryManager
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,9 +34,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -55,6 +69,8 @@ import com.xsun.foldlauncher.vc.VcCommandCenterCard
 import com.xsun.foldlauncher.vc.VcConnectionConfig
 import com.xsun.foldlauncher.vc.VcLiveSummary
 import com.xsun.foldlauncher.vc.VcPackages
+import kotlinx.coroutines.delay
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
@@ -81,6 +97,133 @@ val DefaultZFold8AppPairPresets: List<AppPair> = listOf(
     )
 )
 
+private data class HardwareSystemTelemetry(
+    val batteryTempCelsius: Float = 31.5f,
+    val availableRamGb: Float = 9.4f,
+    val totalRamGb: Float = 16.0f,
+    val isKeyguardLocked: Boolean = false
+)
+
+@Composable
+private fun rememberHardwareTorchState(): Pair<Boolean, () -> Unit> {
+    val context = LocalContext.current
+    var torchOn by remember { mutableStateOf(false) }
+    var torchCameraId by remember { mutableStateOf<String?>(null) }
+
+    DisposableEffect(context) {
+        val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+        if (cameraManager == null) {
+            return@DisposableEffect onDispose {}
+        }
+
+        val resolvedId = try {
+            cameraManager.cameraIdList.firstOrNull { id ->
+                val chars = cameraManager.getCameraCharacteristics(id)
+                chars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+            }
+        } catch (_: Exception) {
+            null
+        }
+        torchCameraId = resolvedId
+
+        val callback = object : CameraManager.TorchCallback() {
+            override fun onTorchModeChanged(cameraId: String, enabled: Boolean) {
+                if (cameraId == resolvedId || resolvedId == null) {
+                    torchOn = enabled
+                }
+            }
+        }
+
+        try {
+            cameraManager.registerTorchCallback(callback, Handler(Looper.getMainLooper()))
+        } catch (_: Exception) {
+        }
+
+        onDispose {
+            try {
+                cameraManager.unregisterTorchCallback(callback)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    val toggleTorch: () -> Unit = {
+        val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+        val camId = torchCameraId
+        if (cameraManager != null && camId != null) {
+            try {
+                val target = !torchOn
+                cameraManager.setTorchMode(camId, target)
+                torchOn = target
+            } catch (_: Exception) {
+                torchOn = !torchOn
+            }
+        } else {
+            torchOn = !torchOn
+        }
+    }
+
+    return torchOn to toggleTorch
+}
+
+@Composable
+private fun rememberHardwareSystemTelemetry(
+    defaultTempCelsius: Float = 31.5f,
+    defaultAvailRamGb: Float = 9.4f,
+    defaultTotalRamGb: Float = 16.0f
+): HardwareSystemTelemetry {
+    val context = LocalContext.current
+    var tempC by remember { mutableFloatStateOf(defaultTempCelsius) }
+    var availGb by remember { mutableFloatStateOf(defaultAvailRamGb) }
+    var totalGb by remember { mutableFloatStateOf(defaultTotalRamGb) }
+    var keyguardLocked by remember { mutableStateOf(false) }
+
+    LaunchedEffect(context) {
+        while (true) {
+            try {
+                val batteryIntent = context.registerReceiver(
+                    null,
+                    IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+                )
+                val rawTempDeciC = batteryIntent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1
+                if (rawTempDeciC in 50..800) {
+                    tempC = rawTempDeciC / 10f
+                }
+            } catch (_: Exception) {
+            }
+
+            try {
+                val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+                if (am != null) {
+                    val memInfo = ActivityManager.MemoryInfo()
+                    am.getMemoryInfo(memInfo)
+                    val bytesPerGb = 1024f * 1024f * 1024f
+                    if (memInfo.totalMem > 0L) {
+                        availGb = (memInfo.availMem / bytesPerGb).coerceAtLeast(0.5f)
+                        totalGb = (memInfo.totalMem / bytesPerGb).coerceAtLeast(4.0f)
+                    }
+                }
+            } catch (_: Exception) {
+            }
+
+            try {
+                val km = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+                keyguardLocked = km?.isKeyguardLocked == true
+            } catch (_: Exception) {
+            }
+
+            delay(8_000L)
+        }
+    }
+
+    return HardwareSystemTelemetry(
+        batteryTempCelsius = tempC,
+        availableRamGb = availGb,
+        totalRamGb = totalGb,
+        isKeyguardLocked = keyguardLocked
+    )
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun NativeDashboardCards(
@@ -106,7 +249,16 @@ fun NativeDashboardCards(
     onToggleRadialArc: (() -> Unit)? = null,
     hingeAngleDegrees: Float? = null,
     customAppPairs: List<AppPair> = emptyList(),
-    onLaunchAppPair: ((AppPair) -> Unit)? = null
+    onLaunchAppPair: ((AppPair) -> Unit)? = null,
+    isKeyguardLocked: Boolean? = null,
+    isTorchOn: Boolean? = null,
+    batteryTempCelsius: Float? = null,
+    availableRamGb: Float? = null,
+    totalRamGb: Float? = null,
+    onToggleTorch: (() -> Unit)? = null,
+    onUnlockAndSplitVcTermux: (() -> Unit)? = null,
+    onQuickApproveVc: (() -> Unit)? = null,
+    onToggleDualScreenCompanion: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val vcMonitor = remember(context) { VcBackgroundMonitor.getInstance(context) }
@@ -118,7 +270,34 @@ fun NativeDashboardCards(
     val effectiveVcConfig = vcConfigOverride ?: monitorConfig
 
     val sensorHingeAngle = rememberHardwareHingeAngleDegrees()
-    val effectiveHingeAngle = hingeAngleDegrees ?: sensorHingeAngle
+    val effectiveHingeAngle = hingeAngleDegrees ?: sensorHingeAngle ?: when {
+        postureState.isTentMode -> 48f
+        postureState.isFlexTabletop -> 118f
+        postureState.isBookPosture -> 135f
+        postureState.isUnfoldedInner -> 180f
+        else -> 0f
+    }
+
+    val (hwTorchOn, hwToggleTorch) = rememberHardwareTorchState()
+    val hwTelemetry = rememberHardwareSystemTelemetry()
+
+    val effectiveTorchOn = isTorchOn ?: hwTorchOn
+    val effectiveToggleTorch: () -> Unit = {
+        hwToggleTorch()
+        onToggleTorch?.invoke()
+    }
+    val effectiveTempC = batteryTempCelsius ?: hwTelemetry.batteryTempCelsius
+    val effectiveAvailRamGb = availableRamGb ?: hwTelemetry.availableRamGb
+    val effectiveTotalRamGb = totalRamGb ?: hwTelemetry.totalRamGb
+    val effectiveKeyguardLocked = isKeyguardLocked ?: hwTelemetry.isKeyguardLocked
+
+    val resolvedPostureLabel = when {
+        postureState.isTentMode -> "TENT"
+        postureState.isFlexTabletop -> "FLEX"
+        postureState.isBookPosture -> "BOOK"
+        postureState.isUnfoldedInner -> "UNFOLDED"
+        else -> "COVER"
+    }
 
     val hingeFactor = when {
         postureState.isFlexTabletop -> 0.55f
@@ -206,7 +385,69 @@ fun NativeDashboardCards(
             }
         }
 
-        // 2. Live 120Hz VC Command Center & Background Bridge Card
+        // 2. Dedicated Lock-Screen Ambient Cockpit Card (ShowWhenLocked + Keyguard Overlay)
+        LockScreenCockpitCard(
+            isKeyguardLocked = effectiveKeyguardLocked,
+            hingeAngleDegrees = effectiveHingeAngle,
+            postureLabel = resolvedPostureLabel,
+            activeVcCount = effectiveVcSummary.workingCount + effectiveVcSummary.totalSessions,
+            pendingApprovals = effectiveVcSummary.approvalCount,
+            isTorchOn = effectiveTorchOn,
+            onUnlockAndSplitVcTermux = {
+                if (onUnlockAndSplitVcTermux != null) {
+                    onUnlockAndSplitVcTermux()
+                } else {
+                    val activity = context as? Activity
+                    val km = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                        activity != null &&
+                        km?.isKeyguardLocked == true
+                    ) {
+                        km.requestDismissKeyguard(
+                            activity,
+                            object : KeyguardManager.KeyguardDismissCallback() {
+                                override fun onDismissSucceeded() {
+                                    vcMonitor.launchVcSplitScreen()
+                                }
+                            }
+                        )
+                    } else {
+                        vcMonitor.launchVcSplitScreen()
+                    }
+                }
+            },
+            onToggleTorch = effectiveToggleTorch,
+            onQuickApproveVc = {
+                if (onQuickApproveVc != null) {
+                    onQuickApproveVc()
+                } else {
+                    val targetSession = effectiveVcSummary.attentionItems.firstOrNull()?.sessionId
+                        ?: effectiveVcSummary.sessions.firstOrNull()?.sessionId
+                    if (!targetSession.isNullOrBlank()) {
+                        vcMonitor.sendQuickMessage(
+                            sessionId = targetSession,
+                            text = "Approved — proceed with execution.",
+                            steerIfWorking = true
+                        )
+                        vcMonitor.markAttentionRead(null, true)
+                    } else {
+                        vcMonitor.launchVc(null)
+                    }
+                }
+            },
+            onToggleDualScreenCompanion = {
+                if (onToggleDualScreenCompanion != null) {
+                    onToggleDualScreenCompanion()
+                } else {
+                    val currentStayAwake = SystemTweaker.isFoldCloseStayAwakeEnabled(context)
+                    SystemTweaker.setFoldCloseStayAwake(context, !currentStayAwake)
+                    SystemTweaker.applyLockScreenPowerPreset(context)
+                }
+            },
+            modifier = Modifier.spatialParallaxCard(tilt = tilt, depthLayer = 1.2f)
+        )
+
+        // 3. Live 120Hz VC Command Center & Background Bridge Card
         VcCommandCenterCard(
             summary = effectiveVcSummary,
             config = effectiveVcConfig,
@@ -226,7 +467,7 @@ fun NativeDashboardCards(
             modifier = Modifier.spatialParallaxCard(tilt = tilt, depthLayer = 1.15f)
         )
 
-        // 3. Z Fold 8 System Dashboard Card (120Hz VRR & Hinge Angle Telemetry + Companion Tweak Pills)
+        // 4. Z Fold 8 System Dashboard Card (120Hz VRR & Hinge Angle Telemetry + Thermal/RAM + Torch + Companion Pills)
         SystemDashboardCard(
             postureState = postureState,
             batteryPct = batteryPct,
@@ -244,6 +485,11 @@ fun NativeDashboardCards(
                 showFloatingHudConfigurator = !showFloatingHudConfigurator
             },
             onToggleRadialArc = onToggleRadialArc,
+            isTorchOn = effectiveTorchOn,
+            batteryTempCelsius = effectiveTempC,
+            availableRamGb = effectiveAvailRamGb,
+            totalRamGb = effectiveTotalRamGb,
+            onToggleTorch = effectiveToggleTorch,
             modifier = Modifier.spatialParallaxCard(tilt = tilt, depthLayer = 1.0f)
         )
 
@@ -257,14 +503,14 @@ fun NativeDashboardCards(
             )
         }
 
-        // 4. Z Fold 8 Multi-App Pair Presets Card (1-Tap Split-Screen Power Pairs)
+        // 5. Z Fold 8 Multi-App Pair Presets Card (1-Tap Split-Screen Power Pairs)
         AppPairsQuickCard(
             customAppPairs = customAppPairs,
             onLaunchAppPair = onLaunchAppPair,
             modifier = Modifier.spatialParallaxCard(tilt = tilt, depthLayer = 0.95f)
         )
 
-        // 5. Inline Interactive 120Hz Quick Scratchpad Card (Zero-IPC BasicTextField right on Home Screen)
+        // 6. Inline Interactive 120Hz Quick Scratchpad Card (Zero-IPC BasicTextField right on Home Screen)
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -334,8 +580,373 @@ fun NativeDashboardCards(
 }
 
 /**
+ * Dedicated Lock-Screen Ambient Cockpit Card (`setShowWhenLocked(true)` + Keyguard overlay).
+ * Features:
+ * - Glowing cyber-emerald/amber header (`🔒 LOCK-SCREEN COCKPIT • OVERLAYING ONE UI KEYGUARD` when locked,
+ *   or `🛡️ LOCK-SCREEN COCKPIT READY` when unlocked)
+ * - Live hinge angle (`180°`) & posture badge
+ * - 1-tap `🔦 Torch`, 1-tap `⚡ Unlock & Split VC+Termux`, 1-tap `✅ Approve VC`, and 1-tap `🖥️ Cover Companion`
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun LockScreenCockpitCard(
+    isKeyguardLocked: Boolean = false,
+    hingeAngleDegrees: Float = 180f,
+    postureLabel: String = "UNFOLDED",
+    activeVcCount: Int = 0,
+    pendingApprovals: Int = 0,
+    isTorchOn: Boolean = false,
+    onUnlockAndSplitVcTermux: () -> Unit = {},
+    onToggleTorch: () -> Unit = {},
+    onQuickApproveVc: () -> Unit = {},
+    onToggleDualScreenCompanion: () -> Unit = {},
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var coverCompanionEnabled by remember {
+        mutableStateOf(SystemTweaker.isFoldCloseStayAwakeEnabled(context))
+    }
+
+    val roundedAngle = hingeAngleDegrees.coerceIn(0f, 180f).roundToInt()
+    val cardShape = RoundedCornerShape(22.dp)
+    val accentColor = if (isKeyguardLocked) {
+        FoldLauncherColors.AmberWarning
+    } else {
+        FoldLauncherColors.EmeraldSuccess
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(cardShape)
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        accentColor.copy(alpha = if (isKeyguardLocked) 0.18f else 0.12f),
+                        FoldLauncherColors.GlassSurfaceElevated,
+                        FoldLauncherColors.GlassSurface
+                    )
+                )
+            )
+            .border(
+                width = 1.dp,
+                color = if (isKeyguardLocked) {
+                    FoldLauncherColors.AmberWarning.copy(alpha = 0.78f)
+                } else {
+                    FoldLauncherColors.EmeraldSuccess.copy(alpha = 0.55f)
+                },
+                shape = cardShape
+            )
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        // Glowing Cyber-Emerald / Amber Header Row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                modifier = Modifier.weight(1f, fill = false),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(accentColor)
+                )
+                Text(
+                    text = if (isKeyguardLocked) {
+                        "🔒 LOCK-SCREEN COCKPIT • OVERLAYING ONE UI KEYGUARD"
+                    } else {
+                        "🛡️ LOCK-SCREEN COCKPIT READY"
+                    },
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = accentColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Live Hinge Angle + Posture Pill
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(FoldLauncherColors.DeepVoid.copy(alpha = 0.72f))
+                    .border(1.dp, FoldLauncherColors.GlassBorderStrong, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Text(
+                    text = "${roundedAngle}°",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = FoldLauncherColors.CyanBright
+                )
+                Text(
+                    text = postureLabel.uppercase(Locale.getDefault()),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = FoldLauncherColors.TextSecondary
+                )
+            }
+        }
+
+        // Subtitle telemetry row: VC active sessions, pending approvals, ShowWhenLocked status
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = "ShowWhenLocked + Keyguard Bypass · VC Active: $activeVcCount",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = FoldLauncherColors.TextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (pendingApprovals > 0) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(FoldLauncherColors.AmberWarning.copy(alpha = 0.22f))
+                        .border(1.dp, FoldLauncherColors.AmberWarning, RoundedCornerShape(10.dp))
+                        .padding(horizontal = 7.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "$pendingApprovals Approval${if (pendingApprovals == 1) "" else "s"} Pending",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = FoldLauncherColors.AmberWarning
+                    )
+                }
+            }
+        }
+
+        // 4 One-Tap Lock-Screen Cockpit Action Pills
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            CockpitActionPill(
+                title = if (isTorchOn) "🔦 Torch: ON" else "🔦 Torch",
+                highlighted = isTorchOn,
+                accentColor = FoldLauncherColors.AmberWarning,
+                onClick = onToggleTorch
+            )
+            CockpitActionPill(
+                title = "⚡ Unlock & Split VC+Termux",
+                highlighted = true,
+                accentColor = FoldLauncherColors.ElectricCyan,
+                onClick = onUnlockAndSplitVcTermux
+            )
+            CockpitActionPill(
+                title = if (pendingApprovals > 0) {
+                    "✅ Approve VC ($pendingApprovals)"
+                } else {
+                    "✅ Approve VC"
+                },
+                highlighted = pendingApprovals > 0,
+                accentColor = FoldLauncherColors.EmeraldSuccess,
+                onClick = onQuickApproveVc
+            )
+            CockpitActionPill(
+                title = if (coverCompanionEnabled) {
+                    "🖥️ Cover Companion: ON"
+                } else {
+                    "🖥️ Cover Companion"
+                },
+                highlighted = coverCompanionEnabled,
+                accentColor = FoldLauncherColors.IndigoAccent,
+                onClick = {
+                    coverCompanionEnabled = !coverCompanionEnabled
+                    onToggleDualScreenCompanion()
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun CockpitActionPill(
+    title: String,
+    highlighted: Boolean,
+    accentColor: Color,
+    onClick: () -> Unit
+) {
+    val pillShape = RoundedCornerShape(14.dp)
+    Box(
+        modifier = Modifier
+            .clip(pillShape)
+            .background(
+                if (highlighted) accentColor.copy(alpha = 0.22f)
+                else FoldLauncherColors.GlassSurfaceHighlight
+            )
+            .border(
+                width = 1.dp,
+                color = if (highlighted) accentColor else FoldLauncherColors.GlassBorder,
+                shape = pillShape
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 11.dp, vertical = 7.dp)
+    ) {
+        Text(
+            text = title,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (highlighted) FoldLauncherColors.TextPrimary else FoldLauncherColors.TextSecondary
+        )
+    }
+}
+
+/**
+ * Enhanced `SystemQuickTileWidget` for v0.3.0:
+ * Displays a live Thermal / RAM pill (`31.5°C • 9.4 / 16 GB RAM`) and a 1-tap `🔦 Torch` quick-tile button,
+ * plus optional Z Fold 8 quick tiles.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun SystemQuickTileWidget(
+    modifier: Modifier = Modifier,
+    isTorchOn: Boolean = false,
+    batteryTempCelsius: Float = 31.5f,
+    availableRamGb: Float = 9.4f,
+    totalRamGb: Float = 16.0f,
+    onToggleTorch: () -> Unit = {},
+    hingeAngleDegrees: Float? = null,
+    lockScreenRotationEnabled: Boolean = false,
+    onToggleLockRotation: (() -> Unit)? = null,
+    onEnforceGboardDeX: (() -> Unit)? = null,
+    onLockScreenNow: (() -> Unit)? = null
+) {
+    val tempFormatted = remember(batteryTempCelsius) {
+        String.format(Locale.US, "%.1f°C", batteryTempCelsius)
+    }
+    val availRamFormatted = remember(availableRamGb) {
+        String.format(Locale.US, "%.1f", availableRamGb)
+    }
+    val totalRamFormatted = remember(totalRamGb) {
+        if (totalRamGb % 1f == 0f) {
+            totalRamGb.roundToInt().toString()
+        } else {
+            String.format(Locale.US, "%.1f", totalRamGb)
+        }
+    }
+    val thermalRamLabel = "$tempFormatted • $availRamFormatted / $totalRamFormatted GB RAM"
+    val isWarm = batteryTempCelsius >= 38.0f
+
+    val cardShape = RoundedCornerShape(20.dp)
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(cardShape)
+            .background(FoldLauncherColors.GlassSurface)
+            .border(1.dp, FoldLauncherColors.GlassBorder, cardShape)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = "SYSTEM TELEMETRY · QUICK TILES",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = FoldLauncherColors.ElectricCyan
+            )
+
+            // Live Thermal / RAM Pill ("31.5°C • 9.4 / 16 GB RAM")
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(
+                        if (isWarm) FoldLauncherColors.AmberWarning.copy(alpha = 0.18f)
+                        else FoldLauncherColors.DeepVoid.copy(alpha = 0.72f)
+                    )
+                    .border(
+                        1.dp,
+                        if (isWarm) FoldLauncherColors.AmberWarning else FoldLauncherColors.GlassBorderStrong,
+                        RoundedCornerShape(12.dp)
+                    )
+                    .padding(horizontal = 9.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (isWarm) FoldLauncherColors.AmberWarning
+                            else FoldLauncherColors.EmeraldSuccess
+                        )
+                )
+                Text(
+                    text = thermalRamLabel,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = FoldLauncherColors.TextPrimary
+                )
+            }
+        }
+
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            QuickTweakPill(
+                title = if (isTorchOn) "🔦 Torch: ON" else "🔦 Torch",
+                active = isTorchOn,
+                onClick = onToggleTorch
+            )
+            if (hingeAngleDegrees != null) {
+                QuickTweakPill(
+                    title = "120Hz VRR • Hinge ${hingeAngleDegrees.roundToInt()}°",
+                    active = true,
+                    onClick = {}
+                )
+            }
+            if (onToggleLockRotation != null) {
+                QuickTweakPill(
+                    title = if (lockScreenRotationEnabled) "⟳ Lock Rotation: ON" else "⟳ Lock Rotation: OFF",
+                    active = lockScreenRotationEnabled,
+                    onClick = onToggleLockRotation
+                )
+            }
+            if (onEnforceGboardDeX != null) {
+                QuickTweakPill(
+                    title = "⌨ Enforce Gboard in DeX",
+                    active = false,
+                    onClick = onEnforceGboardDeX
+                )
+            }
+            if (onLockScreenNow != null) {
+                QuickTweakPill(
+                    title = "🔒 Lock Screen",
+                    active = false,
+                    onClick = onLockScreenNow
+                )
+            }
+        }
+    }
+}
+
+/**
  * Z Fold 8 System Dashboard Card with live 120Hz VRR & Hinge Angle Sensor Telemetry Gauge
- * (`120Hz VRR • Hinge 180°`) and quick hardware/DeX/HUD controls.
+ * (`120Hz VRR • Hinge 180°`), live Thermal / RAM pill (`31.5°C • 9.4 / 16 GB RAM`),
+ * 1-tap `🔦 Torch` quick-tile button, and quick hardware/DeX/HUD controls.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -354,7 +965,12 @@ fun SystemDashboardCard(
     hingeAngleDegrees: Float? = null,
     showFloatingHudConfigurator: Boolean = false,
     onToggleFloatingHudConfigurator: (() -> Unit)? = null,
-    onToggleRadialArc: (() -> Unit)? = null
+    onToggleRadialArc: (() -> Unit)? = null,
+    isTorchOn: Boolean = false,
+    batteryTempCelsius: Float = 31.5f,
+    availableRamGb: Float = 9.4f,
+    totalRamGb: Float = 16.0f,
+    onToggleTorch: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val hudState by FloatingHudController.state.collectAsState()
@@ -376,6 +992,21 @@ fun SystemDashboardCard(
         postureState.isUnfoldedInner || roundedHingeDeg >= 146 -> "UNFOLDED"
         else -> "COVER"
     }
+
+    val tempFormatted = remember(batteryTempCelsius) {
+        String.format(Locale.US, "%.1f°C", batteryTempCelsius)
+    }
+    val availRamFormatted = remember(availableRamGb) {
+        String.format(Locale.US, "%.1f", availableRamGb)
+    }
+    val totalRamFormatted = remember(totalRamGb) {
+        if (totalRamGb % 1f == 0f) {
+            totalRamGb.roundToInt().toString()
+        } else {
+            String.format(Locale.US, "%.1f", totalRamGb)
+        }
+    }
+    val thermalRamLabel = "$tempFormatted • $availRamFormatted / $totalRamFormatted GB RAM"
 
     val cardShape = RoundedCornerShape(22.dp)
 
@@ -420,7 +1051,7 @@ fun SystemDashboardCard(
             )
         }
 
-        // Live Z Fold 8 Hinge & Display VRR Telemetry Gauge ("120Hz VRR • Hinge 180°")
+        // Live Z Fold 8 Hinge & Display VRR Telemetry Gauge + Thermal / RAM Pill
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -452,11 +1083,42 @@ fun SystemDashboardCard(
                         color = FoldLauncherColors.CyanBright
                     )
                 }
+
+                // Live Thermal / RAM Pill ("31.5°C • 9.4 / 16 GB RAM")
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(FoldLauncherColors.GlassSurfaceHighlight)
+                        .border(1.dp, FoldLauncherColors.GlassBorderStrong, RoundedCornerShape(10.dp))
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = thermalRamLabel,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = FoldLauncherColors.TextPrimary
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
                 Text(
                     text = "$postureModeText · LTPO 1–120Hz",
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
                     color = FoldLauncherColors.TextSecondary
+                )
+                Text(
+                    text = if (isTorchOn) "🔦 Torch Active" else "🔦 Torch Ready",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (isTorchOn) FoldLauncherColors.AmberWarning else FoldLauncherColors.TextMuted
                 )
             }
 
@@ -491,6 +1153,11 @@ fun SystemDashboardCard(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            QuickTweakPill(
+                title = if (isTorchOn) "🔦 Torch: ON" else "🔦 Torch",
+                active = isTorchOn,
+                onClick = onToggleTorch
+            )
             QuickTweakPill(
                 title = if (hudState.isEnabled) "◉ Micro-HUD Pill: ON" else "◎ Micro-HUD Pill: OFF",
                 active = hudState.isEnabled,

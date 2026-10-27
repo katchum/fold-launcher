@@ -613,6 +613,25 @@ object VcBridgeClient {
     }
 
     /**
+     * Dispatches a 1-tap [VcPromptMacro] directly to the target/pinned VC session.
+     */
+    fun sendPromptMacro(
+        config: VcConnectionConfig,
+        macro: VcPromptMacro,
+        sessionId: String?,
+        steerIfWorking: Boolean = true,
+        activeAgents: List<VcAgentStatus> = emptyList()
+    ): Result<String> {
+        return sendQuickMessage(
+            config = config,
+            sessionId = sessionId,
+            text = macro.promptText,
+            steerIfWorking = steerIfWorking,
+            activeAgents = activeAgents
+        )
+    }
+
+    /**
      * Marks a single attention item, a session's seen timestamp, or all attention items as read
      * on the VC host (`POST /api/attention`).
      */

@@ -91,7 +91,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.xsun.foldlauncher.MainActivity
 import com.xsun.foldlauncher.service.FoldAccessibilityService
+import com.xsun.foldlauncher.service.SystemTweaker
 import com.xsun.foldlauncher.ui.theme.FoldLauncherColors
+import com.xsun.foldlauncher.vc.VcAttentionKind
+import com.xsun.foldlauncher.vc.VcBackgroundMonitor
+import com.xsun.foldlauncher.vc.VcPromptMacro
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -119,14 +123,16 @@ import kotlin.math.roundToInt
  *    oversized Clock, Battery/Temp, live Z Fold 8 Hinge Angle, and Live VC Agent status dot)
  *    renders **right on top of the Samsung Z Fold 8 Lock Screen** in both Portrait and Landscape
  *    as well as over every app and DeX workspace!
- * 3. **Zero-Latency Anywhere-Spotlight & Multi-VC Split Trigger**:
+ * 3. **Zero-Latency Anywhere-Spotlight, Multi-VC Split, 1-Tap Torch & Quick-Approve VC (`v0.3.0`)**:
  *    - **Single Tap**: Immediately brings `MainActivity` to the front with
  *      `EXTRA_OPEN_SPOTLIGHT = true` for **0ms Anywhere-Spotlight Search** from inside any app!
- *    - **Expand Chevron / Expanded HUD Card**: Expands the HUD Pill in-place to reveal live Z Fold 8
- *      hinge posture telemetry (`180°` / `118° FLEX`) and the **Z Fold 8 Power Split Row** with
- *      1-tap buttons:
- *      - `VC + Termux` (launches `dev.agentconversation` + `com.termux` in split-screen)
- *      - `Prod + Compare` (launches `dev.agentconversation` + `dev.agentconversation.compare` in split-screen)
+ *    - **Expand Chevron / Expanded HUD Panel (`FloatingHudExpandedPanel`)**: Expands the HUD Pill
+ *      in-place to reveal:
+ *      - Live Z Fold 8 hinge posture telemetry (`180°` / `118° FLEX`)
+ *      - **1-Tap `🔦 Torch` Toggle Chip** (glowing Amber when `isTorchOn == true`)
+ *      - **Glowing 1-Tap `✅ Approve VC` Chip** when `state.vcPendingApprovals > 0`
+ *      - **Z Fold 8 Power Split Row**: `VC + Termux` (`dev.agentconversation` + `com.termux`) and
+ *        `Prod + Compare` (`dev.agentconversation` + `dev.agentconversation.compare`)
  *    - **Long Press**: Launches/switches directly to the VC Agent app
  *      (`dev.agentconversation` / `dev.agentconversation.compare` / `com.example.agentconversation`)
  *      or triggers instant Split-Screen (`FoldAccessibilityService.instance?.toggleSplitScreen()`).
@@ -195,11 +201,10 @@ enum class HudLongPressAction(val label: String, val description: String) {
 }
 
 /**
- * Snapshot of live telemetry & user configuration for the System-Wide Micro-HUD Pill (`v0.2.0`).
+ * Snapshot of live telemetry & user configuration for the System-Wide Micro-HUD Pill (`v0.3.0`).
  *
- * Includes optional [hingeAngleDegrees] and [postureLabel] (defaulting to `null` so all existing
- * `v0.1.0` callers compile unchanged) populated on the Samsung Galaxy Z Fold 8 via
- * `Sensor.TYPE_HINGE_ANGLE`.
+ * Includes optional [hingeAngleDegrees], [postureLabel], [vcPendingApprovals], and [isTorchOn]
+ * (all with defaults so existing `v0.1.0` and `v0.2.0` callers compile unchanged).
  */
 data class HudTelemetryState(
     val isEnabled: Boolean = false,
@@ -214,7 +219,9 @@ data class HudTelemetryState(
     val vcStatus: VcHudAgentStatus = VcHudAgentStatus.WORKING,
     val longPressAction: HudLongPressAction = HudLongPressAction.LAUNCH_VC_OR_SPLIT,
     val hingeAngleDegrees: Float? = null,
-    val postureLabel: String? = null
+    val postureLabel: String? = null,
+    val vcPendingApprovals: Int = 0,
+    val isTorchOn: Boolean = false
 ) {
     /**
      * Formatted compact hinge angle badge for the collapsed and expanded Micro-HUD Pill
@@ -244,7 +251,7 @@ data class HudTelemetryState(
 }
 
 /**
- * Backward-compatible typealias so all `v0.1.0` callers referencing `FloatingHudUiState`
+ * Backward-compatible typealias so all `v0.1.0` / `v0.2.0` callers referencing `FloatingHudUiState`
  * continue to compile and interoperate seamlessly with `HudTelemetryState`.
  */
 typealias FloatingHudUiState = HudTelemetryState
@@ -297,6 +304,7 @@ object FloatingHudController {
     private val clockTickRunnable = object : Runnable {
         override fun run() {
             syncServiceHingeAngleIfPresent()
+            syncTorchAndVcApprovalTelemetry()
             pillView?.invalidate()
             mainHandler.postDelayed(this, 10_000L)
         }
@@ -335,7 +343,9 @@ object FloatingHudController {
                 tempCelsius = tempC,
                 isCharging = charging,
                 hingeAngleDegrees = _state.value.hingeAngleDegrees,
-                postureLabel = _state.value.postureLabel
+                postureLabel = _state.value.postureLabel,
+                vcPendingApprovals = _state.value.vcPendingApprovals,
+                isTorchOn = _state.value.isTorchOn
             )
         }
     }
@@ -375,6 +385,32 @@ object FloatingHudController {
         }
     }
 
+    private fun syncTorchAndVcApprovalTelemetry() {
+        val ctx = attachedServiceContext ?: telemetryContext ?: return
+        val torchActive = SystemTweaker.isTorchActive.value
+        val monitorApprovalCount = runCatching {
+            VcBackgroundMonitor.getInstance(ctx).liveSummary.value.approvalCount
+        }.getOrDefault(0)
+        val effectiveApprovals = when {
+            monitorApprovalCount > 0 -> monitorApprovalCount
+            _state.value.vcStatus == VcHudAgentStatus.APPROVAL_NEEDED ->
+                _state.value.vcPendingApprovals.coerceAtLeast(1)
+            else -> _state.value.vcPendingApprovals
+        }
+
+        if (_state.value.isTorchOn != torchActive || _state.value.vcPendingApprovals != effectiveApprovals) {
+            _state.value = _state.value.copy(
+                isTorchOn = torchActive,
+                vcPendingApprovals = effectiveApprovals
+            )
+            pillView?.updateQuickActionsState(
+                isTorchOn = torchActive,
+                vcPendingApprovals = effectiveApprovals
+            )
+            updateWindowLayoutIfAttached()
+        }
+    }
+
     /**
      * Initializes preferences, battery/thermal telemetry, and Z Fold 8 `Sensor.TYPE_HINGE_ANGLE`
      * listener. Safe to call multiple times.
@@ -409,7 +445,9 @@ object FloatingHudController {
                 offsetXPx = savedOffsetX,
                 offsetYPx = savedOffsetY,
                 vcStatus = savedStatus,
-                longPressAction = savedLongPress
+                longPressAction = savedLongPress,
+                vcPendingApprovals = if (savedStatus == VcHudAgentStatus.APPROVAL_NEEDED) 1 else 0,
+                isTorchOn = SystemTweaker.isTorchActive.value
             )
         }
 
@@ -430,6 +468,7 @@ object FloatingHudController {
 
         registerHingeAngleSensorIfAvailable(appCtx)
         syncServiceHingeAngleIfPresent()
+        syncTorchAndVcApprovalTelemetry()
 
         if (_state.value.isEnabled && pillView == null) {
             syncOverlayWithService()
@@ -478,7 +517,9 @@ object FloatingHudController {
             tempCelsius = _state.value.batteryTempCelsius,
             isCharging = _state.value.isCharging,
             hingeAngleDegrees = hingeAngleDegrees,
-            postureLabel = postureLabel
+            postureLabel = postureLabel,
+            vcPendingApprovals = _state.value.vcPendingApprovals,
+            isTorchOn = _state.value.isTorchOn
         )
         updateWindowLayoutIfAttached()
     }
@@ -519,11 +560,94 @@ object FloatingHudController {
         updateWindowLayoutIfAttached()
     }
 
-    fun setVcAgentStatus(context: Context, status: VcHudAgentStatus) {
+    fun setVcAgentStatus(context: Context, status: VcHudAgentStatus, pendingApprovals: Int? = null) {
         ensureInitialized(context)
         prefs?.edit()?.putString(KEY_HUD_VC_STATUS, status.name)?.apply()
-        _state.value = _state.value.copy(vcStatus = status)
+        val resolvedApprovals = pendingApprovals ?: when (status) {
+            VcHudAgentStatus.APPROVAL_NEEDED -> {
+                val fromMonitor = runCatching {
+                    VcBackgroundMonitor.getInstance(context).liveSummary.value.approvalCount
+                }.getOrDefault(0)
+                if (fromMonitor > 0) fromMonitor else _state.value.vcPendingApprovals.coerceAtLeast(1)
+            }
+            else -> 0
+        }
+        _state.value = _state.value.copy(
+            vcStatus = status,
+            vcPendingApprovals = resolvedApprovals
+        )
         pillView?.updateVcStatus(status)
+        pillView?.updateQuickActionsState(
+            isTorchOn = _state.value.isTorchOn,
+            vcPendingApprovals = resolvedApprovals
+        )
+        updateWindowLayoutIfAttached()
+    }
+
+    fun setVcPendingApprovals(count: Int) {
+        val clamped = count.coerceAtLeast(0)
+        val nextStatus = if (clamped > 0) {
+            VcHudAgentStatus.APPROVAL_NEEDED
+        } else if (_state.value.vcStatus == VcHudAgentStatus.APPROVAL_NEEDED) {
+            VcHudAgentStatus.WORKING
+        } else {
+            _state.value.vcStatus
+        }
+        _state.value = _state.value.copy(
+            vcPendingApprovals = clamped,
+            vcStatus = nextStatus
+        )
+        pillView?.updateVcStatus(nextStatus)
+        pillView?.updateQuickActionsState(
+            isTorchOn = _state.value.isTorchOn,
+            vcPendingApprovals = clamped
+        )
+        updateWindowLayoutIfAttached()
+    }
+
+    fun setTorchState(isTorchOn: Boolean) {
+        _state.value = _state.value.copy(isTorchOn = isTorchOn)
+        pillView?.updateQuickActionsState(
+            isTorchOn = isTorchOn,
+            vcPendingApprovals = _state.value.vcPendingApprovals
+        )
+        updateWindowLayoutIfAttached()
+    }
+
+    /**
+     * Toggles the Z Fold 8 hardware camera flashlight / torch directly from the Floating Micro-HUD
+     * Pill (`CameraManager.setTorchMode`) and updates the glowing amber `🔦 Torch` chip state.
+     */
+    fun toggleTorchFromHud(context: Context): Boolean {
+        val next = SystemTweaker.toggleTorch(context, _state.value.isTorchOn)
+        setTorchState(next)
+        return next
+    }
+
+    /**
+     * Dispatches a 1-tap `✅ Approve VC` action directly from the Floating Micro-HUD Pill:
+     * sends `VcPromptMacro.APPROVE_CONTINUE` to the active/pending VC agent session and marks
+     * pending approval attention events as read.
+     */
+    fun quickApproveVcFromHud(context: Context) {
+        try {
+            val monitor = VcBackgroundMonitor.getInstance(context)
+            val summary = monitor.liveSummary.value
+            val targetSessionId = summary.attentionItems
+                .firstOrNull { it.kind == VcAttentionKind.APPROVAL && !it.read }
+                ?.sessionId
+                ?: summary.activeAgents.firstOrNull { it.needsApproval }?.sessionId
+                ?: summary.pinnedSessionId
+
+            monitor.sendPromptMacro(
+                macro = VcPromptMacro.APPROVE_CONTINUE,
+                sessionId = targetSessionId,
+                steerIfWorking = true
+            )
+            monitor.markAttentionRead(markAll = true)
+        } catch (_: Exception) {
+        }
+        setVcPendingApprovals(0)
     }
 
     fun setLongPressAction(context: Context, action: HudLongPressAction) {
@@ -636,6 +760,12 @@ object FloatingHudController {
                 },
                 onLaunchProdPlusCompare = {
                     launchProdPlusCompareSplit(hostService)
+                },
+                onToggleTorch = {
+                    toggleTorchFromHud(hostService)
+                },
+                onQuickApproveVc = {
+                    quickApproveVcFromHud(hostService)
                 },
                 onExpandedChanged = {
                     updateWindowLayoutIfAttached()
@@ -943,8 +1073,9 @@ object FloatingHudController {
 
 /**
  * Zero-overhead custom `Canvas`/`View` that renders the System-Wide Top-Right Micro-HUD Pill
- * (both Collapsed Pill and Expanded HUD Card with **Z Fold 8 Power Split Row**) inside
- * `FoldAccessibilityService` without requiring an `Activity` or `LifecycleOwner`.
+ * (both Collapsed Pill and Expanded HUD Panel with **Z Fold 8 Power Split Row**, **1-Tap `🔦 Torch`**,
+ * and **Glowing 1-Tap `✅ Approve VC`**) inside `FoldAccessibilityService` without requiring an
+ * `Activity` or `LifecycleOwner`.
  *
  * Displays:
  * - **Live VC Agent Status Dot** (pulsing Cyan when VC agents are working, Amber when approval
@@ -953,10 +1084,12 @@ object FloatingHudController {
  * - **Live Battery & Thermal Readout** (e.g., `88% · 31°C`)
  * - **Live Z Fold 8 Hinge Angle Readout** when `hingeAngleDegrees != null` (e.g., `180°` or `118° FLEX`)
  * - **Spotlight Search Magnifier Glyph** & **Expand/Collapse Toggle**
- * - **Expanded HUD Card (`isExpanded = true`)**:
- *   - Live Z Fold 8 Hinge Angle & Posture Telemetry Header
- *   - **Z Fold 8 Power Split Row**: 1-tap `VC + Termux` (`dev.agentconversation` + `com.termux`)
- *     and `Prod + Compare` (`dev.agentconversation` + `dev.agentconversation.compare`) buttons
+ * - **Expanded HUD Panel (`isExpanded = true`)**:
+ *   - **Z Fold 8 Power Split Row**: 1-tap `⚡ VC + Termux` (`dev.agentconversation` + `com.termux`)
+ *     and `⊞ Prod + Compare` (`dev.agentconversation` + `dev.agentconversation.compare`) buttons
+ *   - **Quick Hardware & VC Action Row (`v0.3.0`)**:
+ *     - 1-tap `🔦 Torch` toggle chip (glowing Amber when `isTorchOn == true`)
+ *     - Glowing 1-tap `✅ Approve VC` chip when `vcPendingApprovals > 0`
  */
 internal class FloatingMicroHudPillView(
     context: Context,
@@ -965,6 +1098,9 @@ internal class FloatingMicroHudPillView(
     private val onLongPress: () -> Unit,
     private val onLaunchVcPlusTermux: () -> Unit = {},
     private val onLaunchProdPlusCompare: () -> Unit = {},
+    private val isTorchOnInitial: Boolean = initialState.isTorchOn,
+    private val onToggleTorch: () -> Unit = {},
+    private val onQuickApproveVc: () -> Unit = {},
     private val onExpandedChanged: (Boolean) -> Unit = {},
     private val onHorizontalDrag: (deltaXPx: Float) -> Unit
 ) : View(context) {
@@ -977,6 +1113,8 @@ internal class FloatingMicroHudPillView(
     private var vcStatus: VcHudAgentStatus = initialState.vcStatus
     private var hingeAngleDegrees: Float? = initialState.hingeAngleDegrees
     private var postureLabel: String? = initialState.postureLabel
+    private var vcPendingApprovals: Int = initialState.vcPendingApprovals
+    private var isTorchOn: Boolean = isTorchOnInitial
     private var isExpanded: Boolean = false
 
     // Pulse animation phase [0f..1f] for the VC Agent Status Dot
@@ -993,6 +1131,8 @@ internal class FloatingMicroHudPillView(
     private val expandHitRect = RectF()
     private val vcTermuxBtnRect = RectF()
     private val prodCompareBtnRect = RectF()
+    private val torchBtnRect = RectF()
+    private val approveVcBtnRect = RectF()
 
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
@@ -1095,13 +1235,24 @@ internal class FloatingMicroHudPillView(
         tempCelsius: Float,
         isCharging: Boolean,
         hingeAngleDegrees: Float? = this.hingeAngleDegrees,
-        postureLabel: String? = this.postureLabel
+        postureLabel: String? = this.postureLabel,
+        vcPendingApprovals: Int = this.vcPendingApprovals,
+        isTorchOn: Boolean = this.isTorchOn
     ) {
         this.batteryPct = batteryPct
         this.tempCelsius = tempCelsius
         this.isCharging = isCharging
         this.hingeAngleDegrees = hingeAngleDegrees
         this.postureLabel = postureLabel
+        this.vcPendingApprovals = vcPendingApprovals
+        this.isTorchOn = isTorchOn
+        requestLayout()
+        invalidate()
+    }
+
+    fun updateQuickActionsState(isTorchOn: Boolean, vcPendingApprovals: Int) {
+        this.isTorchOn = isTorchOn
+        this.vcPendingApprovals = vcPendingApprovals
         requestLayout()
         invalidate()
     }
@@ -1196,10 +1347,13 @@ internal class FloatingMicroHudPillView(
         if (!isExpanded) {
             setMeasuredDimension(collapsedWidth, collapsedHeight)
         } else {
-            val minExpandedW = (242f * density * pillScale).roundToInt()
+            val minExpandedW = (252f * density * pillScale).roundToInt()
             val expandedWidth = maxOf(collapsedWidth, minExpandedW)
-            val splitRowHeight = (32f * density * pillScale).roundToInt()
-            val expandedHeight = collapsedHeight + splitRowHeight + (8f * density * pillScale).roundToInt()
+            val rowHeight = (30f * density * pillScale).roundToInt()
+            val rowGap = (6f * density * pillScale).roundToInt()
+            // Row 1: Power Split Row (VC + Termux, Prod + Compare)
+            // Row 2: Quick Hardware & VC Action Row (🔦 Torch, and ✅ Approve VC when vcPendingApprovals > 0)
+            val expandedHeight = collapsedHeight + rowHeight * 2 + rowGap * 2 + (4f * density * pillScale).roundToInt()
             setMeasuredDimension(expandedWidth, expandedHeight)
         }
     }
@@ -1239,9 +1393,10 @@ internal class FloatingMicroHudPillView(
         bgPaint.alpha = alphaInt
         canvas.drawRoundRect(pillRect, cornerRadius, cornerRadius, bgPaint)
 
-        borderPaint.color = when (vcStatus) {
-            VcHudAgentStatus.ERROR -> 0x88F87171.toInt()
-            VcHudAgentStatus.APPROVAL_NEEDED -> 0x88FBBF24.toInt()
+        borderPaint.color = when {
+            vcStatus == VcHudAgentStatus.ERROR -> 0x88F87171.toInt()
+            vcStatus == VcHudAgentStatus.APPROVAL_NEEDED || vcPendingApprovals > 0 -> 0x99FBBF24.toInt()
+            isTorchOn -> 0x99FBBF24.toInt()
             else -> 0x6638BDF8
         }
         borderPaint.alpha = alphaInt
@@ -1372,35 +1527,88 @@ internal class FloatingMicroHudPillView(
             )
         }
 
-        // 6. Expanded HUD Card: Z Fold 8 Power Split Row (`VC + Termux` & `Prod + Compare`)
+        // 6. Expanded HUD Panel:
+        //    - Row 1: Z Fold 8 Power Split Row (`⚡ VC + Termux` & `⊞ Prod + Compare`)
+        //    - Row 2 (`v0.3.0`): 1-Tap `🔦 Torch` chip (glowing Amber when `isTorchOn == true`) +
+        //      glowing 1-Tap `✅ Approve VC` chip when `vcPendingApprovals > 0`
         if (isExpanded) {
-            val rowTop = topRowHeight + 2f * density * pillScale
-            val rowBottom = h - 6f * density * pillScale
             val btnGap = 6f * density * pillScale
             val btnWidth = (w - padH * 2f - btnGap) * 0.5f
             val btnRadius = 9f * density * pillScale
+            val rowHeight = 28f * density * pillScale
+            val btnMetrics = buttonTextPaint.fontMetrics
 
-            vcTermuxBtnRect.set(padH, rowTop, padH + btnWidth, rowBottom)
-            prodCompareBtnRect.set(padH + btnWidth + btnGap, rowTop, w - padH, rowBottom)
+            // Row 1: Z Fold 8 Power Split Row
+            val row1Top = topRowHeight + 3f * density * pillScale
+            val row1Bottom = row1Top + rowHeight
+            vcTermuxBtnRect.set(padH, row1Top, padH + btnWidth, row1Bottom)
+            prodCompareBtnRect.set(padH + btnWidth + btnGap, row1Top, w - padH, row1Bottom)
 
+            buttonBgPaint.color = 0x2E38BDF8
             buttonBgPaint.alpha = (alphaInt * 0.35f).roundToInt()
+            buttonBorderPaint.color = 0x6638BDF8
             buttonBorderPaint.alpha = (alphaInt * 0.75f).roundToInt()
+            buttonTextPaint.color = 0xFF67E8F9.toInt()
             buttonTextPaint.alpha = alphaInt
 
             canvas.drawRoundRect(vcTermuxBtnRect, btnRadius, btnRadius, buttonBgPaint)
             canvas.drawRoundRect(vcTermuxBtnRect, btnRadius, btnRadius, buttonBorderPaint)
-
             canvas.drawRoundRect(prodCompareBtnRect, btnRadius, btnRadius, buttonBgPaint)
             canvas.drawRoundRect(prodCompareBtnRect, btnRadius, btnRadius, buttonBorderPaint)
 
-            val btnMetrics = buttonTextPaint.fontMetrics
-            val btnTextY = (rowTop + rowBottom) * 0.5f - (btnMetrics.ascent + btnMetrics.descent) * 0.5f
+            val row1TextY = (row1Top + row1Bottom) * 0.5f - (btnMetrics.ascent + btnMetrics.descent) * 0.5f
+            canvas.drawText("⚡ VC + Termux", vcTermuxBtnRect.centerX(), row1TextY, buttonTextPaint)
+            canvas.drawText("⊞ Prod + Compare", prodCompareBtnRect.centerX(), row1TextY, buttonTextPaint)
 
-            canvas.drawText("⚡ VC + Termux", vcTermuxBtnRect.centerX(), btnTextY, buttonTextPaint)
-            canvas.drawText("⊞ Prod + Compare", prodCompareBtnRect.centerX(), btnTextY, buttonTextPaint)
+            // Row 2: 1-Tap `🔦 Torch` toggle chip + conditional glowing `✅ Approve VC` chip
+            val row2Top = row1Bottom + 6f * density * pillScale
+            val row2Bottom = (row2Top + rowHeight).coerceAtMost(h - 5f * density * pillScale)
+            val showApproveChip = vcPendingApprovals > 0
+
+            if (showApproveChip) {
+                torchBtnRect.set(padH, row2Top, padH + btnWidth, row2Bottom)
+                approveVcBtnRect.set(padH + btnWidth + btnGap, row2Top, w - padH, row2Bottom)
+            } else {
+                torchBtnRect.set(padH, row2Top, w - padH, row2Bottom)
+                approveVcBtnRect.setEmpty()
+            }
+
+            // Draw `🔦 Torch` chip (glowing amber when isTorchOn == true)
+            if (isTorchOn) {
+                buttonBgPaint.color = 0x55FBBF24
+                buttonBorderPaint.color = 0xEEFBBF24.toInt()
+                buttonTextPaint.color = 0xFFFDE68A.toInt()
+            } else {
+                buttonBgPaint.color = 0x261E293B
+                buttonBorderPaint.color = 0x5594A3B8
+                buttonTextPaint.color = 0xFFE2E8F0.toInt()
+            }
+            canvas.drawRoundRect(torchBtnRect, btnRadius, btnRadius, buttonBgPaint)
+            canvas.drawRoundRect(torchBtnRect, btnRadius, btnRadius, buttonBorderPaint)
+
+            val row2TextY = (row2Top + row2Bottom) * 0.5f - (btnMetrics.ascent + btnMetrics.descent) * 0.5f
+            val torchLabel = if (isTorchOn) "🔦 Torch ON" else "🔦 Torch"
+            canvas.drawText(torchLabel, torchBtnRect.centerX(), row2TextY, buttonTextPaint)
+
+            // Draw glowing `✅ Approve VC` chip when vcPendingApprovals > 0
+            if (showApproveChip) {
+                buttonBgPaint.color = 0x4D34D399
+                buttonBorderPaint.color = 0xEE34D399.toInt()
+                buttonTextPaint.color = 0xFF6EE7B7.toInt()
+                canvas.drawRoundRect(approveVcBtnRect, btnRadius, btnRadius, buttonBgPaint)
+                canvas.drawRoundRect(approveVcBtnRect, btnRadius, btnRadius, buttonBorderPaint)
+                val approveLabel = if (vcPendingApprovals > 1) {
+                    "✅ Approve VC ($vcPendingApprovals)"
+                } else {
+                    "✅ Approve VC"
+                }
+                canvas.drawText(approveLabel, approveVcBtnRect.centerX(), row2TextY, buttonTextPaint)
+            }
         } else {
             vcTermuxBtnRect.setEmpty()
             prodCompareBtnRect.setEmpty()
+            torchBtnRect.setEmpty()
+            approveVcBtnRect.setEmpty()
         }
     }
 
@@ -1439,6 +1647,17 @@ internal class FloatingMicroHudPillView(
                 if (!isDragging && !longPressTriggered) {
                     performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                     when {
+                        isExpanded && torchBtnRect.contains(downLocalX, downLocalY) -> {
+                            onToggleTorch()
+                            invalidate()
+                        }
+
+                        isExpanded && !approveVcBtnRect.isEmpty &&
+                            approveVcBtnRect.contains(downLocalX, downLocalY) -> {
+                            onQuickApproveVc()
+                            invalidate()
+                        }
+
                         isExpanded && vcTermuxBtnRect.contains(downLocalX, downLocalY) -> {
                             isExpanded = false
                             requestLayout()
@@ -1490,6 +1709,264 @@ internal class FloatingMicroHudPillView(
 
 /**
  * =================================================================================================
+ * FLOATING MICRO-HUD OVERLAY & EXPANDED PANEL COMPOSABLES (`v0.3.0`)
+ * (`@Composable fun FloatingHudOverlay(...)` & `@Composable fun FloatingHudExpandedPanel(...)`)
+ * =================================================================================================
+ */
+
+/**
+ * System-Wide / Lock-Screen Floating Micro-HUD Pill & Expandable Panel Composable (`v0.3.0`).
+ *
+ * Supports:
+ * - Collapsed high-contrast top-right pill with live VC Agent status dot, tabular clock,
+ *   battery/thermal telemetry (`88% · 31°C`), and Z Fold 8 hinge angle (`180°` / `118° FLEX`).
+ * - Expandable panel ([`FloatingHudExpandedPanel`]) with:
+ *   - 1-tap `🔦 Torch` toggle chip (glowing Amber when [isTorchOn] is `true`)
+ *   - Glowing 1-tap `✅ Approve VC` chip when `state.vcPendingApprovals > 0`
+ *   - 1-tap `⚡ VC + Termux` and `⊞ Prod + Compare` Z Fold 8 Power Split buttons
+ */
+@Composable
+fun FloatingHudOverlay(
+    modifier: Modifier = Modifier,
+    state: HudTelemetryState? = null,
+    isExpanded: Boolean = true,
+    onToggleExpand: (() -> Unit)? = null,
+    onSingleTap: (() -> Unit)? = null,
+    onLongPress: (() -> Unit)? = null,
+    onLaunchVcPlusTermux: (() -> Unit)? = null,
+    onLaunchProdPlusCompare: (() -> Unit)? = null,
+    isTorchOn: Boolean = false,
+    onToggleTorch: () -> Unit = {},
+    onQuickApproveVc: () -> Unit = {}
+) {
+    val context = LocalContext.current
+    val controllerState by FloatingHudController.state.collectAsState()
+    val effectiveState = state ?: controllerState
+
+    var internalExpanded by remember { mutableStateOf(isExpanded) }
+    val resolvedExpanded = if (onToggleExpand != null) isExpanded else internalExpanded
+
+    FloatingHudPillComposePreview(
+        state = effectiveState,
+        isExpanded = resolvedExpanded,
+        onToggleExpand = {
+            if (onToggleExpand != null) {
+                onToggleExpand()
+            } else {
+                internalExpanded = !internalExpanded
+            }
+        },
+        onClick = {
+            if (onSingleTap != null) {
+                onSingleTap()
+            } else {
+                FloatingHudController.triggerAnywhereSpotlight(context)
+            }
+        },
+        onLaunchVcPlusTermux = onLaunchVcPlusTermux,
+        onLaunchProdPlusCompare = onLaunchProdPlusCompare,
+        isTorchOn = isTorchOn || effectiveState.isTorchOn,
+        onToggleTorch = {
+            onToggleTorch()
+            FloatingHudController.toggleTorchFromHud(context)
+        },
+        onQuickApproveVc = {
+            onQuickApproveVc()
+            FloatingHudController.quickApproveVcFromHud(context)
+        },
+        modifier = modifier
+    )
+}
+
+/**
+ * Expanded Floating Micro-HUD Panel (`v0.3.0`) rendered beneath the Micro-HUD Pill inside the
+ * system-wide / lock-screen overlay and in-launcher preview.
+ *
+ * Includes:
+ * - **1-Tap `🔦 Torch` Toggle Chip**: Glows Amber when [isTorchOn] is `true`.
+ * - **Glowing 1-Tap `✅ Approve VC` Chip**: Rendered automatically when `state.vcPendingApprovals > 0`.
+ * - **Z Fold 8 Power Split Row**: 1-tap `⚡ VC + Termux` and `⊞ Prod + Compare` multi-window launchers.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun FloatingHudExpandedPanel(
+    state: HudTelemetryState = FloatingHudController.state.value,
+    modifier: Modifier = Modifier,
+    onLaunchVcPlusTermux: (() -> Unit)? = null,
+    onLaunchProdPlusCompare: (() -> Unit)? = null,
+    isTorchOn: Boolean = false,
+    onToggleTorch: () -> Unit = {},
+    onQuickApproveVc: () -> Unit = {}
+) {
+    val context = LocalContext.current
+    val effectiveTorchOn = isTorchOn || state.isTorchOn
+    val hingeBadge = state.formattedHingeBadge
+    val pendingApprovals = state.vcPendingApprovals
+
+    val infiniteTransition = rememberInfiniteTransition(label = "hudExpandedGlow")
+    val approveGlowAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.20f,
+        targetValue = 0.42f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 900, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "approveVcChipGlow"
+    )
+
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        Color(0xF00B101D),
+                        Color(0xE8141C2E)
+                    )
+                )
+            )
+            .border(
+                width = 1.dp,
+                color = when {
+                    pendingApprovals > 0 -> FoldLauncherColors.AmberWarning.copy(alpha = 0.72f)
+                    effectiveTorchOn -> FoldLauncherColors.AmberWarning.copy(alpha = 0.65f)
+                    else -> FoldLauncherColors.GlassBorderStrong
+                },
+                shape = RoundedCornerShape(16.dp)
+            )
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        // Row 1: 1-Tap `🔦 Torch` toggle chip + conditional glowing `✅ Approve VC` chip + Hinge Badge
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            if (hingeBadge != null) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(FoldLauncherColors.GlassSurfaceHighlight)
+                        .border(1.dp, FoldLauncherColors.GlassBorder, RoundedCornerShape(10.dp))
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Hinge $hingeBadge",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = FoldLauncherColors.CyanBright
+                    )
+                }
+            }
+
+            // 1-Tap `🔦 Torch` Toggle Chip (glowing Amber when isTorchOn == true)
+            val torchShape = RoundedCornerShape(10.dp)
+            Box(
+                modifier = Modifier
+                    .clip(torchShape)
+                    .background(
+                        if (effectiveTorchOn) {
+                            FoldLauncherColors.AmberWarning.copy(alpha = 0.30f)
+                        } else {
+                            FoldLauncherColors.GlassSurfaceHighlight
+                        }
+                    )
+                    .border(
+                        width = 1.dp,
+                        color = if (effectiveTorchOn) {
+                            FoldLauncherColors.AmberWarning
+                        } else {
+                            FoldLauncherColors.GlassBorder
+                        },
+                        shape = torchShape
+                    )
+                    .clickable {
+                        onToggleTorch()
+                    }
+                    .padding(horizontal = 9.dp, vertical = 4.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = if (effectiveTorchOn) "🔦 Torch ON" else "🔦 Torch",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = if (effectiveTorchOn) {
+                        FoldLauncherColors.AmberWarning
+                    } else {
+                        FoldLauncherColors.TextPrimary
+                    }
+                )
+            }
+
+            // Glowing 1-Tap `✅ Approve VC` Chip when state.vcPendingApprovals > 0
+            if (pendingApprovals > 0) {
+                val approveShape = RoundedCornerShape(10.dp)
+                Box(
+                    modifier = Modifier
+                        .clip(approveShape)
+                        .background(
+                            FoldLauncherColors.EmeraldSuccess.copy(alpha = approveGlowAlpha)
+                        )
+                        .border(
+                            width = 1.dp,
+                            color = FoldLauncherColors.EmeraldSuccess,
+                            shape = approveShape
+                        )
+                        .clickable {
+                            onQuickApproveVc()
+                        }
+                        .padding(horizontal = 9.dp, vertical = 4.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (pendingApprovals > 1) {
+                            "✅ Approve VC ($pendingApprovals)"
+                        } else {
+                            "✅ Approve VC"
+                        },
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = FoldLauncherColors.EmeraldSuccess
+                    )
+                }
+            }
+        }
+
+        // Row 2: Z Fold 8 Power Split Row (`⚡ VC + Termux` & `⊞ Prod + Compare`)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            HingePresetChip(
+                label = "⚡ VC + Termux",
+                selected = true,
+                onClick = {
+                    if (onLaunchVcPlusTermux != null) {
+                        onLaunchVcPlusTermux()
+                    } else {
+                        FloatingHudController.launchVcPlusTermuxSplit(context)
+                    }
+                }
+            )
+            HingePresetChip(
+                label = "⊞ Prod + Compare",
+                selected = true,
+                onClick = {
+                    if (onLaunchProdPlusCompare != null) {
+                        onLaunchProdPlusCompare()
+                    } else {
+                        FloatingHudController.launchProdPlusCompareSplit(context)
+                    }
+                }
+            )
+        }
+    }
+}
+
+/**
+ * =================================================================================================
  * IN-LAUNCHER & EXPANDED HUD PREVIEW / CONTROL CARD
  * (`@Composable fun FloatingHudControlCard(...)` & `@Composable fun FloatingHudComposeCard(...)`)
  * =================================================================================================
@@ -1500,7 +1977,8 @@ internal class FloatingMicroHudPillView(
  *    `FLAG_SHOW_WHEN_LOCKED`) on/off.
  * 2. Preview how the Top-Right Micro-HUD Pill looks in both **collapsed** and **expanded** modes
  *    with live tabular clock, battery/thermal telemetry (`88% · 31°C`), live Z Fold 8 Hinge Angle
- *    (`180°` / `118° FLEX`), and pulsing VC Agent status dot.
+ *    (`180°` / `118° FLEX`), pulsing VC Agent status dot, 1-tap `🔦 Torch`, and glowing 1-tap
+ *    `✅ Approve VC` chip when `state.vcPendingApprovals > 0`.
  * 3. Launch **Z Fold 8 Power Split Row** 1-tap multi-window pairs:
  *    - `VC + Termux` (`dev.agentconversation` + `com.termux`)
  *    - `Prod + Compare` (`dev.agentconversation` + `dev.agentconversation.compare`)
@@ -1514,7 +1992,10 @@ fun FloatingHudComposeCard(
     onOpenAccessibilitySettings: (() -> Unit)? = null,
     onTestAnywhereSpotlight: (() -> Unit)? = null,
     onLaunchVcPlusTermux: (() -> Unit)? = null,
-    onLaunchProdPlusCompare: (() -> Unit)? = null
+    onLaunchProdPlusCompare: (() -> Unit)? = null,
+    isTorchOn: Boolean = false,
+    onToggleTorch: () -> Unit = {},
+    onQuickApproveVc: () -> Unit = {}
 ) {
     FloatingHudControlCard(
         modifier = modifier,
@@ -1522,7 +2003,10 @@ fun FloatingHudComposeCard(
         onOpenAccessibilitySettings = onOpenAccessibilitySettings,
         onTestAnywhereSpotlight = onTestAnywhereSpotlight,
         onLaunchVcPlusTermux = onLaunchVcPlusTermux,
-        onLaunchProdPlusCompare = onLaunchProdPlusCompare
+        onLaunchProdPlusCompare = onLaunchProdPlusCompare,
+        isTorchOn = isTorchOn,
+        onToggleTorch = onToggleTorch,
+        onQuickApproveVc = onQuickApproveVc
     )
 }
 
@@ -1534,7 +2018,10 @@ fun FloatingHudControlCard(
     onOpenAccessibilitySettings: (() -> Unit)? = null,
     onTestAnywhereSpotlight: (() -> Unit)? = null,
     onLaunchVcPlusTermux: (() -> Unit)? = null,
-    onLaunchProdPlusCompare: (() -> Unit)? = null
+    onLaunchProdPlusCompare: (() -> Unit)? = null,
+    isTorchOn: Boolean = false,
+    onToggleTorch: () -> Unit = {},
+    onQuickApproveVc: () -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -1551,6 +2038,10 @@ fun FloatingHudControlCard(
 
     val hudState by FloatingHudController.state.collectAsState()
     val serviceHingeAngle by FoldAccessibilityService.hingeAngleFlow.collectAsState()
+    val systemTorchActive by SystemTweaker.isTorchActive.collectAsState()
+
+    val vcMonitor = remember(context) { VcBackgroundMonitor.getInstance(context) }
+    val vcSummary by vcMonitor.liveSummary.collectAsState()
 
     LaunchedEffect(serviceHingeAngle) {
         if (serviceHingeAngle != null) {
@@ -1564,6 +2055,13 @@ fun FloatingHudControlCard(
         }
     }
 
+    LaunchedEffect(vcSummary.approvalCount) {
+        if (vcSummary.approvalCount > 0) {
+            FloatingHudController.setVcPendingApprovals(vcSummary.approvalCount)
+        }
+    }
+
+    val effectiveTorchOn = isTorchOn || systemTorchActive || hudState.isTorchOn
     val serviceConnected = isAccessibilityServiceActive || FoldAccessibilityService.instance != null
     var previewExpanded by remember { mutableStateOf(true) }
 
@@ -1628,7 +2126,7 @@ fun FloatingHudControlCard(
                 }
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "Impossible on Stock One UI: Persistent top-right clock, battery/thermal, Z Fold 8 hinge angle & VC status dot over Lock Screen, apps & DeX.",
+                    text = "Impossible on Stock One UI: Persistent top-right clock, battery/thermal, Z Fold 8 hinge angle, 1-tap Torch & VC Approve over Lock Screen, apps & DeX.",
                     fontSize = 12.sp,
                     color = FoldLauncherColors.TextSecondary,
                     maxLines = 3,
@@ -1734,7 +2232,7 @@ fun FloatingHudControlCard(
                 contentAlignment = Alignment.CenterEnd
             ) {
                 FloatingHudPillComposePreview(
-                    state = hudState,
+                    state = hudState.copy(isTorchOn = effectiveTorchOn),
                     isExpanded = previewExpanded,
                     onToggleExpand = { previewExpanded = !previewExpanded },
                     onClick = {
@@ -1743,6 +2241,17 @@ fun FloatingHudControlCard(
                         } else {
                             FloatingHudController.triggerAnywhereSpotlight(context)
                         }
+                    },
+                    onLaunchVcPlusTermux = onLaunchVcPlusTermux,
+                    onLaunchProdPlusCompare = onLaunchProdPlusCompare,
+                    isTorchOn = effectiveTorchOn,
+                    onToggleTorch = {
+                        onToggleTorch()
+                        FloatingHudController.toggleTorchFromHud(context)
+                    },
+                    onQuickApproveVc = {
+                        onQuickApproveVc()
+                        FloatingHudController.quickApproveVcFromHud(context)
                     }
                 )
             }
@@ -1988,6 +2497,14 @@ fun FloatingHudControlCard(
                 }
             )
             HudActionPillButton(
+                label = if (effectiveTorchOn) "🔦 Torch ON" else "🔦 Toggle Torch",
+                accent = effectiveTorchOn,
+                onClick = {
+                    onToggleTorch()
+                    FloatingHudController.toggleTorchFromHud(context)
+                }
+            )
+            HudActionPillButton(
                 label = "⚡ Test VC / Split-Screen",
                 accent = false,
                 onClick = {
@@ -2040,7 +2557,13 @@ private fun FloatingHudPillComposePreview(
     state: HudTelemetryState,
     isExpanded: Boolean,
     onToggleExpand: () -> Unit,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    onLaunchVcPlusTermux: (() -> Unit)? = null,
+    onLaunchProdPlusCompare: (() -> Unit)? = null,
+    isTorchOn: Boolean = false,
+    onToggleTorch: () -> Unit = {},
+    onQuickApproveVc: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -2072,8 +2595,10 @@ private fun FloatingHudPillComposePreview(
     val tempInt = state.batteryTempCelsius.roundToInt()
     val telemetryText = "${if (state.isCharging) "⚡" else ""}${state.batteryPct}% · ${tempInt}°C"
     val hingeBadge = state.formattedHingeBadge
+    val effectiveTorchOn = isTorchOn || state.isTorchOn
 
     Column(
+        modifier = modifier,
         horizontalAlignment = Alignment.End,
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
@@ -2092,9 +2617,13 @@ private fun FloatingHudPillComposePreview(
                 )
                 .border(
                     width = 1.dp,
-                    color = when (state.vcStatus) {
-                        VcHudAgentStatus.ERROR -> FoldLauncherColors.CoralDanger.copy(alpha = 0.65f)
-                        VcHudAgentStatus.APPROVAL_NEEDED -> FoldLauncherColors.AmberWarning.copy(alpha = 0.65f)
+                    color = when {
+                        state.vcStatus == VcHudAgentStatus.ERROR ->
+                            FoldLauncherColors.CoralDanger.copy(alpha = 0.65f)
+                        state.vcStatus == VcHudAgentStatus.APPROVAL_NEEDED || state.vcPendingApprovals > 0 ->
+                            FoldLauncherColors.AmberWarning.copy(alpha = 0.72f)
+                        effectiveTorchOn ->
+                            FoldLauncherColors.AmberWarning.copy(alpha = 0.68f)
                         else -> FoldLauncherColors.ElectricCyan.copy(alpha = 0.48f)
                     },
                     shape = RoundedCornerShape(50)
@@ -2216,29 +2745,14 @@ private fun FloatingHudPillComposePreview(
         }
 
         AnimatedVisibility(visible = isExpanded) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (hingeBadge != null) {
-                    Text(
-                        text = "Expanded HUD · $hingeBadge",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = FoldLauncherColors.CyanBright
-                    )
-                }
-                HingePresetChip(
-                    label = "⚡ VC + Termux",
-                    selected = true,
-                    onClick = { FloatingHudController.launchVcPlusTermuxSplit(context) }
-                )
-                HingePresetChip(
-                    label = "⊞ Prod + Compare",
-                    selected = true,
-                    onClick = { FloatingHudController.launchProdPlusCompareSplit(context) }
-                )
-            }
+            FloatingHudExpandedPanel(
+                state = state,
+                onLaunchVcPlusTermux = onLaunchVcPlusTermux,
+                onLaunchProdPlusCompare = onLaunchProdPlusCompare,
+                isTorchOn = effectiveTorchOn,
+                onToggleTorch = onToggleTorch,
+                onQuickApproveVc = onQuickApproveVc
+            )
         }
     }
 }

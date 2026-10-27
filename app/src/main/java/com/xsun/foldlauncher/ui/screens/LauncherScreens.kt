@@ -1,5 +1,8 @@
 package com.xsun.foldlauncher.ui.screens
 
+import android.app.Activity
+import android.app.KeyguardManager
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -33,6 +36,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -68,12 +72,16 @@ import com.xsun.foldlauncher.ui.animation.AlphabetWaveScrubber
 import com.xsun.foldlauncher.ui.animation.RadialTriggerCorner
 import com.xsun.foldlauncher.ui.animation.launcherGestures
 import com.xsun.foldlauncher.ui.components.AppIconTile
+import com.xsun.foldlauncher.ui.components.AppPairsQuickCard
 import com.xsun.foldlauncher.ui.components.NativeDashboardCards
 import com.xsun.foldlauncher.ui.components.PersistentTaskbarDock
 import com.xsun.foldlauncher.ui.components.TopStatusBar
 import com.xsun.foldlauncher.ui.theme.FoldLauncherColors
 import com.xsun.foldlauncher.ui.theme.IconShapePreset
 import com.xsun.foldlauncher.vc.VcBackgroundMonitor
+import com.xsun.foldlauncher.vc.VcCommandCenterCard
+import com.xsun.foldlauncher.vc.VcPackages
+import com.xsun.foldlauncher.viewmodel.WorkspaceProfile
 import kotlinx.coroutines.launch
 
 private val CORE_DRAWER_CATEGORY_PILLS = listOf("All", "VC & Dev", "Frequent", "System")
@@ -240,6 +248,318 @@ private fun TentModeStandbyBannerCard(
 }
 
 /**
+ * v0.3.0 1-Tap Workspace Profile Pill Bar (`🌐 All Panels`, `⚡ VC & Dev`, `🎯 Minimal Focus`, `🌑 Pure OLED`)
+ * plus instant Hardware Torch & Dual-Screen Cover Mirror quick pills.
+ */
+@Composable
+fun WorkspaceProfilePillBar(
+    workspaceProfile: WorkspaceProfile,
+    onSelectWorkspaceProfile: (WorkspaceProfile) -> Unit,
+    isTorchEnabled: Boolean = false,
+    onToggleTorch: (() -> Unit)? = null,
+    isDualScreenPresentationActive: Boolean = false,
+    onToggleDualScreenPresentation: (() -> Unit)? = null,
+    isKeyguardLocked: Boolean = false,
+    showLockCockpit: Boolean = false,
+    onToggleLockCockpit: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val surfaceColor = if (workspaceProfile == WorkspaceProfile.OLED_BLACK) {
+        FoldLauncherColors.OledBlack
+    } else {
+        FoldLauncherColors.GlassSurfaceHighlight
+    }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        WorkspaceProfile.entries.forEach { profile ->
+            val selected = profile == workspaceProfile
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(
+                        if (selected) FoldLauncherColors.CyanGlow else surfaceColor
+                    )
+                    .border(
+                        1.dp,
+                        if (selected) FoldLauncherColors.ElectricCyan else FoldLauncherColors.GlassBorder,
+                        RoundedCornerShape(14.dp)
+                    )
+                    .clickable { onSelectWorkspaceProfile(profile) }
+                    .padding(horizontal = 11.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = "${profile.badge} ${profile.label}",
+                    fontSize = 11.sp,
+                    fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                    color = if (selected) FoldLauncherColors.CyanBright else FoldLauncherColors.TextSecondary
+                )
+            }
+        }
+
+        // Instant 1-Tap Hardware Torch Pill
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(14.dp))
+                .background(
+                    if (isTorchEnabled) FoldLauncherColors.AmberWarning.copy(alpha = 0.22f)
+                    else surfaceColor
+                )
+                .border(
+                    1.dp,
+                    if (isTorchEnabled) FoldLauncherColors.AmberWarning else FoldLauncherColors.GlassBorder,
+                    RoundedCornerShape(14.dp)
+                )
+                .clickable {
+                    if (onToggleTorch != null) {
+                        onToggleTorch()
+                    } else {
+                        SystemTweaker.toggleTorch(context, isTorchEnabled)
+                    }
+                }
+                .padding(horizontal = 11.dp, vertical = 6.dp)
+        ) {
+            Text(
+                text = if (isTorchEnabled) "🔦 Torch ON" else "🔦 Torch",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = if (isTorchEnabled) FoldLauncherColors.AmberWarning else FoldLauncherColors.TextPrimary
+            )
+        }
+
+        // Dual-Screen Cover Presentation Pill
+        if (onToggleDualScreenPresentation != null) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(
+                        if (isDualScreenPresentationActive) FoldLauncherColors.CyanGlow else surfaceColor
+                    )
+                    .border(
+                        1.dp,
+                        if (isDualScreenPresentationActive) FoldLauncherColors.ElectricCyan else FoldLauncherColors.GlassBorder,
+                        RoundedCornerShape(14.dp)
+                    )
+                    .clickable(onClick = onToggleDualScreenPresentation)
+                    .padding(horizontal = 11.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = if (isDualScreenPresentationActive) "🪞 Cover HUD: ON" else "🪞 Cover HUD",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isDualScreenPresentationActive) FoldLauncherColors.CyanBright else FoldLauncherColors.TextSecondary
+                )
+            }
+        }
+
+        // Lock-Screen Cockpit Bar Toggle Pill
+        if (onToggleLockCockpit != null) {
+            val active = isKeyguardLocked || showLockCockpit
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(
+                        if (active) FoldLauncherColors.EmeraldSuccess.copy(alpha = 0.18f) else surfaceColor
+                    )
+                    .border(
+                        1.dp,
+                        if (active) FoldLauncherColors.EmeraldSuccess else FoldLauncherColors.GlassBorder,
+                        RoundedCornerShape(14.dp)
+                    )
+                    .clickable(onClick = onToggleLockCockpit)
+                    .padding(horizontal = 11.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = if (isKeyguardLocked) "🔒 Lock Cockpit" else "🔓 Cockpit Bar",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (active) FoldLauncherColors.EmeraldSuccess else FoldLauncherColors.TextSecondary
+                )
+            }
+        }
+    }
+}
+
+/**
+ * v0.3.0 Show-When-Locked 120Hz Lock-Screen Cockpit & Hardware Torch Card.
+ * Gives the user instant 1-tap Torch control, live VC Agent status over the lock screen,
+ * and a 1-tap `Unlock & Split VC + Termux` (`KeyguardManager.requestDismissKeyguard`) action.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun LockScreenCockpitCard(
+    isKeyguardLocked: Boolean,
+    isTorchEnabled: Boolean,
+    onToggleTorch: () -> Unit,
+    onUnlockAndSplitVcTermux: () -> Unit,
+    pureOledBlack: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val vcMonitor = remember(context) { VcBackgroundMonitor.getInstance(context) }
+    val vcSummary by vcMonitor.liveSummary.collectAsState()
+
+    val cardBg = if (pureOledBlack) {
+        FoldLauncherColors.OledBlack
+    } else {
+        FoldLauncherColors.GlassSurfaceElevated
+    }
+    val borderColor = if (isKeyguardLocked) {
+        FoldLauncherColors.AmberWarning.copy(alpha = 0.75f)
+    } else {
+        FoldLauncherColors.ElectricCyan.copy(alpha = 0.65f)
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(cardBg)
+            .border(1.dp, borderColor, RoundedCornerShape(20.dp))
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (isKeyguardLocked) {
+                        "🔒 120Hz SHOW-WHEN-LOCKED COCKPIT ACTIVE"
+                    } else {
+                        "⚡ QUICK COCKPIT · TORCH & VC SPLIT-SCREEN"
+                    },
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = if (isKeyguardLocked) FoldLauncherColors.AmberWarning else FoldLauncherColors.ElectricCyan
+                )
+                Text(
+                    text = "VC Agents: ${vcSummary.workingCount} working · ${vcSummary.approvalCount} approvals · ${vcSummary.runningCount} active",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = FoldLauncherColors.TextSecondary
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(
+                        if (isTorchEnabled) FoldLauncherColors.AmberWarning.copy(alpha = 0.24f)
+                        else FoldLauncherColors.GlassSurfaceHighlight
+                    )
+                    .border(
+                        1.dp,
+                        if (isTorchEnabled) FoldLauncherColors.AmberWarning else FoldLauncherColors.GlassBorder,
+                        RoundedCornerShape(12.dp)
+                    )
+                    .clickable(onClick = onToggleTorch)
+                    .padding(horizontal = 12.dp, vertical = 7.dp)
+            ) {
+                Text(
+                    text = if (isTorchEnabled) "🔦 Torch: ON" else "🔦 Torch: OFF",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = if (isTorchEnabled) FoldLauncherColors.AmberWarning else FoldLauncherColors.TextPrimary
+                )
+            }
+        }
+
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(FoldLauncherColors.CyanGlow)
+                    .border(1.dp, FoldLauncherColors.ElectricCyan, RoundedCornerShape(12.dp))
+                    .clickable {
+                        onUnlockAndSplitVcTermux()
+                    }
+                    .padding(horizontal = 12.dp, vertical = 7.dp)
+            ) {
+                Text(
+                    text = "🔓 Unlock & Split VC + Termux",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = FoldLauncherColors.CyanBright
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(FoldLauncherColors.GlassSurfaceHighlight)
+                    .border(1.dp, FoldLauncherColors.GlassBorder, RoundedCornerShape(12.dp))
+                    .clickable { vcMonitor.launchVcVoiceTalk() }
+                    .padding(horizontal = 11.dp, vertical = 7.dp)
+            ) {
+                Text(
+                    text = "🎙 Talk to VC",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = FoldLauncherColors.EmeraldSuccess
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(FoldLauncherColors.GlassSurfaceHighlight)
+                    .border(1.dp, FoldLauncherColors.GlassBorder, RoundedCornerShape(12.dp))
+                    .clickable { vcMonitor.launchVc(null) }
+                    .padding(horizontal = 11.dp, vertical = 7.dp)
+            ) {
+                Text(
+                    text = "⚡ Open VC",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = FoldLauncherColors.TextPrimary
+                )
+            }
+        }
+    }
+}
+
+private fun performUnlockAndSplitFallback(context: Context) {
+    val launchAction = {
+        val vcPkg = SystemTweaker.findInstalledVcPackage(context) ?: VcPackages.PREVIEW
+        SystemTweaker.launchSplitScreenPair(
+            context = context,
+            primaryPackage = vcPkg,
+            secondaryPackage = VcPackages.TERMUX_PACKAGE
+        )
+    }
+    val activity = context as? Activity
+    val km = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+    if (activity != null && km != null && km.isKeyguardLocked) {
+        km.requestDismissKeyguard(
+            activity,
+            object : KeyguardManager.KeyguardDismissCallback() {
+                override fun onDismissSucceeded() {
+                    launchAction()
+                }
+                override fun onDismissError() {
+                    launchAction()
+                }
+            }
+        )
+    } else {
+        launchAction()
+    }
+}
+
+/**
  * One-handed Cover Screen (Z Fold 8 folded) & Standard Slab Phone (Galaxy S23 Ultra) Home Screen.
  * Combines:
  * - Oversized 26sp+ Top-Right Clock status bar with 3D spatial depth parallax
@@ -254,6 +574,15 @@ fun CoverOrSlabHomeScreen(
     postureOverride: PostureOverride = PostureOverride.AUTO,
     onCyclePostureOverride: (() -> Unit)? = null,
     onSetPostureOverride: ((PostureOverride) -> Unit)? = null,
+    workspaceProfile: WorkspaceProfile = WorkspaceProfile.ALL,
+    onSelectWorkspaceProfile: ((WorkspaceProfile) -> Unit)? = null,
+    onCycleWorkspaceProfile: (() -> Unit)? = null,
+    isTorchEnabled: Boolean = false,
+    onToggleTorch: (() -> Unit)? = null,
+    isDualScreenPresentationActive: Boolean = false,
+    onToggleDualScreenPresentation: (() -> Unit)? = null,
+    isKeyguardLocked: Boolean = false,
+    onUnlockAndSplitVcTermux: (() -> Unit)? = null,
     allApps: List<AppEntry>,
     pinnedCoverApps: List<AppEntry>,
     dockApps: List<AppEntry>,
@@ -286,6 +615,12 @@ fun CoverOrSlabHomeScreen(
     onOpenDefaultLauncherPrompt: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val vcMonitor = remember(context) { VcBackgroundMonitor.getInstance(context) }
+    val vcSummary by vcMonitor.liveSummary.collectAsState()
+    val vcConfig by vcMonitor.config.collectAsState()
+    val vcFeedback by vcMonitor.lastSendFeedback.collectAsState()
+
     val gridState = rememberLazyGridState()
     val coroutineScope = rememberCoroutineScope()
     val spatialTilt = rememberSpatialTiltState(enabled = true, hingeAngleFactor = 0f)
@@ -293,9 +628,21 @@ fun CoverOrSlabHomeScreen(
     var selectedCategory by remember { mutableStateOf("All") }
     var activeLetter by remember { mutableStateOf<Char?>(null) }
     var showCompanionCards by remember { mutableStateOf(true) }
+    var showLockCockpit by remember { mutableStateOf(false) }
     var arcTriggerGeneration by remember { mutableIntStateOf(0) }
     var arcRightHanded by remember { mutableStateOf(true) }
     var arcStartExpanded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(workspaceProfile) {
+        if (workspaceProfile == WorkspaceProfile.VC_DEV) {
+            selectedCategory = "VC & Dev"
+            showCompanionCards = true
+        }
+    }
+
+    val isPureOled = workspaceProfile == WorkspaceProfile.OLED_BLACK
+    val isFocusMode = workspaceProfile == WorkspaceProfile.FOCUS
+    val isVcDevMode = workspaceProfile == WorkspaceProfile.VC_DEV
 
     val allAppsMap = remember(allApps) { allApps.associateBy { it.packageName } }
     val categories = remember(allApps) {
@@ -312,7 +659,11 @@ fun CoverOrSlabHomeScreen(
         (pinnedCoverApps + recentApps + allApps).distinctBy { it.packageName }.take(8)
     }
 
-    Box(modifier = modifier.fillMaxSize()) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .then(if (isPureOled) Modifier.background(FoldLauncherColors.OledBlack) else Modifier)
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -345,6 +696,37 @@ fun CoverOrSlabHomeScreen(
                 modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.7f)
             )
 
+            // v0.3.0 Workspace Profile Pill Bar + Hardware Torch & Lock Cockpit Controls
+            WorkspaceProfilePillBar(
+                workspaceProfile = workspaceProfile,
+                onSelectWorkspaceProfile = { profile ->
+                    onSelectWorkspaceProfile?.invoke(profile)
+                },
+                isTorchEnabled = isTorchEnabled,
+                onToggleTorch = onToggleTorch,
+                isDualScreenPresentationActive = isDualScreenPresentationActive,
+                onToggleDualScreenPresentation = onToggleDualScreenPresentation,
+                isKeyguardLocked = isKeyguardLocked,
+                showLockCockpit = showLockCockpit,
+                onToggleLockCockpit = { showLockCockpit = !showLockCockpit }
+            )
+
+            if (isKeyguardLocked || showLockCockpit) {
+                LockScreenCockpitCard(
+                    isKeyguardLocked = isKeyguardLocked,
+                    isTorchEnabled = isTorchEnabled,
+                    onToggleTorch = {
+                        if (onToggleTorch != null) onToggleTorch()
+                        else SystemTweaker.toggleTorch(context, isTorchEnabled)
+                    },
+                    onUnlockAndSplitVcTermux = {
+                        if (onUnlockAndSplitVcTermux != null) onUnlockAndSplitVcTermux()
+                        else performUnlockAndSplitFallback(context)
+                    },
+                    pureOledBlack = isPureOled
+                )
+            }
+
             if (postureState.isTentMode) {
                 TentModeStandbyBannerCard(
                     hingeAngleDegrees = postureState.hingeAngleDegrees,
@@ -355,76 +737,124 @@ fun CoverOrSlabHomeScreen(
                 )
             }
 
-            // Section header with toggle for 120Hz Native Companion & VC Cards
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = "COVER / SLAB · ${filteredApps.size} APPS · 3D PARALLAX",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = FoldLauncherColors.ElectricCyan
+            if (isFocusMode) {
+                // Minimal Focus Mode: distraction-free live VC status + essential dock/apps
+                VcCommandCenterCard(
+                    summary = vcSummary,
+                    config = vcConfig,
+                    lastSendFeedback = vcFeedback,
+                    onOpenVc = { sessionId -> vcMonitor.launchVc(sessionId) },
+                    onSplitScreenVc = { vcMonitor.launchVcSplitScreen() },
+                    onRefreshVc = { vcMonitor.refreshNow() },
+                    onSendQuickMessage = { sessionId, text, steerIfWorking ->
+                        vcMonitor.sendQuickMessage(sessionId, text, steerIfWorking)
+                    },
+                    onMarkAttentionRead = { eventId, markAll ->
+                        vcMonitor.markAttentionRead(eventId, markAll)
+                    },
+                    onUpdateConfig = { serverUrl, authToken, monitorEnabled, notifyBackground ->
+                        vcMonitor.updateConfig(serverUrl, authToken, monitorEnabled, notifyBackground)
+                    },
+                    modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 1.0f)
                 )
-                Text(
-                    text = if (showCompanionCards) "Hide VC & Deck ▲" else "Show VC & Deck ▼",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = FoldLauncherColors.TextSecondary,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .clickable { showCompanionCards = !showCompanionCards }
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                )
-            }
-
-            if (showCompanionCards) {
-                Column(
+            } else {
+                // Section header with toggle for 120Hz Native Companion & VC Cards
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(0.46f, fill = false)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                        .padding(horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    NativeDashboardCards(
-                        postureState = postureState,
-                        batteryPct = batteryPct,
-                        isCharging = isCharging,
-                        isAccessibilityActive = isAccessibilityActive,
-                        isWriteSecureSettingsGranted = isWriteSecureSettingsGranted,
-                        lockScreenRotationEnabled = lockScreenRotationEnabled,
-                        onToggleLockRotation = onToggleLockRotation,
-                        onEnforceGboardDeX = onEnforceGboardDeX,
-                        onLockScreenNow = onLockScreenNow,
-                        onOpenWallpaperPicker = onOpenWallpaperPicker,
-                        onOpenDefaultLauncherPrompt = onOpenDefaultLauncherPrompt,
-                        isDefaultLauncher = isDefaultLauncher,
-                        quickNoteText = quickNoteText,
-                        onQuickNoteChange = onQuickNoteChange,
-                        hingeAngleDegrees = postureState.hingeAngleDegrees,
-                        customAppPairs = appPairs,
-                        onLaunchAppPair = onLaunchAppPair,
-                        spatialTiltState = spatialTilt,
-                        onOpenSpotlight = onOpenSearch,
-                        onToggleRadialArc = {
-                            arcStartExpanded = true
-                            arcTriggerGeneration++
-                        }
+                    Text(
+                        text = "${workspaceProfile.badge} ${workspaceProfile.label.uppercase()} · ${filteredApps.size} APPS · 3D PARALLAX",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = FoldLauncherColors.ElectricCyan
                     )
+                    Text(
+                        text = if (showCompanionCards) "Hide VC & Deck ▲" else "Show VC & Deck ▼",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = FoldLauncherColors.TextSecondary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { showCompanionCards = !showCompanionCards }
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+
+                if (showCompanionCards) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(0.46f, fill = false)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (isVcDevMode) {
+                            VcCommandCenterCard(
+                                summary = vcSummary,
+                                config = vcConfig,
+                                lastSendFeedback = vcFeedback,
+                                onOpenVc = { sessionId -> vcMonitor.launchVc(sessionId) },
+                                onSplitScreenVc = { vcMonitor.launchVcSplitScreen() },
+                                onRefreshVc = { vcMonitor.refreshNow() },
+                                onSendQuickMessage = { sessionId, text, steerIfWorking ->
+                                    vcMonitor.sendQuickMessage(sessionId, text, steerIfWorking)
+                                },
+                                onMarkAttentionRead = { eventId, markAll ->
+                                    vcMonitor.markAttentionRead(eventId, markAll)
+                                },
+                                onUpdateConfig = { serverUrl, authToken, monitorEnabled, notifyBackground ->
+                                    vcMonitor.updateConfig(serverUrl, authToken, monitorEnabled, notifyBackground)
+                                },
+                                modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 1.1f)
+                            )
+                            AppPairsQuickCard(
+                                customAppPairs = appPairs,
+                                onLaunchAppPair = onLaunchAppPair,
+                                modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.95f)
+                            )
+                        } else {
+                            NativeDashboardCards(
+                                postureState = postureState,
+                                batteryPct = batteryPct,
+                                isCharging = isCharging,
+                                isAccessibilityActive = isAccessibilityActive,
+                                isWriteSecureSettingsGranted = isWriteSecureSettingsGranted,
+                                lockScreenRotationEnabled = lockScreenRotationEnabled,
+                                onToggleLockRotation = onToggleLockRotation,
+                                onEnforceGboardDeX = onEnforceGboardDeX,
+                                onLockScreenNow = onLockScreenNow,
+                                onOpenWallpaperPicker = onOpenWallpaperPicker,
+                                onOpenDefaultLauncherPrompt = onOpenDefaultLauncherPrompt,
+                                isDefaultLauncher = isDefaultLauncher,
+                                quickNoteText = quickNoteText,
+                                onQuickNoteChange = onQuickNoteChange,
+                                hingeAngleDegrees = postureState.hingeAngleDegrees,
+                                customAppPairs = appPairs,
+                                onLaunchAppPair = onLaunchAppPair,
+                                spatialTiltState = spatialTilt,
+                                onOpenSpotlight = onOpenSearch,
+                                onToggleRadialArc = {
+                                    arcStartExpanded = true
+                                    arcTriggerGeneration++
+                                }
+                            )
+                        }
+                    }
                 }
             }
 
-            // Pinned Cover Favorites Strip
-            if (pinnedCoverApps.isNotEmpty()) {
+            // Pinned Cover Favorites Strip (hidden in Minimal Focus mode)
+            if (!isFocusMode && pinnedCoverApps.isNotEmpty()) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.85f)
                         .clip(RoundedCornerShape(20.dp))
-                        .background(FoldLauncherColors.GlassSurface)
+                        .background(if (isPureOled) FoldLauncherColors.OledBlack else FoldLauncherColors.GlassSurface)
                         .border(1.dp, FoldLauncherColors.GlassBorder, RoundedCornerShape(20.dp))
                         .padding(horizontal = 10.dp, vertical = 8.dp)
                 ) {
@@ -552,6 +982,15 @@ fun UnfoldedInnerDashboardScreen(
     postureOverride: PostureOverride = PostureOverride.AUTO,
     onCyclePostureOverride: (() -> Unit)? = null,
     onSetPostureOverride: ((PostureOverride) -> Unit)? = null,
+    workspaceProfile: WorkspaceProfile = WorkspaceProfile.ALL,
+    onSelectWorkspaceProfile: ((WorkspaceProfile) -> Unit)? = null,
+    onCycleWorkspaceProfile: (() -> Unit)? = null,
+    isTorchEnabled: Boolean = false,
+    onToggleTorch: (() -> Unit)? = null,
+    isDualScreenPresentationActive: Boolean = false,
+    onToggleDualScreenPresentation: (() -> Unit)? = null,
+    isKeyguardLocked: Boolean = false,
+    onUnlockAndSplitVcTermux: (() -> Unit)? = null,
     allApps: List<AppEntry>,
     pinnedInnerApps: List<AppEntry>,
     dockApps: List<AppEntry>,
@@ -585,6 +1024,12 @@ fun UnfoldedInnerDashboardScreen(
     onOpenDefaultLauncherPrompt: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val vcMonitor = remember(context) { VcBackgroundMonitor.getInstance(context) }
+    val vcSummary by vcMonitor.liveSummary.collectAsState()
+    val vcConfig by vcMonitor.config.collectAsState()
+    val vcFeedback by vcMonitor.lastSendFeedback.collectAsState()
+
     val gridState = rememberLazyGridState()
     val coroutineScope = rememberCoroutineScope()
     val spatialTilt = rememberSpatialTiltState(
@@ -594,9 +1039,21 @@ fun UnfoldedInnerDashboardScreen(
 
     var selectedCategory by remember { mutableStateOf("All") }
     var activeLetter by remember { mutableStateOf<Char?>(null) }
+    var showLockCockpit by remember { mutableStateOf(false) }
     var arcTriggerGeneration by remember { mutableIntStateOf(0) }
     var arcRightHanded by remember { mutableStateOf(true) }
     var arcStartExpanded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(workspaceProfile) {
+        if (workspaceProfile == WorkspaceProfile.VC_DEV) {
+            selectedCategory = "VC & Dev"
+        }
+    }
+
+    val isPureOled = workspaceProfile == WorkspaceProfile.OLED_BLACK
+    val isFocusMode = workspaceProfile == WorkspaceProfile.FOCUS
+    val isVcDevMode = workspaceProfile == WorkspaceProfile.VC_DEV
+    val surfaceBg = if (isPureOled) FoldLauncherColors.OledBlack else FoldLauncherColors.GlassSurface
 
     val allAppsMap = remember(allApps) { allApps.associateBy { it.packageName } }
     val categories = remember(allApps) {
@@ -623,7 +1080,11 @@ fun UnfoldedInnerDashboardScreen(
         }
     }
 
-    Box(modifier = modifier.fillMaxSize()) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .then(if (isPureOled) Modifier.background(FoldLauncherColors.OledBlack) else Modifier)
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -657,6 +1118,37 @@ fun UnfoldedInnerDashboardScreen(
                 modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.65f)
             )
 
+            // v0.3.0 Workspace Profile Pill Bar + Hardware Torch, Cover Mirror & Lock Cockpit
+            WorkspaceProfilePillBar(
+                workspaceProfile = workspaceProfile,
+                onSelectWorkspaceProfile = { profile ->
+                    onSelectWorkspaceProfile?.invoke(profile)
+                },
+                isTorchEnabled = isTorchEnabled,
+                onToggleTorch = onToggleTorch,
+                isDualScreenPresentationActive = isDualScreenPresentationActive,
+                onToggleDualScreenPresentation = onToggleDualScreenPresentation,
+                isKeyguardLocked = isKeyguardLocked,
+                showLockCockpit = showLockCockpit,
+                onToggleLockCockpit = { showLockCockpit = !showLockCockpit }
+            )
+
+            if (isKeyguardLocked || showLockCockpit) {
+                LockScreenCockpitCard(
+                    isKeyguardLocked = isKeyguardLocked,
+                    isTorchEnabled = isTorchEnabled,
+                    onToggleTorch = {
+                        if (onToggleTorch != null) onToggleTorch()
+                        else SystemTweaker.toggleTorch(context, isTorchEnabled)
+                    },
+                    onUnlockAndSplitVcTermux = {
+                        if (onUnlockAndSplitVcTermux != null) onUnlockAndSplitVcTermux()
+                        else performUnlockAndSplitFallback(context)
+                    },
+                    pureOledBlack = isPureOled
+                )
+            }
+
             if (postureState.isTentMode) {
                 TentModeStandbyBannerCard(
                     hingeAngleDegrees = postureState.hingeAngleDegrees,
@@ -682,97 +1174,144 @@ fun UnfoldedInnerDashboardScreen(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    NativeDashboardCards(
-                        postureState = postureState,
-                        batteryPct = batteryPct,
-                        isCharging = isCharging,
-                        isAccessibilityActive = isAccessibilityActive,
-                        isWriteSecureSettingsGranted = isWriteSecureSettingsGranted,
-                        lockScreenRotationEnabled = lockScreenRotationEnabled,
-                        onToggleLockRotation = onToggleLockRotation,
-                        onEnforceGboardDeX = onEnforceGboardDeX,
-                        onLockScreenNow = onLockScreenNow,
-                        onOpenWallpaperPicker = onOpenWallpaperPicker,
-                        onOpenDefaultLauncherPrompt = onOpenDefaultLauncherPrompt,
-                        isDefaultLauncher = isDefaultLauncher,
-                        quickNoteText = quickNoteText,
-                        onQuickNoteChange = onQuickNoteChange,
-                        hingeAngleDegrees = postureState.hingeAngleDegrees,
-                        customAppPairs = appPairs,
-                        onLaunchAppPair = onLaunchAppPair,
-                        spatialTiltState = spatialTilt,
-                        onOpenSpotlight = onOpenSearch,
-                        onToggleRadialArc = {
-                            arcStartExpanded = true
-                            arcTriggerGeneration++
-                        }
-                    )
-
-                    // Pinned Inner Screen Favorites Card
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.95f)
-                            .clip(RoundedCornerShape(22.dp))
-                            .background(FoldLauncherColors.GlassSurface)
-                            .border(1.dp, FoldLauncherColors.GlassBorder, RoundedCornerShape(22.dp))
-                            .padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "INNER DISPLAY FAVORITES",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = FoldLauncherColors.ElectricCyan
-                            )
-                            if (onCreateSampleAppPair != null) {
-                                Text(
-                                    text = "+ Save Split Pair",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = FoldLauncherColors.CyanBright,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .background(FoldLauncherColors.CyanGlow)
-                                        .clickable(onClick = onCreateSampleAppPair)
-                                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                                )
+                    if (isFocusMode) {
+                        VcCommandCenterCard(
+                            summary = vcSummary,
+                            config = vcConfig,
+                            lastSendFeedback = vcFeedback,
+                            onOpenVc = { sessionId -> vcMonitor.launchVc(sessionId) },
+                            onSplitScreenVc = { vcMonitor.launchVcSplitScreen() },
+                            onRefreshVc = { vcMonitor.refreshNow() },
+                            onSendQuickMessage = { sessionId, text, steerIfWorking ->
+                                vcMonitor.sendQuickMessage(sessionId, text, steerIfWorking)
+                            },
+                            onMarkAttentionRead = { eventId, markAll ->
+                                vcMonitor.markAttentionRead(eventId, markAll)
+                            },
+                            onUpdateConfig = { serverUrl, authToken, monitorEnabled, notifyBackground ->
+                                vcMonitor.updateConfig(serverUrl, authToken, monitorEnabled, notifyBackground)
+                            },
+                            modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 1.1f)
+                        )
+                    } else if (isVcDevMode) {
+                        VcCommandCenterCard(
+                            summary = vcSummary,
+                            config = vcConfig,
+                            lastSendFeedback = vcFeedback,
+                            onOpenVc = { sessionId -> vcMonitor.launchVc(sessionId) },
+                            onSplitScreenVc = { vcMonitor.launchVcSplitScreen() },
+                            onRefreshVc = { vcMonitor.refreshNow() },
+                            onSendQuickMessage = { sessionId, text, steerIfWorking ->
+                                vcMonitor.sendQuickMessage(sessionId, text, steerIfWorking)
+                            },
+                            onMarkAttentionRead = { eventId, markAll ->
+                                vcMonitor.markAttentionRead(eventId, markAll)
+                            },
+                            onUpdateConfig = { serverUrl, authToken, monitorEnabled, notifyBackground ->
+                                vcMonitor.updateConfig(serverUrl, authToken, monitorEnabled, notifyBackground)
+                            },
+                            modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 1.15f)
+                        )
+                        AppPairsQuickCard(
+                            customAppPairs = appPairs,
+                            onLaunchAppPair = onLaunchAppPair,
+                            modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 1.0f)
+                        )
+                    } else {
+                        NativeDashboardCards(
+                            postureState = postureState,
+                            batteryPct = batteryPct,
+                            isCharging = isCharging,
+                            isAccessibilityActive = isAccessibilityActive,
+                            isWriteSecureSettingsGranted = isWriteSecureSettingsGranted,
+                            lockScreenRotationEnabled = lockScreenRotationEnabled,
+                            onToggleLockRotation = onToggleLockRotation,
+                            onEnforceGboardDeX = onEnforceGboardDeX,
+                            onLockScreenNow = onLockScreenNow,
+                            onOpenWallpaperPicker = onOpenWallpaperPicker,
+                            onOpenDefaultLauncherPrompt = onOpenDefaultLauncherPrompt,
+                            isDefaultLauncher = isDefaultLauncher,
+                            quickNoteText = quickNoteText,
+                            onQuickNoteChange = onQuickNoteChange,
+                            hingeAngleDegrees = postureState.hingeAngleDegrees,
+                            customAppPairs = appPairs,
+                            onLaunchAppPair = onLaunchAppPair,
+                            spatialTiltState = spatialTilt,
+                            onOpenSpotlight = onOpenSearch,
+                            onToggleRadialArc = {
+                                arcStartExpanded = true
+                                arcTriggerGeneration++
                             }
-                        }
+                        )
+                    }
 
-                        @OptIn(ExperimentalLayoutApi::class)
-                        FlowRow(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    // Pinned Inner Screen Favorites Card (hidden in Minimal Focus mode)
+                    if (!isFocusMode) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.95f)
+                                .clip(RoundedCornerShape(22.dp))
+                                .background(surfaceBg)
+                                .border(1.dp, FoldLauncherColors.GlassBorder, RoundedCornerShape(22.dp))
+                                .padding(14.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            pinnedInnerApps.take(10).forEach { app ->
-                                AppIconTile(
-                                    app = app,
-                                    iconShapePreset = iconShapePreset,
-                                    showLabel = true,
-                                    compact = false,
-                                    onClick = { onAppClick(app) },
-                                    onLongClick = { onAppLongClick(app) },
-                                    modifier = Modifier.width(74.dp)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "INNER DISPLAY FAVORITES",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = FoldLauncherColors.ElectricCyan
                                 )
+                                if (onCreateSampleAppPair != null) {
+                                    Text(
+                                        text = "+ Save Split Pair",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = FoldLauncherColors.CyanBright,
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(FoldLauncherColors.CyanGlow)
+                                            .clickable(onClick = onCreateSampleAppPair)
+                                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+
+                            @OptIn(ExperimentalLayoutApi::class)
+                            FlowRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                pinnedInnerApps.take(10).forEach { app ->
+                                    AppIconTile(
+                                        app = app,
+                                        iconShapePreset = iconShapePreset,
+                                        showLabel = true,
+                                        compact = false,
+                                        onClick = { onAppClick(app) },
+                                        onLongClick = { onAppLongClick(app) },
+                                        modifier = Modifier.width(74.dp)
+                                    )
+                                }
                             }
                         }
                     }
 
-                    // Smart Folders Row (if folders are configured)
-                    if (folders.isNotEmpty()) {
+                    // Smart Folders Row (if folders are configured and not in Minimal Focus mode)
+                    if (!isFocusMode && folders.isNotEmpty()) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.85f)
                                 .clip(RoundedCornerShape(22.dp))
-                                .background(FoldLauncherColors.GlassSurface)
+                                .background(surfaceBg)
                                 .border(1.dp, FoldLauncherColors.GlassBorder, RoundedCornerShape(22.dp))
                                 .padding(14.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -826,7 +1365,7 @@ fun UnfoldedInnerDashboardScreen(
                         .fillMaxHeight()
                         .spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.9f)
                         .clip(RoundedCornerShape(24.dp))
-                        .background(FoldLauncherColors.GlassSurface)
+                        .background(surfaceBg)
                         .border(1.dp, FoldLauncherColors.GlassBorder, RoundedCornerShape(24.dp))
                         .padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -928,6 +1467,15 @@ fun FlexTabletopHomeScreen(
     postureOverride: PostureOverride = PostureOverride.AUTO,
     onCyclePostureOverride: (() -> Unit)? = null,
     onSetPostureOverride: ((PostureOverride) -> Unit)? = null,
+    workspaceProfile: WorkspaceProfile = WorkspaceProfile.ALL,
+    onSelectWorkspaceProfile: ((WorkspaceProfile) -> Unit)? = null,
+    onCycleWorkspaceProfile: (() -> Unit)? = null,
+    isTorchEnabled: Boolean = false,
+    onToggleTorch: (() -> Unit)? = null,
+    isDualScreenPresentationActive: Boolean = false,
+    onToggleDualScreenPresentation: (() -> Unit)? = null,
+    isKeyguardLocked: Boolean = false,
+    onUnlockAndSplitVcTermux: (() -> Unit)? = null,
     allApps: List<AppEntry>,
     favoriteApps: List<AppEntry>,
     dockApps: List<AppEntry>,
@@ -961,11 +1509,25 @@ fun FlexTabletopHomeScreen(
 ) {
     val context = LocalContext.current
     val vcMonitor = remember(context) { VcBackgroundMonitor.getInstance(context) }
+    val vcSummary by vcMonitor.liveSummary.collectAsState()
+    val vcConfig by vcMonitor.config.collectAsState()
+    val vcFeedback by vcMonitor.lastSendFeedback.collectAsState()
     val spatialTilt = rememberSpatialTiltState(enabled = true, hingeAngleFactor = 0.55f)
     val allAppsMap = remember(allApps) { allApps.associateBy { it.packageName } }
 
     var showVirtualTrackpad by remember { mutableStateOf(true) }
     var selectedCategory by remember { mutableStateOf("All") }
+    var showLockCockpit by remember { mutableStateOf(false) }
+
+    LaunchedEffect(workspaceProfile) {
+        if (workspaceProfile == WorkspaceProfile.VC_DEV) {
+            selectedCategory = "VC & Dev"
+        }
+    }
+
+    val isPureOled = workspaceProfile == WorkspaceProfile.OLED_BLACK
+    val isFocusMode = workspaceProfile == WorkspaceProfile.FOCUS
+    val isVcDevMode = workspaceProfile == WorkspaceProfile.VC_DEV
 
     val deckApps = remember(favoriteApps, allApps) {
         if (favoriteApps.isNotEmpty()) {
@@ -984,6 +1546,7 @@ fun FlexTabletopHomeScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
+            .then(if (isPureOled) Modifier.background(FoldLauncherColors.OledBlack) else Modifier)
             .launcherGestures(
                 onSwipeUpSearch = onOpenSearch,
                 onSwipeDownNotifications = onExpandNotifications,
@@ -1016,6 +1579,36 @@ fun FlexTabletopHomeScreen(
                 modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.8f)
             )
 
+            WorkspaceProfilePillBar(
+                workspaceProfile = workspaceProfile,
+                onSelectWorkspaceProfile = { profile ->
+                    onSelectWorkspaceProfile?.invoke(profile)
+                },
+                isTorchEnabled = isTorchEnabled,
+                onToggleTorch = onToggleTorch,
+                isDualScreenPresentationActive = isDualScreenPresentationActive,
+                onToggleDualScreenPresentation = onToggleDualScreenPresentation,
+                isKeyguardLocked = isKeyguardLocked,
+                showLockCockpit = showLockCockpit,
+                onToggleLockCockpit = { showLockCockpit = !showLockCockpit }
+            )
+
+            if (isKeyguardLocked || showLockCockpit) {
+                LockScreenCockpitCard(
+                    isKeyguardLocked = isKeyguardLocked,
+                    isTorchEnabled = isTorchEnabled,
+                    onToggleTorch = {
+                        if (onToggleTorch != null) onToggleTorch()
+                        else SystemTweaker.toggleTorch(context, isTorchEnabled)
+                    },
+                    onUnlockAndSplitVcTermux = {
+                        if (onUnlockAndSplitVcTermux != null) onUnlockAndSplitVcTermux()
+                        else performUnlockAndSplitFallback(context)
+                    },
+                    pureOledBlack = isPureOled
+                )
+            }
+
             if (postureState.isTentMode) {
                 TentModeStandbyBannerCard(
                     hingeAngleDegrees = postureState.hingeAngleDegrees,
@@ -1026,27 +1619,72 @@ fun FlexTabletopHomeScreen(
                 )
             }
 
-            NativeDashboardCards(
-                postureState = postureState,
-                batteryPct = batteryPct,
-                isCharging = isCharging,
-                isAccessibilityActive = isAccessibilityActive,
-                isWriteSecureSettingsGranted = isWriteSecureSettingsGranted,
-                lockScreenRotationEnabled = lockScreenRotationEnabled,
-                onToggleLockRotation = onToggleLockRotation,
-                onEnforceGboardDeX = onEnforceGboardDeX,
-                onLockScreenNow = onLockScreenNow,
-                onOpenWallpaperPicker = onOpenWallpaperPicker,
-                onOpenDefaultLauncherPrompt = onOpenDefaultLauncherPrompt,
-                isDefaultLauncher = isDefaultLauncher,
-                quickNoteText = quickNoteText,
-                onQuickNoteChange = onQuickNoteChange,
-                hingeAngleDegrees = postureState.hingeAngleDegrees,
-                customAppPairs = appPairs,
-                onLaunchAppPair = onLaunchAppPair,
-                spatialTiltState = spatialTilt,
-                onOpenSpotlight = onOpenSearch
-            )
+            if (isFocusMode) {
+                VcCommandCenterCard(
+                    summary = vcSummary,
+                    config = vcConfig,
+                    lastSendFeedback = vcFeedback,
+                    onOpenVc = { sessionId -> vcMonitor.launchVc(sessionId) },
+                    onSplitScreenVc = { vcMonitor.launchVcSplitScreen() },
+                    onRefreshVc = { vcMonitor.refreshNow() },
+                    onSendQuickMessage = { sessionId, text, steerIfWorking ->
+                        vcMonitor.sendQuickMessage(sessionId, text, steerIfWorking)
+                    },
+                    onMarkAttentionRead = { eventId, markAll ->
+                        vcMonitor.markAttentionRead(eventId, markAll)
+                    },
+                    onUpdateConfig = { serverUrl, authToken, monitorEnabled, notifyBackground ->
+                        vcMonitor.updateConfig(serverUrl, authToken, monitorEnabled, notifyBackground)
+                    },
+                    modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 1.0f)
+                )
+            } else if (isVcDevMode) {
+                VcCommandCenterCard(
+                    summary = vcSummary,
+                    config = vcConfig,
+                    lastSendFeedback = vcFeedback,
+                    onOpenVc = { sessionId -> vcMonitor.launchVc(sessionId) },
+                    onSplitScreenVc = { vcMonitor.launchVcSplitScreen() },
+                    onRefreshVc = { vcMonitor.refreshNow() },
+                    onSendQuickMessage = { sessionId, text, steerIfWorking ->
+                        vcMonitor.sendQuickMessage(sessionId, text, steerIfWorking)
+                    },
+                    onMarkAttentionRead = { eventId, markAll ->
+                        vcMonitor.markAttentionRead(eventId, markAll)
+                    },
+                    onUpdateConfig = { serverUrl, authToken, monitorEnabled, notifyBackground ->
+                        vcMonitor.updateConfig(serverUrl, authToken, monitorEnabled, notifyBackground)
+                    },
+                    modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 1.1f)
+                )
+                AppPairsQuickCard(
+                    customAppPairs = appPairs,
+                    onLaunchAppPair = onLaunchAppPair,
+                    modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.95f)
+                )
+            } else {
+                NativeDashboardCards(
+                    postureState = postureState,
+                    batteryPct = batteryPct,
+                    isCharging = isCharging,
+                    isAccessibilityActive = isAccessibilityActive,
+                    isWriteSecureSettingsGranted = isWriteSecureSettingsGranted,
+                    lockScreenRotationEnabled = lockScreenRotationEnabled,
+                    onToggleLockRotation = onToggleLockRotation,
+                    onEnforceGboardDeX = onEnforceGboardDeX,
+                    onLockScreenNow = onLockScreenNow,
+                    onOpenWallpaperPicker = onOpenWallpaperPicker,
+                    onOpenDefaultLauncherPrompt = onOpenDefaultLauncherPrompt,
+                    isDefaultLauncher = isDefaultLauncher,
+                    quickNoteText = quickNoteText,
+                    onQuickNoteChange = onQuickNoteChange,
+                    hingeAngleDegrees = postureState.hingeAngleDegrees,
+                    customAppPairs = appPairs,
+                    onLaunchAppPair = onLaunchAppPair,
+                    spatialTiltState = spatialTilt,
+                    onOpenSpotlight = onOpenSearch
+                )
+            }
         }
 
         // Horizontal Hinge Crease Indicator Bar

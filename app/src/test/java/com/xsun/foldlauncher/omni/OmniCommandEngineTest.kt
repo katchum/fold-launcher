@@ -134,6 +134,60 @@ class OmniCommandEngineTest {
     }
 
     @Test
+    fun parseSystemCommands_torchDualPresentationAndWorkspaceProfiles_resolveExpectedActionTypes() {
+        // 1. Hardware Torch / Flashlight Commands
+        for (query in listOf("> torch", "> flashlight", "> light on", "> light off")) {
+            val cmds = OmniCommandEngine.parseSystemCommands(query)
+            assertEquals("Expected 1 command for $query", 1, cmds.size)
+            assertEquals(SystemActionType.TOGGLE_TORCH, cmds.first().target)
+            assertEquals(SystemActionType.TOGGLE_TORCH, cmds.first().actionType)
+        }
+        assertEquals(true, OmniCommandEngine.parseSystemCommands("> light on").first().desiredTorchState)
+        assertEquals(false, OmniCommandEngine.parseSystemCommands("> light off").first().desiredTorchState)
+
+        // 2. Z Fold 8 Dual-Screen Cover Presentation Commands
+        for (query in listOf("> dual", "> cover hud", "> presentation")) {
+            val cmds = OmniCommandEngine.parseSystemCommands(query)
+            assertEquals("Expected 1 command for $query", 1, cmds.size)
+            assertEquals(SystemActionType.TOGGLE_COVER_PRESENTATION, cmds.first().target)
+            assertEquals("toggle_cover_presentation", cmds.first().actionId)
+        }
+
+        // 3. Workspace Profile Switcher Commands
+        val expectedProfiles = mapOf(
+            "> profile all" to "all",
+            "> profile vc" to "vc",
+            "> profile focus" to "focus",
+            "> profile oled" to "oled"
+        )
+        for ((query, expectedProfileKey) in expectedProfiles) {
+            val cmds = OmniCommandEngine.parseSystemCommands(query)
+            assertEquals("Expected 1 command for $query", 1, cmds.size)
+            val cmd = cmds.first()
+            assertEquals(SystemActionType.SWITCH_WORKSPACE_PROFILE, cmd.target)
+            assertEquals(expectedProfileKey, cmd.profileKey)
+            assertEquals("profile_$expectedProfileKey", cmd.actionId)
+        }
+    }
+
+    @Test
+    fun parseVcCommand_quickMacros_expandsStatusApproveShipAndTestPrompts() {
+        for (macroKey in listOf("status", "approve", "ship", "test")) {
+            val parsed = OmniCommandEngine.parseVcCommand("vc: $macroKey")
+            assertNotNull("Expected VcQuickMacro for vc: $macroKey", parsed)
+            assertTrue(parsed is OmniCommandResult.VcQuickMacro)
+            val macro = parsed as OmniCommandResult.VcQuickMacro
+            assertEquals(macroKey, macro.macroKey)
+            assertTrue(macro.promptText.isNotBlank())
+            assertEquals(macro.promptText, macro.prompt)
+
+            val evaluated = OmniCommandEngine.evaluatePrimary("vc: $macroKey")
+            assertTrue(evaluated is OmniCommandResult.VcQuickMacro)
+            assertEquals(macroKey, (evaluated as OmniCommandResult.VcQuickMacro).macroKey)
+        }
+    }
+
+    @Test
     fun parseVcCommand_standardVoiceAndSplitModifiers_parsesPromptAndFlags() {
         val standard = OmniCommandEngine.parseVcCommand("vc: check fold8 build status")
         assertNotNull(standard)

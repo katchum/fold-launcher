@@ -311,4 +311,50 @@ class VcBridgeParserTest {
         assertTrue(VcPackages.isVcPackage("dev.agentconversation.vci"))
         assertTrue(VcPackages.isVcPackage("dev.agentconversation.preview"))
     }
+
+    @Test
+    fun `v0_3_0 VcVariant VcPromptMacro and resolvePinnedAgent work as expected`() {
+        assertEquals(VcVariant.PROD, VcVariant.fromPackageName(VcPackages.RELEASE))
+        assertEquals(VcVariant.PREVIEW, VcVariant.fromPackageName(VcPackages.PREVIEW))
+        assertEquals(VcVariant.COMPARE, VcVariant.fromPackageName(VcPackages.COMPARE))
+
+        assertEquals(5, VcPromptMacro.entries.size)
+        assertTrue(VcPromptMacro.STATUS.promptText.contains("status", ignoreCase = true))
+        assertTrue(VcPromptMacro.APPROVE_CONTINUE.promptText.contains("Approved", ignoreCase = true))
+        assertTrue(VcPromptMacro.RUN_TESTS.promptText.contains("test", ignoreCase = true))
+        assertTrue(VcPromptMacro.SHIP_RELEASE.promptText.contains("release", ignoreCase = true))
+
+        val a1 = VcAgentStatus(sessionId = "s-coord", name = "Coordinator", project = "Launcher", status = "idle")
+        val a2 = VcAgentStatus(sessionId = "s-qa", name = "QA Specialist", project = "Launcher", status = "working")
+        val summary = VcLiveSummary(
+            workingCount = 1,
+            runningCount = 2,
+            activeAgents = listOf(a1, a2),
+            pinnedSessionId = "s-qa"
+        )
+        assertEquals("s-qa", summary.resolvePinnedAgent()?.sessionId)
+        assertEquals("s-qa", summary.resolvePinnedAgent()?.id)
+        assertEquals(2, summary.totalSessions)
+    }
+
+    @Test
+    fun `parseSnapshotResponse extracts active non-archived sessions and projects`() {
+        val snapshotJson = """
+            {
+              "projects": [
+                {"id": "proj-1", "name": "Android launcher"}
+              ],
+              "sessions": [
+                {"id": "s-1", "name": "Coordinator", "projectId": "proj-1", "role": "general", "status": "working"},
+                {"id": "s-2", "name": "Old Agent", "projectId": "proj-1", "role": "worker", "status": "idle", "archived": true}
+              ]
+            }
+        """.trimIndent()
+
+        val agents = VcBridgeClient.parseSnapshotResponse(snapshotJson)
+        assertEquals(1, agents.size)
+        assertEquals("s-1", agents[0].sessionId)
+        assertEquals("Android launcher", agents[0].project)
+        assertTrue(agents[0].isWorking)
+    }
 }

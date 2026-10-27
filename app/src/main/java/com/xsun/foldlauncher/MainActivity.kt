@@ -22,6 +22,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.SolidColor
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -40,6 +41,7 @@ import com.xsun.foldlauncher.ui.screens.UnfoldedInnerDashboardScreen
 import com.xsun.foldlauncher.ui.theme.FoldLauncherColors
 import com.xsun.foldlauncher.ui.theme.FoldLauncherTheme
 import com.xsun.foldlauncher.viewmodel.LauncherViewModel
+import com.xsun.foldlauncher.viewmodel.WorkspaceProfile
 
 class MainActivity : ComponentActivity() {
 
@@ -153,6 +155,10 @@ private fun FoldLauncherRoot(
 ) {
     val postureOverride by viewModel.postureOverride.collectAsState()
     val postureState = rememberPostureState(activity = activity, overrideMode = postureOverride)
+    val workspaceProfile by viewModel.workspaceProfile.collectAsState()
+    val isTorchEnabled by viewModel.isTorchEnabled.collectAsState()
+    val isDualScreenPresentationActive by viewModel.isDualScreenPresentationActive.collectAsState()
+    val isKeyguardLocked by viewModel.isKeyguardLocked.collectAsState()
 
     val allApps by viewModel.allApps.collectAsState()
     val hiddenApps by viewModel.hiddenApps.collectAsState()
@@ -185,17 +191,21 @@ private fun FoldLauncherRoot(
     val lockScreenRotationEnabled by viewModel.lockScreenRotationEnabled.collectAsState()
     val isDeXConnected by viewModel.isDeXConnected.collectAsState()
 
+    val rootBackgroundBrush = if (workspaceProfile == WorkspaceProfile.OLED_BLACK) {
+        SolidColor(FoldLauncherColors.OledBlack)
+    } else {
+        Brush.verticalGradient(
+            colors = listOf(
+                FoldLauncherColors.DeepVoid.copy(alpha = 0.78f),
+                FoldLauncherColors.OledBlack.copy(alpha = 0.92f)
+            )
+        )
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        FoldLauncherColors.DeepVoid.copy(alpha = 0.78f),
-                        FoldLauncherColors.OledBlack.copy(alpha = 0.92f)
-                    )
-                )
-            )
+            .background(rootBackgroundBrush)
             .windowInsetsPadding(WindowInsets.safeDrawing)
     ) {
         PostureAnimatedContainer(
@@ -209,6 +219,15 @@ private fun FoldLauncherRoot(
                         postureOverride = postureOverride,
                         onCyclePostureOverride = viewModel::cyclePostureOverride,
                         onSetPostureOverride = viewModel::setPostureOverride,
+                        workspaceProfile = workspaceProfile,
+                        onSelectWorkspaceProfile = viewModel::setWorkspaceProfile,
+                        onCycleWorkspaceProfile = viewModel::cycleWorkspaceProfile,
+                        isTorchEnabled = isTorchEnabled,
+                        onToggleTorch = viewModel::toggleTorch,
+                        isDualScreenPresentationActive = isDualScreenPresentationActive,
+                        onToggleDualScreenPresentation = viewModel::toggleDualScreenPresentation,
+                        isKeyguardLocked = isKeyguardLocked,
+                        onUnlockAndSplitVcTermux = { viewModel.unlockAndSplitVcTermux(activity) },
                         allApps = allApps,
                         pinnedCoverApps = pinnedCoverApps,
                         dockApps = dockApps,
@@ -250,6 +269,15 @@ private fun FoldLauncherRoot(
                         postureOverride = postureOverride,
                         onCyclePostureOverride = viewModel::cyclePostureOverride,
                         onSetPostureOverride = viewModel::setPostureOverride,
+                        workspaceProfile = workspaceProfile,
+                        onSelectWorkspaceProfile = viewModel::setWorkspaceProfile,
+                        onCycleWorkspaceProfile = viewModel::cycleWorkspaceProfile,
+                        isTorchEnabled = isTorchEnabled,
+                        onToggleTorch = viewModel::toggleTorch,
+                        isDualScreenPresentationActive = isDualScreenPresentationActive,
+                        onToggleDualScreenPresentation = viewModel::toggleDualScreenPresentation,
+                        isKeyguardLocked = isKeyguardLocked,
+                        onUnlockAndSplitVcTermux = { viewModel.unlockAndSplitVcTermux(activity) },
                         allApps = allApps,
                         favoriteApps = pinnedInnerApps,
                         dockApps = dockApps,
@@ -290,6 +318,15 @@ private fun FoldLauncherRoot(
                         postureOverride = postureOverride,
                         onCyclePostureOverride = viewModel::cyclePostureOverride,
                         onSetPostureOverride = viewModel::setPostureOverride,
+                        workspaceProfile = workspaceProfile,
+                        onSelectWorkspaceProfile = viewModel::setWorkspaceProfile,
+                        onCycleWorkspaceProfile = viewModel::cycleWorkspaceProfile,
+                        isTorchEnabled = isTorchEnabled,
+                        onToggleTorch = viewModel::toggleTorch,
+                        isDualScreenPresentationActive = isDualScreenPresentationActive,
+                        onToggleDualScreenPresentation = viewModel::toggleDualScreenPresentation,
+                        isKeyguardLocked = isKeyguardLocked,
+                        onUnlockAndSplitVcTermux = { viewModel.unlockAndSplitVcTermux(activity) },
                         allApps = allApps,
                         pinnedInnerApps = pinnedInnerApps,
                         dockApps = dockApps,

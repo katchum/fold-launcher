@@ -58,6 +58,9 @@ class VcBackgroundMonitor private constructor(context: Context) {
     private val _selectedVariant = MutableStateFlow(VcVariant.PROD)
     val selectedVariant: StateFlow<VcVariant> = _selectedVariant.asStateFlow()
 
+    private val _pinnedSessionId = MutableStateFlow<String?>(null)
+    val pinnedSessionId: StateFlow<String?> = _pinnedSessionId.asStateFlow()
+
     private val _liveSummary = MutableStateFlow(
         VcLiveSummary(
             connectionState = if (_config.value.isConfigured) {
@@ -68,7 +71,8 @@ class VcBackgroundMonitor private constructor(context: Context) {
             isVcInstalled = VcBridgeClient.resolveInstalledVcPackage(appContext) != null,
             installedVcPackage = VcBridgeClient.resolveInstalledVcPackage(appContext),
             selectedVariant = _selectedVariant.value,
-            installedVariants = VcBridgeClient.resolveInstalledVcVariants(appContext)
+            installedVariants = VcBridgeClient.resolveInstalledVcVariants(appContext),
+            pinnedSessionId = _pinnedSessionId.value
         )
     )
     val liveSummary: StateFlow<VcLiveSummary> = _liveSummary.asStateFlow()
@@ -256,7 +260,34 @@ class VcBackgroundMonitor private constructor(context: Context) {
         _liveSummary.value = _liveSummary.value.copy(
             selectedVariant = variant,
             installedVcPackage = resolvedPkg ?: _liveSummary.value.installedVcPackage,
-            installedVariants = VcBridgeClient.resolveInstalledVcVariants(appContext)
+            installedVariants = VcBridgeClient.resolveInstalledVcVariants(appContext),
+            pinnedSessionId = _pinnedSessionId.value
+        )
+    }
+
+    fun setPinnedSessionId(sessionId: String?) {
+        val normalized = sessionId?.trim()?.takeIf { it.isNotEmpty() }
+        _pinnedSessionId.value = normalized
+        _liveSummary.value = _liveSummary.value.copy(pinnedSessionId = normalized)
+    }
+
+    fun togglePinnedSession(sessionId: String) {
+        val current = _pinnedSessionId.value
+        val next = if (current == sessionId) null else sessionId
+        setPinnedSessionId(next)
+    }
+
+    fun sendPromptMacro(
+        macro: VcPromptMacro,
+        sessionId: String? = _pinnedSessionId.value,
+        steerIfWorking: Boolean = true,
+        onComplete: ((Boolean, String) -> Unit)? = null
+    ) {
+        sendQuickMessage(
+            sessionId = sessionId,
+            text = macro.promptText,
+            steerIfWorking = steerIfWorking,
+            onComplete = onComplete
         )
     }
 
@@ -379,7 +410,8 @@ class VcBackgroundMonitor private constructor(context: Context) {
                 installedVcPackage = installedPkg,
                 isVcInForeground = isVcInForeground,
                 selectedVariant = activeVariant,
-                installedVariants = installedVariants
+                installedVariants = installedVariants,
+                pinnedSessionId = _pinnedSessionId.value
             )
             return
         }
@@ -392,7 +424,8 @@ class VcBackgroundMonitor private constructor(context: Context) {
             isVcInForeground = isVcInForeground
         ).copy(
             selectedVariant = activeVariant,
-            installedVariants = installedVariants
+            installedVariants = installedVariants,
+            pinnedSessionId = _pinnedSessionId.value
         )
         _liveSummary.value = updatedSummary
 

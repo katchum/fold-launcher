@@ -261,4 +261,34 @@ class SpatialMathTest {
         )
         assertNull(centerDrag)
     }
+
+    @Test
+    fun computeOledPixelShiftOffset_tracesDeterministicLissajousCurveWithinRadiusBounds() {
+        val maxRadius = 6f
+        // Verify all 1440 minutes of a day stay strictly within [-maxRadius, +maxRadius]
+        for (minute in 0 until 1440) {
+            val (dx, dy) = computeOledPixelShiftOffset(minuteOfDay = minute, maxRadiusDp = maxRadius)
+            assertTrue("Expected dx in [-6, 6] at minute $minute, got $dx", dx in -maxRadius..maxRadius)
+            assertTrue("Expected dy in [-6, 6] at minute $minute, got $dy", dy in -maxRadius..maxRadius)
+        }
+
+        // At minute 0: sin(0) = 0, cos(0) = 1 -> (0f, +6f)
+        val (dx0, dy0) = computeOledPixelShiftOffset(minuteOfDay = 0, maxRadiusDp = maxRadius)
+        assertEquals(0f, dx0, 0.001f)
+        assertEquals(6f, dy0, 0.001f)
+
+        // Consecutive minutes shift the pixel position (prevents static burn-in)
+        val (dx5, dy5) = computeOledPixelShiftOffset(minuteOfDay = 5, maxRadiusDp = maxRadius)
+        assertTrue(abs(dx5 - dx0) > 0.5f || abs(dy5 - dy0) > 0.5f)
+
+        // Wrapping across midnight (minute 1440 == minute 0) and negative minutes
+        val (dxWrap, dyWrap) = SpatialMath.computeOledPixelShiftOffset(minuteOfDay = 1440, maxRadiusDp = maxRadius)
+        assertEquals(dx0, dxWrap, 0.001f)
+        assertEquals(dy0, dyWrap, 0.001f)
+
+        // Non-positive radius returns (0f, 0f)
+        val (zeroX, zeroY) = computeOledPixelShiftOffset(minuteOfDay = 42, maxRadiusDp = 0f)
+        assertEquals(0f, zeroX, 0.001f)
+        assertEquals(0f, zeroY, 0.001f)
+    }
 }

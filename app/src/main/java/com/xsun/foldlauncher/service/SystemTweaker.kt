@@ -1,18 +1,28 @@
 package com.xsun.foldlauncher.service
 
 import android.annotation.SuppressLint
+import android.app.ActivityManager
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.hardware.display.DisplayManager
 import android.net.Uri
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.view.Display
 import android.view.Surface
 import android.view.inputmethod.InputMethodManager
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 data class LockScreenStatus(
     val isKeyguardLocked: Boolean,
@@ -22,6 +32,15 @@ data class LockScreenStatus(
     val lockShortcutsConfiguredForVc: Boolean,
     val lockScreenHudOverlayEnabled: Boolean,
     val autoCockpitOnWakeEnabled: Boolean
+)
+
+data class HardwareTelemetrySnapshot(
+    val batteryTempCelsius: Float = 0f,
+    val batteryCurrentMa: Int = 0,
+    val isCharging: Boolean = false,
+    val availableRamMb: Long = 0L,
+    val totalRamMb: Long = 0L,
+    val secondaryDisplayCount: Int = 0
 )
 
 object SystemTweaker {
@@ -47,6 +66,127 @@ object SystemTweaker {
 
     const val FOLD_STAY_AWAKE_VALUE = "stay_awake_on_fold_key"
     const val FOLD_SLEEP_VALUE = "sleep_on_fold_key"
+
+    private val _isTorchActive = MutableStateFlow(false)
+    val isTorchActive: StateFlow<Boolean> = _isTorchActive.asStateFlow()
+
+    fun isTorchEnabled(): Boolean = _isTorchActive.value
+
+    /**
+     * Toggles the hardware camera flash / torch using `CameraManager.setTorchMode`
+     * (requires zero runtime permissions on Android 10+).
+     */
+    fun setTorchEnabled(context: Context, enabled: Boolean): Boolean {
+        val cm = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager ?: return false
+        return try {
+            val cameraId = findFlashCameraId(cm) ?: return false
+            cm.setTorchMode(cameraId, enabled)
+            _isTorchActive.value = enabled
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Toggles hardware torch state and returns the new enabled state (or `currentlyEnabled` on error).
+     */
+    fun toggleTorch(context: Context, currentlyEnabled: Boolean = _isTorchActive.value): Boolean {
+        val target = !currentlyEnabled
+        return if (setTorchEnabled(context, target)) {
+            target
+        } else {
+            currentlyEnabled
+        }
+    }
+
+    private fun findFlashCameraId(cm: CameraManager): String? {
+        var fallbackFlashId: String? = null
+        for (id in cm.cameraIdList) {
+            val chars = cm.getCameraCharacteristics(id)
+            val hasFlash = chars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+            if (!hasFlash) continue
+            val facing = chars.get(CameraCharacteristics.LENS_FACING)
+            if (facing == CameraCharacteristics.LENS_FACING_BACK) {
+                return id
+            }
+            if (fallbackFlashId == null) {
+                fallbackFlashId = id
+            }
+        }
+        return fallbackFlashId
+    }
+
+    /**
+     * Reads live Z Fold 8 / Slab hardware telemetry: battery temperature (°C), instantaneous
+     * current (mA), charging state, available/total RAM (MB), and secondary display count.
+     */
+    fun readHardwareTelemetry(context: Context): HardwareTelemetrySnapshot {
+        var tempCelsius = 0f
+        var isCharging = false
+        try {
+            val batteryIntent = context.registerReceiver(
+                null,
+                IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+            )
+            if (batteryIntent != null) {
+                val rawTemp = batteryIntent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0)
+                if (rawTemp > 0) {
+                    tempCelsius = rawTemp / 10f
+                }
+                val status = batteryIntent.getIntExtra(
+                    BatteryManager.EXTRA_STATUS,
+                    BatteryManager.BATTERY_STATUS_UNKNOWN
+                )
+                isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                    status == BatteryManager.BATTERY_STATUS_FULL
+            }
+        } catch (_: Exception) {
+        }
+
+        var currentMa = 0
+        try {
+            val bm = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+            val rawMicroAmps = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW) ?: 0
+            // Samsung devices report either microamps (|v| > 10_000) or milliamps directly
+            currentMa = if (kotlin.math.abs(rawMicroAmps) > 10_000) {
+                rawMicroAmps / 1000
+            } else {
+                rawMicroAmps
+            }
+        } catch (_: Exception) {
+        }
+
+        var availRamMb = 0L
+        var totalRamMb = 0L
+        try {
+            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            if (am != null) {
+                val memInfo = ActivityManager.MemoryInfo()
+                am.getMemoryInfo(memInfo)
+                availRamMb = memInfo.availMem / (1024L * 1024L)
+                totalRamMb = memInfo.totalMem / (1024L * 1024L)
+            }
+        } catch (_: Exception) {
+        }
+
+        var secondaryCount = 0
+        try {
+            val dm = context.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
+            val displays = dm?.displays ?: emptyArray()
+            secondaryCount = displays.count { it.displayId != Display.DEFAULT_DISPLAY }
+        } catch (_: Exception) {
+        }
+
+        return HardwareTelemetrySnapshot(
+            batteryTempCelsius = tempCelsius,
+            batteryCurrentMa = currentMa,
+            isCharging = isCharging,
+            availableRamMb = availRamMb,
+            totalRamMb = totalRamMb,
+            secondaryDisplayCount = secondaryCount
+        )
+    }
 
     fun hasWriteSecureSettings(context: Context): Boolean {
         return ContextCompat.checkSelfPermission(

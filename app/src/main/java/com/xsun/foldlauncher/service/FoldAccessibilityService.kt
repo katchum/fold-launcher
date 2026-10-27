@@ -16,18 +16,21 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.hardware.display.DisplayManager
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.util.TypedValue
+import android.view.Display
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.xsun.foldlauncher.display.DualScreenPresentationController
 import com.xsun.foldlauncher.posture.PostureClassifier
 import com.xsun.foldlauncher.vc.VcBackgroundMonitor
 import com.xsun.foldlauncher.vc.VcPackages
@@ -52,9 +55,10 @@ import kotlin.math.roundToInt
  * 3. Renders a high-contrast `TYPE_ACCESSIBILITY_OVERLAY` Lock-Screen HUD Pill with
  *    `FLAG_SHOW_WHEN_LOCKED` on `ACTION_SCREEN_ON` when `KeyguardManager.isKeyguardLocked` is true
  *    (or launches `MainActivity` in Show-When-Locked Cockpit mode if `autoCockpitOnWake` is enabled).
- * 4. Watches `Settings.Secure.DEFAULT_INPUT_METHOD` and configuration changes (such as Samsung DeX
+ * 4. Tracks secondary displays (`secondaryDisplayCountFlow`) and refreshes `DualScreenPresentationController`.
+ * 5. Watches `Settings.Secure.DEFAULT_INPUT_METHOD` and configuration changes (such as Samsung DeX
  *    connecting/disconnecting) and automatically restores Gboard if One UI forces Samsung Keyboard.
- * 5. Performs global actions on behalf of the launcher:
+ * 6. Performs global actions on behalf of the launcher:
  *    - Double-tap home screen to lock (`GLOBAL_ACTION_LOCK_SCREEN`)
  *    - Swipe down on home screen to pull down notifications (`GLOBAL_ACTION_NOTIFICATIONS`)
  *    - Toggle split-screen multitasking (`GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN`)
@@ -66,6 +70,8 @@ class FoldAccessibilityService : AccessibilityService() {
     private var sensorManager: SensorManager? = null
     private var hingeSensorListener: SensorEventListener? = null
     private var screenLockReceiver: BroadcastReceiver? = null
+    private var displayManager: DisplayManager? = null
+    private var displayListener: DisplayManager.DisplayListener? = null
 
     private var windowManager: WindowManager? = null
     private var lockHudView: View? = null
@@ -81,6 +87,7 @@ class FoldAccessibilityService : AccessibilityService() {
         registerImeGuardObserver()
         registerHingeAngleSensor()
         registerScreenLockReceiver()
+        registerSecondaryDisplayListener()
         refreshKeyguardAndHudState()
         if (autoGuardDexKeyboard && SystemTweaker.isSamsungKeyboardActive(this)) {
             SystemTweaker.enforcePreferredIme(this)
@@ -125,7 +132,9 @@ class FoldAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        DualScreenPresentationController.dismissSecondaryPresentation()
         removeLockHudOverlay()
+        unregisterSecondaryDisplayListener()
         unregisterScreenLockReceiver()
         unregisterHingeAngleSensor()
         unregisterImeGuardObserver()
@@ -159,6 +168,53 @@ class FoldAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun registerSecondaryDisplayListener() {
+        val dm = getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager ?: return
+        val listener = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) {
+                updateSecondaryDisplayState()
+            }
+
+            override fun onDisplayRemoved(displayId: Int) {
+                updateSecondaryDisplayState()
+            }
+
+            override fun onDisplayChanged(displayId: Int) {
+                updateSecondaryDisplayState()
+            }
+        }
+        try {
+            dm.registerDisplayListener(listener, mainHandler)
+            displayManager = dm
+            displayListener = listener
+            updateSecondaryDisplayState()
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun unregisterSecondaryDisplayListener() {
+        val dm = displayManager
+        val listener = displayListener
+        if (dm != null && listener != null) {
+            try {
+                dm.unregisterDisplayListener(listener)
+            } catch (_: Exception) {
+            }
+        }
+        displayManager = null
+        displayListener = null
+    }
+
+    private fun updateSecondaryDisplayState() {
+        val secondaries = DualScreenPresentationController.getSecondaryDisplays(this)
+        _secondaryDisplayCountFlow.value = secondaries.size
+        if (secondaries.isEmpty() && DualScreenPresentationController.isShowing()) {
+            DualScreenPresentationController.dismissSecondaryPresentation()
+        } else if (DualScreenPresentationController.isShowing()) {
+            DualScreenPresentationController.refreshActivePresentation()
+        }
+    }
+
     private fun registerScreenLockReceiver() {
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_ON)
@@ -170,6 +226,7 @@ class FoldAccessibilityService : AccessibilityService() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 val action = intent?.action ?: return
                 refreshKeyguardAndHudState()
+                DualScreenPresentationController.refreshActivePresentation()
                 if (action == Intent.ACTION_SCREEN_ON) {
                     val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
                     if (km?.isKeyguardLocked == true && _autoCockpitOnWake.value) {
@@ -332,6 +389,7 @@ class FoldAccessibilityService : AccessibilityService() {
                     if (lockHudView != null) {
                         updateLockHudText()
                     }
+                    DualScreenPresentationController.refreshActivePresentation()
                 }
             }
 
@@ -421,6 +479,9 @@ class FoldAccessibilityService : AccessibilityService() {
 
         private val _hingeAngleFlow = MutableStateFlow<Float?>(null)
         val hingeAngleFlow: StateFlow<Float?> = _hingeAngleFlow.asStateFlow()
+
+        private val _secondaryDisplayCountFlow = MutableStateFlow(0)
+        val secondaryDisplayCountFlow: StateFlow<Int> = _secondaryDisplayCountFlow.asStateFlow()
 
         private val _isKeyguardLocked = MutableStateFlow(false)
         val isKeyguardLocked: StateFlow<Boolean> = _isKeyguardLocked.asStateFlow()

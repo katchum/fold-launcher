@@ -2,6 +2,7 @@ package com.xsun.foldlauncher.viewmodel
 
 import android.app.Activity
 import android.app.Application
+import android.app.KeyguardManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -28,11 +29,13 @@ import com.xsun.foldlauncher.omni.OmniCommandEngine
 import com.xsun.foldlauncher.posture.PostureOverride
 import com.xsun.foldlauncher.search.SearchEngine
 import com.xsun.foldlauncher.service.FoldAccessibilityService
+import com.xsun.foldlauncher.service.HardwareTelemetrySnapshot
 import com.xsun.foldlauncher.service.SystemTweaker
 import com.xsun.foldlauncher.ui.theme.IconShapePreset
 import com.xsun.foldlauncher.vc.VcBackgroundMonitor
 import com.xsun.foldlauncher.vc.VcConnectionConfig
 import com.xsun.foldlauncher.vc.VcLiveSummary
+import com.xsun.foldlauncher.vc.VcPackages
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -43,6 +46,41 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/**
+ * Z Fold 8 & Slab Home Workspace Modes for v0.3.0:
+ * - [ALL]: Full 120Hz companion deck, VC Command Center, system telemetry, and app matrix
+ * - [VC_DEV]: Prioritizes VC Command Center, Split-Screen Power Pairs, and Terminal/Dev tools
+ * - [FOCUS]: Distraction-free minimal clock + live VC status view (hides secondary widgets)
+ * - [OLED_BLACK]: Pure `#000000` zero-power AMOLED black canvas for maximum Z Fold 8 battery savings
+ */
+enum class WorkspaceProfile(val label: String, val badge: String) {
+    ALL("All Panels", "🌐"),
+    VC_DEV("VC & Dev", "⚡"),
+    FOCUS("Minimal Focus", "🎯"),
+    OLED_BLACK("Pure OLED", "🌑")
+}
+
+/**
+ * Consolidated v0.3.0 UI state snapshot for workspace profile, posture override,
+ * hardware torch, dual-screen presentation, and lock-screen keyguard state.
+ */
+data class LauncherUiState(
+    val workspaceProfile: WorkspaceProfile = WorkspaceProfile.ALL,
+    val postureOverride: PostureOverride = PostureOverride.AUTO,
+    val isTorchEnabled: Boolean = false,
+    val isDualScreenPresentationActive: Boolean = false,
+    val isKeyguardLocked: Boolean = false,
+    val hardwareTelemetry: HardwareTelemetrySnapshot = HardwareTelemetrySnapshot(),
+    val isSearchOpen: Boolean = false,
+    val isSettingsOpen: Boolean = false,
+    val batteryPct: Int = 100,
+    val isCharging: Boolean = false,
+    val isDeXConnected: Boolean = false,
+    val isAccessibilityActive: Boolean = false,
+    val isWriteSecureSettingsGranted: Boolean = false,
+    val lockScreenRotationEnabled: Boolean = false
+)
 
 class LauncherViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -173,6 +211,26 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _postureOverride = MutableStateFlow(PostureOverride.AUTO)
     val postureOverride: StateFlow<PostureOverride> = _postureOverride.asStateFlow()
 
+    // v0.3.0 Workspace Profile state (ALL, VC_DEV, FOCUS, OLED_BLACK)
+    private val _workspaceProfile = MutableStateFlow(WorkspaceProfile.ALL)
+    val workspaceProfile: StateFlow<WorkspaceProfile> = _workspaceProfile.asStateFlow()
+
+    // v0.3.0 Hardware Torch, Dual-Screen Cover Presentation & Lock-Screen Keyguard Telemetry
+    private val _isTorchEnabled = MutableStateFlow(SystemTweaker.isTorchEnabled())
+    val isTorchEnabled: StateFlow<Boolean> = _isTorchEnabled.asStateFlow()
+
+    private val _isDualScreenPresentationActive = MutableStateFlow(false)
+    val isDualScreenPresentationActive: StateFlow<Boolean> = _isDualScreenPresentationActive.asStateFlow()
+
+    private val _isKeyguardLocked = MutableStateFlow(false)
+    val isKeyguardLocked: StateFlow<Boolean> = _isKeyguardLocked.asStateFlow()
+
+    private val _hardwareTelemetry = MutableStateFlow(HardwareTelemetrySnapshot())
+    val hardwareTelemetry: StateFlow<HardwareTelemetrySnapshot> = _hardwareTelemetry.asStateFlow()
+
+    private val _uiState = MutableStateFlow(LauncherUiState())
+    val uiState: StateFlow<LauncherUiState> = _uiState.asStateFlow()
+
     // VC Background Monitor & Command Center states
     val vcConfig: StateFlow<VcConnectionConfig> = vcMonitor.config
     val vcLiveSummary: StateFlow<VcLiveSummary> = vcMonitor.liveSummary
@@ -273,6 +331,33 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 FloatingHudController.setVcAgentStatus(appContext, hudDotStatus)
             }
         }
+
+        // Sync live hardware torch state from SystemTweaker
+        viewModelScope.launch {
+            SystemTweaker.isTorchActive.collect { active ->
+                _isTorchEnabled.value = active
+                syncUiStateSnapshot()
+            }
+        }
+    }
+
+    private fun syncUiStateSnapshot() {
+        _uiState.value = LauncherUiState(
+            workspaceProfile = _workspaceProfile.value,
+            postureOverride = _postureOverride.value,
+            isTorchEnabled = _isTorchEnabled.value,
+            isDualScreenPresentationActive = _isDualScreenPresentationActive.value,
+            isKeyguardLocked = _isKeyguardLocked.value,
+            hardwareTelemetry = _hardwareTelemetry.value,
+            isSearchOpen = _isSearchOpen.value,
+            isSettingsOpen = _isSettingsOpen.value,
+            batteryPct = _batteryPct.value,
+            isCharging = _isCharging.value,
+            isDeXConnected = _isDeXConnected.value,
+            isAccessibilityActive = _isAccessibilityActive.value,
+            isWriteSecureSettingsGranted = _isWriteSecureSettingsGranted.value,
+            lockScreenRotationEnabled = _lockScreenRotationEnabled.value
+        )
     }
 
     fun refreshAll() {
@@ -287,9 +372,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _isWriteSecureSettingsGranted.value = SystemTweaker.hasWriteSecureSettings(appContext)
         _lockScreenRotationEnabled.value = SystemTweaker.isLockScreenRotationEnabled(appContext)
         _isDeXConnected.value = SystemTweaker.isDexDesktopModeActive(appContext)
+        val km = appContext.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+        _isKeyguardLocked.value = km?.isKeyguardLocked == true
+        _isTorchEnabled.value = SystemTweaker.isTorchEnabled()
+        _hardwareTelemetry.value = SystemTweaker.readHardwareTelemetry(appContext)
         if (a11yEnabled) {
             FloatingHudController.syncOverlayWithService()
         }
+        syncUiStateSnapshot()
     }
 
     fun onLauncherResumed() {
@@ -388,6 +478,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     // Live Posture Override Controls (AUTO -> FORCE_FLEX -> FORCE_INNER -> FORCE_COVER -> TENT_MODE -> AUTO)
     fun setPostureOverride(mode: PostureOverride) {
         _postureOverride.value = mode
+        syncUiStateSnapshot()
         val feedback = "Posture: ${mode.displayName} (${mode.shortLabel})"
         _omniStatusMessage.value = feedback
         try {
@@ -405,6 +496,99 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             PostureOverride.TENT_MODE -> PostureOverride.AUTO
         }
         setPostureOverride(next)
+    }
+
+    // v0.3.0 Workspace Profile Controls (ALL -> VC_DEV -> FOCUS -> OLED_BLACK -> ALL)
+    fun setWorkspaceProfile(profile: WorkspaceProfile) {
+        _workspaceProfile.value = profile
+        syncUiStateSnapshot()
+        val feedback = "${profile.badge} Workspace: ${profile.label}"
+        _omniStatusMessage.value = feedback
+        try {
+            Toast.makeText(appContext, feedback, Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) {
+        }
+    }
+
+    fun cycleWorkspaceProfile() {
+        val next = when (_workspaceProfile.value) {
+            WorkspaceProfile.ALL -> WorkspaceProfile.VC_DEV
+            WorkspaceProfile.VC_DEV -> WorkspaceProfile.FOCUS
+            WorkspaceProfile.FOCUS -> WorkspaceProfile.OLED_BLACK
+            WorkspaceProfile.OLED_BLACK -> WorkspaceProfile.ALL
+        }
+        setWorkspaceProfile(next)
+    }
+
+    // v0.3.0 Hardware Torch, Dual-Screen Presentation & Lock-Screen Cockpit Actions
+    fun toggleTorch() {
+        val next = SystemTweaker.toggleTorch(appContext, _isTorchEnabled.value)
+        _isTorchEnabled.value = next
+        syncUiStateSnapshot()
+        val feedback = if (next) "🔦 Hardware Torch: ON" else "🔦 Hardware Torch: OFF"
+        _omniStatusMessage.value = feedback
+        try {
+            Toast.makeText(appContext, feedback, Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) {
+        }
+    }
+
+    fun setDualScreenPresentationActive(active: Boolean) {
+        _isDualScreenPresentationActive.value = active
+        syncUiStateSnapshot()
+        val feedback = if (active) "🪞 Cover Display Mirror: ON" else "🪞 Cover Display Mirror: OFF"
+        _omniStatusMessage.value = feedback
+        try {
+            Toast.makeText(appContext, feedback, Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) {
+        }
+    }
+
+    fun toggleDualScreenPresentation() {
+        setDualScreenPresentationActive(!_isDualScreenPresentationActive.value)
+    }
+
+    /**
+     * Dismisses the Keyguard (`KeyguardManager.requestDismissKeyguard`) if locked and immediately
+     * launches VC + Termux side-by-side on the Z Fold 8 display.
+     */
+    fun unlockAndSplitVcTermux(activity: Activity? = null) {
+        val launchSplitAction = {
+            val vcPkg = SystemTweaker.findInstalledVcPackage(appContext) ?: VcPackages.PREVIEW
+            val launched = SystemTweaker.launchSplitScreenPair(
+                context = appContext,
+                primaryPackage = vcPkg,
+                secondaryPackage = VcPackages.TERMUX_PACKAGE
+            )
+            if (!launched) {
+                vcMonitor.launchVcSplitScreen(preferredSecondaryPackage = VcPackages.TERMUX_PACKAGE)
+            }
+            refreshSystemCompanionState()
+        }
+
+        val km = appContext.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+        if (activity != null && km != null && km.isKeyguardLocked) {
+            km.requestDismissKeyguard(
+                activity,
+                object : KeyguardManager.KeyguardDismissCallback() {
+                    override fun onDismissSucceeded() {
+                        _isKeyguardLocked.value = false
+                        syncUiStateSnapshot()
+                        launchSplitAction()
+                    }
+
+                    override fun onDismissCancelled() {
+                        refreshSystemCompanionState()
+                    }
+
+                    override fun onDismissError() {
+                        launchSplitAction()
+                    }
+                }
+            )
+        } else {
+            launchSplitAction()
+        }
     }
 
     private fun handlePostureCommandId(actionId: String): Boolean {
@@ -427,6 +611,30 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             }
             "posture_auto" -> {
                 setPostureOverride(PostureOverride.AUTO)
+                true
+            }
+            "torch", "system_torch", "toggle_torch" -> {
+                toggleTorch()
+                true
+            }
+            "dual_screen", "cover_mirror" -> {
+                toggleDualScreenPresentation()
+                true
+            }
+            "profile_all" -> {
+                setWorkspaceProfile(WorkspaceProfile.ALL)
+                true
+            }
+            "profile_vc_dev", "profile_vc" -> {
+                setWorkspaceProfile(WorkspaceProfile.VC_DEV)
+                true
+            }
+            "profile_focus" -> {
+                setWorkspaceProfile(WorkspaceProfile.FOCUS)
+                true
+            }
+            "profile_oled", "profile_oled_black" -> {
+                setWorkspaceProfile(WorkspaceProfile.OLED_BLACK)
                 true
             }
             else -> false
