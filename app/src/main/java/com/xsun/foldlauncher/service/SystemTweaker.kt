@@ -653,6 +653,63 @@ object SystemTweaker {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
+    fun isWriteSecureSettingsGranted(context: Context): Boolean = hasWriteSecureSettings(context)
+
+    fun hasExternalDisplayConnected(context: Context): Boolean {
+        return try {
+            val dm = context.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
+            val displays = dm?.displays ?: emptyArray()
+            displays.any { it.displayId != Display.DEFAULT_DISPLAY }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Silent background DeX -> Gboard guard (`v0.7.0`).
+     * When `WRITE_SECURE_SETTINGS` is granted and Gboard (`com.google.android.inputmethod.latin`)
+     * is installed, sets `dex_on_screen_keyboard_location = 0` and automatically restores Gboard
+     * if Samsung Keyboard (`com.samsung.android.honeyboard`) takes over while DeX or an external
+     * display is connected.
+     */
+    fun ensureDeXGboardPreferred(context: Context): Boolean {
+        if (!isWriteSecureSettingsGranted(context)) return false
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            ?: return false
+        val allImes = runCatching {
+            (imm.enabledInputMethodList + imm.inputMethodList).distinctBy { it.id }
+        }.getOrDefault(emptyList())
+
+        val gboardIme = allImes.firstOrNull {
+            it.packageName.equals("com.google.android.inputmethod.latin", ignoreCase = true) ||
+                it.id.equals(GBOARD_IME_ID, ignoreCase = true)
+        } ?: return false
+
+        val cr = context.contentResolver
+        runCatching {
+            Settings.Secure.putInt(cr, KEY_DEX_ON_SCREEN_KEYBOARD_LOCATION, 0)
+        }
+        runCatching {
+            Settings.Global.putInt(cr, KEY_DEX_ON_SCREEN_KEYBOARD_LOCATION, 0)
+        }
+
+        val currentIme = runCatching {
+            Settings.Secure.getString(cr, Settings.Secure.DEFAULT_INPUT_METHOD) ?: ""
+        }.getOrDefault("")
+
+        val isDexOrExternal = isDexDesktopModeActive(context) || hasExternalDisplayConnected(context)
+        if (isDexOrExternal && currentIme.contains(SAMSUNG_HONEYBOARD_PACKAGE, ignoreCase = true)) {
+            return runCatching {
+                Settings.Secure.putString(
+                    cr,
+                    Settings.Secure.DEFAULT_INPUT_METHOD,
+                    gboardIme.id.ifBlank { GBOARD_IME_ID }
+                )
+            }.getOrDefault(false)
+        }
+        return true
+    }
+
     fun isAccessibilityServiceEnabled(context: Context): Boolean {
         if (FoldAccessibilityService.instance != null) return true
         val expectedComponent = "${context.packageName}/${FoldAccessibilityService::class.java.canonicalName}"

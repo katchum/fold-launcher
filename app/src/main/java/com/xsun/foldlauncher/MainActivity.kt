@@ -30,10 +30,10 @@ import com.xsun.foldlauncher.posture.DevicePosture
 import com.xsun.foldlauncher.posture.rememberPostureState
 import com.xsun.foldlauncher.ui.animation.PostureAnimatedContainer
 import com.xsun.foldlauncher.ui.components.AppContextMenuSheet
-import com.xsun.foldlauncher.ui.components.SpotlightSearchOverlay
 import com.xsun.foldlauncher.ui.screens.CoverOrSlabHomeScreen
 import com.xsun.foldlauncher.ui.screens.FlexTabletopHomeScreen
 import com.xsun.foldlauncher.ui.screens.LauncherSettingsSheet
+import com.xsun.foldlauncher.ui.screens.OneUiMinimalAppSearchOverlay
 import com.xsun.foldlauncher.ui.screens.UnfoldedInnerDashboardScreen
 import com.xsun.foldlauncher.ui.theme.FoldLauncherTheme
 import com.xsun.foldlauncher.viewmodel.LauncherViewModel
@@ -160,8 +160,6 @@ private fun FoldLauncherRoot(
 
     val searchQuery by viewModel.searchQuery.collectAsState()
     val rankedSearchApps by viewModel.rankedSearchApps.collectAsState()
-    val inlineMathResult by viewModel.inlineMathResult.collectAsState()
-    val clipboardItems by viewModel.clipboardItems.collectAsState()
 
     val isSearchOpen by viewModel.isSearchOpen.collectAsState()
     val selectedContextMenuApp by viewModel.selectedContextMenuApp.collectAsState()
@@ -184,7 +182,6 @@ private fun FoldLauncherRoot(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.16f))
-            .windowInsetsPadding(WindowInsets.safeDrawing)
     ) {
         PostureAnimatedContainer(
             postureState = postureState,
@@ -391,22 +388,17 @@ private fun FoldLauncherRoot(
             }
         }
 
-        // Instant 0ms Spotlight Search + Omni-Command Palette + Inline Math Overlay
-        SpotlightSearchOverlay(
+        // Clean Full-Screen One UI App Search Drawer (0ms keyboard focus, zero omni/clipboard clutter)
+        OneUiMinimalAppSearchOverlay(
             visible = isSearchOpen,
             query = searchQuery,
             onQueryChange = viewModel::onSearchQueryChange,
             rankedApps = rankedSearchApps,
-            inlineMathResult = inlineMathResult,
             iconShapePreset = iconShapePreset,
+            columns = if (postureState.posture == DevicePosture.COMPACT) 4 else 6,
             onLaunchApp = { app -> viewModel.launchApp(app) },
             onAppLongClick = viewModel::openContextMenu,
-            onWebSearch = viewModel::launchWebSearch,
-            onDismiss = viewModel::closeSearch,
-            allApps = allApps,
-            clipboardItems = clipboardItems,
-            onExecuteOmniAction = viewModel::onOmniActionFromSpotlight,
-            onToggleThumbArc = viewModel::toggleRadialThumbArc
+            onDismiss = viewModel::closeSearch
         )
 
         // Long-Press App Context Menu Sheet

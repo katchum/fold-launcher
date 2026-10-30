@@ -92,20 +92,22 @@ class FoldAccessibilityService : AccessibilityService() {
         loadLockHudPreferences(this)
         SystemTweaker.loadHingePreferences(this)
         registerImeGuardObserver()
-        registerHingeAngleSensor()
+        if (_hingeSensorMonitoringEnabled.value) {
+            registerHingeAngleSensor()
+        }
         registerScreenLockReceiver()
         registerSecondaryDisplayListener()
-        refreshKeyguardAndHudState()
-        if (autoGuardDexKeyboard && SystemTweaker.isSamsungKeyboardActive(this)) {
-            SystemTweaker.enforcePreferredIme(this)
+        removeLockHudOverlay()
+        if (autoGuardDexKeyboard) {
+            SystemTweaker.ensureDeXGboardPreferred(this)
         }
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         // When Samsung DeX connects or display posture changes, guard against Samsung Keyboard hijack
-        if (autoGuardDexKeyboard && SystemTweaker.isSamsungKeyboardActive(this)) {
-            SystemTweaker.enforcePreferredIme(this)
+        if (autoGuardDexKeyboard) {
+            SystemTweaker.ensureDeXGboardPreferred(this)
         }
         refreshKeyguardAndHudState()
     }
@@ -115,7 +117,7 @@ class FoldAccessibilityService : AccessibilityService() {
             val pkg = event.packageName?.toString() ?: return
 
             if (autoGuardDexKeyboard && pkg == SystemTweaker.SAMSUNG_HONEYBOARD_PACKAGE) {
-                SystemTweaker.enforcePreferredIme(this)
+                SystemTweaker.ensureDeXGboardPreferred(this)
                 return
             }
 
@@ -180,6 +182,9 @@ class FoldAccessibilityService : AccessibilityService() {
         val listener = object : DisplayManager.DisplayListener {
             override fun onDisplayAdded(displayId: Int) {
                 updateSecondaryDisplayState()
+                if (autoGuardDexKeyboard) {
+                    SystemTweaker.ensureDeXGboardPreferred(this@FoldAccessibilityService)
+                }
             }
 
             override fun onDisplayRemoved(displayId: Int) {
@@ -440,8 +445,8 @@ class FoldAccessibilityService : AccessibilityService() {
         val observer = object : ContentObserver(mainHandler) {
             override fun onChange(selfChange: Boolean) {
                 super.onChange(selfChange)
-                if (autoGuardDexKeyboard && SystemTweaker.isSamsungKeyboardActive(this@FoldAccessibilityService)) {
-                    SystemTweaker.enforcePreferredIme(this@FoldAccessibilityService)
+                if (autoGuardDexKeyboard) {
+                    SystemTweaker.ensureDeXGboardPreferred(this@FoldAccessibilityService)
                 }
             }
         }
@@ -466,6 +471,7 @@ class FoldAccessibilityService : AccessibilityService() {
         private const val KEY_LOCK_HUD_ENABLED = "lock_screen_hud_enabled"
         private const val KEY_ALWAYS_MICRO_HUD = "always_show_micro_hud"
         private const val KEY_AUTO_COCKPIT_ON_WAKE = "auto_cockpit_on_wake"
+        private const val KEY_HINGE_SENSOR_MONITORING = "hinge_sensor_monitoring_enabled"
 
         val VC_PACKAGES = setOf(
             "dev.agentconversation",
@@ -514,6 +520,9 @@ class FoldAccessibilityService : AccessibilityService() {
         private val _autoCockpitOnWake = MutableStateFlow(false)
         val autoCockpitOnWake: StateFlow<Boolean> = _autoCockpitOnWake.asStateFlow()
 
+        private val _hingeSensorMonitoringEnabled = MutableStateFlow(false)
+        val hingeSensorMonitoringEnabled: StateFlow<Boolean> = _hingeSensorMonitoringEnabled.asStateFlow()
+
         val hingeDetentHapticsEnabled: StateFlow<Boolean>
             get() = SystemTweaker.hingeDetentHapticsEnabled
 
@@ -535,11 +544,26 @@ class FoldAccessibilityService : AccessibilityService() {
             SystemTweaker.setUnfoldActionMode(context, mode)
         }
 
+        fun setHingeSensorMonitoringEnabled(context: Context, enabled: Boolean) {
+            _hingeSensorMonitoringEnabled.value = enabled
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(KEY_HINGE_SENSOR_MONITORING, enabled)
+                .apply()
+            val svc = instance ?: return
+            if (enabled) {
+                svc.registerHingeAngleSensor()
+            } else {
+                svc.unregisterHingeAngleSensor()
+            }
+        }
+
         fun loadLockHudPreferences(context: Context) {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             _lockScreenHudEnabled.value = prefs.getBoolean(KEY_LOCK_HUD_ENABLED, false)
             _alwaysShowMicroHud.value = prefs.getBoolean(KEY_ALWAYS_MICRO_HUD, false)
             _autoCockpitOnWake.value = prefs.getBoolean(KEY_AUTO_COCKPIT_ON_WAKE, false)
+            _hingeSensorMonitoringEnabled.value = prefs.getBoolean(KEY_HINGE_SENSOR_MONITORING, false)
             SystemTweaker.loadHingePreferences(context)
         }
 

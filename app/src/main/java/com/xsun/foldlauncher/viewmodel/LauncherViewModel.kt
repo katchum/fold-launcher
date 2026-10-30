@@ -22,7 +22,6 @@ import com.xsun.foldlauncher.data.AppRepository
 import com.xsun.foldlauncher.data.LauncherPreferences
 import com.xsun.foldlauncher.hud.FloatingHudController
 import com.xsun.foldlauncher.hud.FloatingHudUiState
-import com.xsun.foldlauncher.hud.VcHudAgentStatus
 import com.xsun.foldlauncher.model.AppEntry
 import com.xsun.foldlauncher.model.AppPair
 import com.xsun.foldlauncher.model.AppShortcutItem
@@ -387,7 +386,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     init {
-        FloatingHudController.ensureInitialized(appContext)
         registerBatteryMonitor()
         registerWirelessAdbObserver()
         repository.startObservingPackages {
@@ -404,19 +402,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 if (pkg.isNotBlank()) {
                     vcMonitor.onForegroundPackageChanged(pkg)
                 }
-            }
-        }
-
-        // Sync live VC summary status with the System-Wide Floating Micro-HUD Pill dot
-        viewModelScope.launch {
-            vcMonitor.liveSummary.collect { summary ->
-                val hudDotStatus = when {
-                    summary.approvalCount > 0 -> VcHudAgentStatus.APPROVAL_NEEDED
-                    summary.failedCount > 0 -> VcHudAgentStatus.ERROR
-                    summary.workingCount > 0 || summary.runningCount > 0 -> VcHudAgentStatus.WORKING
-                    else -> VcHudAgentStatus.IDLE_READY
-                }
-                FloatingHudController.setVcAgentStatus(appContext, hudDotStatus)
             }
         }
 
@@ -464,6 +449,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun refreshSystemCompanionState() {
         SystemTweaker.loadHingePreferences(appContext)
+        SystemTweaker.ensureDeXGboardPreferred(appContext)
         _isDefaultLauncher.value = repository.isDefaultLauncher()
         val a11yEnabled = SystemTweaker.isAccessibilityServiceEnabled(appContext)
         _isAccessibilityActive.value = a11yEnabled
@@ -483,9 +469,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         if (!scratchpadSaved.isNullOrBlank() && _quickNoteText.value != scratchpadSaved) {
             _quickNoteText.value = scratchpadSaved
             preferences.quickNoteText = scratchpadSaved
-        }
-        if (a11yEnabled) {
-            FloatingHudController.syncOverlayWithService()
         }
         syncUiStateSnapshot()
     }

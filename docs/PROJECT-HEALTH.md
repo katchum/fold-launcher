@@ -1,8 +1,8 @@
-# Fold8 & Slab Launcher (`com.xsun.foldlauncher`) — Project & Repo Health (`v0.6.0`)
+# Fold8 & Slab Launcher (`com.xsun.foldlauncher`) — Project & Repo Health (`v0.7.0`)
 
 **Repository**: [`katchum/fold-launcher`](https://github.com/katchum/fold-launcher)
 **Workspace Path**: `/home/xsun/projects/android-launcher/fold-launcher`
-**Current Version**: `v0.6.0` (`versionCode = 6`, `versionName = "0.6.0"`, Streamlined One UI-Matched Edition)
+**Current Version**: `v0.7.0` (`versionCode = 7`, `versionName = "0.7.0"`, Fresh Minimal One UI Edition)
 **Maintainer**: Repo Health & Project Health Lead
 
 ---

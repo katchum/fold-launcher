@@ -36,6 +36,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -57,6 +60,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -319,11 +323,12 @@ fun TailscaleMeshTelemetryPill(
 }
 
 /**
- * Samsung One UI 9.0 Quick-Settings style Wireless Debugging & Tailscale Quick-Toggle Row (`v0.6.0`).
- * Renders two side-by-side One UI 9.0 squircle pills (`RoundedCornerShape(24.dp)`, frosted translucent
- * One UI dark glass `Color(0xCC1C1C22)` when off, One UI active blue/emerald tint when on):
- * - Left Pill: Wireless Debugging (`adb_wifi_enabled` 1-tap toggle, copy `ip:port`, open Developer Options)
- * - Right Pill: Tailscale (`CONNECT_VPN` / `DISCONNECT_VPN` 1-tap toggle, copy IP, open Tailscale app)
+ * Minimal, Ultra-Legible One UI 9.0 Connectivity Card (`v0.7.0`).
+ * Renders a sleek One UI 9.0 frosted dark-glass container (`RoundedCornerShape(26.dp)`, `Color(0xD917181E)`,
+ * subtle `1.dp` border `Color.White.copy(alpha = 0.10f)`) containing two clean, legible rows separated by a
+ * subtle hairline divider (`HorizontalDivider(color = Color.White.copy(alpha = 0.07f))`):
+ * 1. Row 1 — Tailscale (emerald `#34D399` dot, `"Tailscale"`, monospace IP with 1-tap copy `"Copied IP"`, Material3 `Switch`)
+ * 2. Row 2 — Wireless Debugging (sky-blue `#38BDF8` dot, `"Wireless Debugging"`, monospace `<ip>:<port>` with 1-tap copy `"Copied ADB address"`, Material3 `Switch`)
  */
 @Composable
 fun OneUiConnectivityPillsRow(
@@ -340,247 +345,224 @@ fun OneUiConnectivityPillsRow(
 ) {
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
-    var adbCopied by remember { mutableStateOf(false) }
     var tailscaleCopied by remember { mutableStateOf(false) }
+    var adbCopied by remember { mutableStateOf(false) }
 
-    LaunchedEffect(adbCopied) {
-        if (adbCopied) {
-            delay(1_600L)
-            adbCopied = false
-        }
-    }
     LaunchedEffect(tailscaleCopied) {
         if (tailscaleCopied) {
             delay(1_600L)
             tailscaleCopied = false
         }
     }
-
-    val pillShape = RoundedCornerShape(24.dp)
-    val offGlassBg = Color(0xCC1C1C22)
-    val activeOneUiBlueBg = Color(0xD90381FE)
-    val activeOneUiEmeraldBg = Color(0xD90D7C66)
-
-    val adbSubtitle = when {
-        adbCopied -> "Copied endpoint ✓"
-        isWirelessAdbEnabled && wirelessAdbPort != null && wirelessAdbPort > 0 -> "On • :$wirelessAdbPort"
-        isWirelessAdbEnabled -> "On"
-        else -> "Off"
+    LaunchedEffect(adbCopied) {
+        if (adbCopied) {
+            delay(1_600L)
+            adbCopied = false
+        }
     }
 
     val resolvedTailscaleIp = tailscaleIp?.takeIf { it.isNotBlank() }
     val resolvedLanIp = lanIp?.takeIf { it.isNotBlank() }
-    val tailscaleSubtitle = when {
-        tailscaleCopied -> "Copied IP ✓"
-        resolvedTailscaleIp != null -> resolvedTailscaleIp
-        isTailscaleConnected -> "Connected"
-        else -> "Disconnected"
-    }
 
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically
+    val tailscaleAddressText = resolvedTailscaleIp ?: if (isTailscaleConnected) "Connected" else "Off"
+    val tailscaleDisplaySubtitle = if (tailscaleCopied) "Copied IP" else tailscaleAddressText
+
+    val rawAdbEndpoint = "${resolvedTailscaleIp ?: resolvedLanIp ?: "On"}${
+        if (wirelessAdbPort != null && wirelessAdbPort > 0) ":$wirelessAdbPort" else ""
+    }"
+    val adbAddressText = if (isWirelessAdbEnabled) rawAdbEndpoint else "Off"
+    val adbDisplaySubtitle = if (adbCopied) "Copied ADB address" else adbAddressText
+
+    val cardShape = RoundedCornerShape(26.dp)
+    val cardBackground = Color(0xD917181E)
+    val cardBorder = Color.White.copy(alpha = 0.10f)
+    val mutedDotColor = Color(0xFF6B7280)
+    val tailscaleConnectedDot = Color(0xFF34D399)
+    val wirelessAdbEnabledDot = Color(0xFF38BDF8)
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(cardShape)
+            .background(cardBackground)
+            .border(1.dp, cardBorder, cardShape)
+            .padding(horizontal = 18.dp, vertical = 10.dp)
     ) {
-        // Left Pill — Wireless Debugging
+        // Row 1 — Tailscale
         Row(
             modifier = Modifier
-                .weight(1f)
-                .clip(pillShape)
-                .background(if (isWirelessAdbEnabled) activeOneUiBlueBg else offGlassBg)
-                .border(
-                    width = 1.dp,
-                    color = if (isWirelessAdbEnabled) {
-                        Color(0x9968B5FF)
-                    } else {
-                        Color(0x33FFFFFF)
-                    },
-                    shape = pillShape
-                )
-                .clickable {
-                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    onToggleWirelessAdb()
-                }
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .fillMaxWidth()
+                .padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+                verticalArrangement = Arrangement.spacedBy(3.dp)
             ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(9.dp),
+                    modifier = Modifier.clickable {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onOpenTailscaleApp()
+                    }
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(9.dp)
+                            .clip(CircleShape)
+                            .background(if (isTailscaleConnected) tailscaleConnectedDot else mutedDotColor)
+                    )
+                    Text(
+                        text = "Tailscale",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
                 Text(
-                    text = "Wireless Debugging",
+                    text = tailscaleDisplaySubtitle,
                     fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = adbSubtitle,
-                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Medium,
-                    color = if (isWirelessAdbEnabled) Color(0xFFE3F2FF) else Color(0xFFB0B3C0),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            Spacer(modifier = Modifier.width(6.dp))
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                // Trailing 📋 icon button: copies ip:port
-                Box(
-                    modifier = Modifier
-                        .size(28.dp)
-                        .clip(CircleShape)
-                        .background(Color(0x26FFFFFF))
-                        .clickable {
-                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                            val host = resolvedTailscaleIp ?: resolvedLanIp ?: "127.0.0.1"
-                            val portSuffix = if (wirelessAdbPort != null && wirelessAdbPort > 0) {
-                                ":$wirelessAdbPort"
-                            } else {
-                                ""
-                            }
-                            val targetEndpoint = "$host$portSuffix"
-                            try {
-                                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                                cm?.setPrimaryClip(ClipData.newPlainText("Wireless ADB", targetEndpoint))
-                            } catch (_: Exception) {
-                            }
-                            adbCopied = true
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = if (adbCopied) "✓" else "📋",
-                        fontSize = 12.sp,
-                        color = Color.White
-                    )
-                }
-
-                // Trailing ⚙️ icon button: opens Wireless ADB Settings
-                Box(
-                    modifier = Modifier
-                        .size(28.dp)
-                        .clip(CircleShape)
-                        .background(Color(0x26FFFFFF))
-                        .clickable {
-                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            onOpenWirelessAdbSettings()
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "⚙️",
-                        fontSize = 12.sp,
-                        color = Color.White
-                    )
-                }
-            }
-        }
-
-        // Right Pill — Tailscale
-        Row(
-            modifier = Modifier
-                .weight(1f)
-                .clip(pillShape)
-                .background(if (isTailscaleConnected) activeOneUiEmeraldBg else offGlassBg)
-                .border(
-                    width = 1.dp,
-                    color = if (isTailscaleConnected) {
-                        Color(0x994CE0B3)
-                    } else {
-                        Color(0x33FFFFFF)
+                    color = when {
+                        tailscaleCopied -> tailscaleConnectedDot
+                        isTailscaleConnected -> Color(0xFF93C5FD)
+                        else -> Color(0xFF9CA3AF)
                     },
-                    shape = pillShape
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .padding(start = 18.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable {
+                            val ipToCopy = resolvedTailscaleIp ?: resolvedLanIp
+                            if (!ipToCopy.isNullOrBlank()) {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                try {
+                                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                    cm?.setPrimaryClip(ClipData.newPlainText("Tailscale IP", ipToCopy))
+                                } catch (_: Exception) {
+                                }
+                                tailscaleCopied = true
+                            } else {
+                                onOpenTailscaleApp()
+                            }
+                        }
+                        .padding(vertical = 2.dp)
                 )
-                .clickable {
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Switch(
+                checked = isTailscaleConnected,
+                onCheckedChange = {
                     haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     onToggleTailscale()
-                }
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = tailscaleConnectedDot,
+                    uncheckedThumbColor = Color(0xFFD1D5DB),
+                    uncheckedTrackColor = Color(0xFF2A2D37)
+                )
+            )
+        }
+
+        HorizontalDivider(color = Color.White.copy(alpha = 0.07f))
+
+        // Row 2 — Wireless Debugging
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+                verticalArrangement = Arrangement.spacedBy(3.dp)
             ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(9.dp),
+                    modifier = Modifier.clickable {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onOpenWirelessAdbSettings()
+                    }
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(9.dp)
+                            .clip(CircleShape)
+                            .background(if (isWirelessAdbEnabled) wirelessAdbEnabledDot else mutedDotColor)
+                    )
+                    Text(
+                        text = "Wireless Debugging",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
                 Text(
-                    text = "Tailscale",
+                    text = adbDisplaySubtitle,
                     fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = tailscaleSubtitle,
-                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Medium,
-                    color = if (isTailscaleConnected) Color(0xFFD8FFF3) else Color(0xFFB0B3C0),
+                    color = when {
+                        adbCopied -> tailscaleConnectedDot
+                        isWirelessAdbEnabled -> Color(0xFF7DD3FC)
+                        else -> Color(0xFF9CA3AF)
+                    },
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .padding(start = 18.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable {
+                            val host = resolvedTailscaleIp ?: resolvedLanIp
+                            if (host != null || (wirelessAdbPort != null && wirelessAdbPort > 0)) {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                val copyTarget = "${host ?: "127.0.0.1"}${
+                                    if (wirelessAdbPort != null && wirelessAdbPort > 0) ":$wirelessAdbPort" else ""
+                                }"
+                                try {
+                                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                    cm?.setPrimaryClip(ClipData.newPlainText("Wireless ADB", copyTarget))
+                                } catch (_: Exception) {
+                                }
+                                adbCopied = true
+                            } else {
+                                onOpenWirelessAdbSettings()
+                            }
+                        }
+                        .padding(vertical = 2.dp)
                 )
             }
 
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(12.dp))
 
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                // Trailing 📋 icon button: copies Tailscale / LAN IP
-                Box(
-                    modifier = Modifier
-                        .size(28.dp)
-                        .clip(CircleShape)
-                        .background(Color(0x26FFFFFF))
-                        .clickable {
-                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                            val ipToCopy = resolvedTailscaleIp ?: resolvedLanIp ?: ""
-                            try {
-                                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                                cm?.setPrimaryClip(ClipData.newPlainText("Tailscale IP", ipToCopy))
-                            } catch (_: Exception) {
-                            }
-                            tailscaleCopied = true
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = if (tailscaleCopied) "✓" else "📋",
-                        fontSize = 12.sp,
-                        color = Color.White
-                    )
-                }
-
-                // Trailing ↗ icon button: opens Tailscale app
-                Box(
-                    modifier = Modifier
-                        .size(28.dp)
-                        .clip(CircleShape)
-                        .background(Color(0x26FFFFFF))
-                        .clickable {
-                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            onOpenTailscaleApp()
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "↗",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                }
-            }
+            Switch(
+                checked = isWirelessAdbEnabled,
+                onCheckedChange = {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onToggleWirelessAdb()
+                },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = wirelessAdbEnabledDot,
+                    uncheckedThumbColor = Color(0xFFD1D5DB),
+                    uncheckedTrackColor = Color(0xFF2A2D37)
+                )
+            )
         }
     }
 }
