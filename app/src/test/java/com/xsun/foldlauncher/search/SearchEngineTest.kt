@@ -105,4 +105,53 @@ class SearchEngineTest {
         )
         assertEquals(RadialTriggerCorner.BOTTOM_RIGHT, corner)
     }
+
+    @Test
+    fun qwertyTypoTolerance_uverRanksUberThenUberEatsThenUserscripts() {
+        val apps = sampleApps + listOf(
+            AppEntry(
+                label = "Uber",
+                packageName = "com.ubercab",
+                activityName = ".MainActivity",
+                launchCount = 5
+            ),
+            AppEntry(
+                label = "Uber Eats",
+                packageName = "com.ubercab.eats",
+                activityName = ".MainActivity",
+                launchCount = 5
+            ),
+            AppEntry(
+                label = "Userscripts",
+                packageName = "com.userscripts.app",
+                activityName = ".MainActivity",
+                launchCount = 5
+            ),
+            AppEntry(
+                label = "Termux",
+                packageName = "com.termux",
+                activityName = ".HomeActivity",
+                launchCount = 5
+            ),
+            AppEntry(
+                label = "Tailscale",
+                packageName = "com.tailscale.ipn",
+                activityName = ".MainActivity",
+                launchCount = 5
+            )
+        )
+
+        val uverResults = SearchEngine.rankApps(apps, "uver")
+        val uverLabels = uverResults.map { it.label }
+        assertEquals(listOf("Uber", "Uber Eats", "Userscripts"), uverLabels.take(3))
+
+        // Transposition ("ubre" -> "Uber"), fat-finger insertion ("ubver" -> "Uber"),
+        // missing char ("trmux" -> "Termux", "tailscle" -> "Tailscale", "sttings" -> "Settings")
+        assertEquals("Uber", SearchEngine.rankApps(apps, "ubre").first().label)
+        assertEquals("Uber", SearchEngine.rankApps(apps, "ubver").first().label)
+        assertEquals("Termux", SearchEngine.rankApps(apps, "trmux").first().label)
+        assertEquals("Tailscale", SearchEngine.rankApps(apps, "tailscle").first().label)
+        assertEquals("Settings", SearchEngine.rankApps(apps, "sttings").first().label)
+        assertEquals("Gmail", SearchEngine.rankApps(apps, "gmial").first().label)
+    }
 }

@@ -1,6 +1,6 @@
-# Fold8 Launcher (`com.xsun.foldlauncher`) — `v0.8.0` (Minimal One UI + Side-by-Side Max Edition)
+# Fold8 Launcher (`com.xsun.foldlauncher`) — `v0.9.0` (Minimal One UI + Side-by-Side Max Edition)
 
-**Ultra-Fast, Zero-Bloat 120Hz One UI Home Launcher (`com.xsun.foldlauncher`) with 3-Page `Main`/`Work`/`Dev` Horizontal Pager, Bottom-Keyboard Instant Search, Tailscale & Wireless Debugging Switches + Side-by-Side Experimental Max Feature Edition (`com.xsun.foldlauncher.max`) for Samsung Galaxy Z Fold 8 and Android Slab Phones**
+**Ultra-Fast, Zero-Bloat 120Hz One UI Home Launcher (`com.xsun.foldlauncher`) with QWERTY Typo-Tolerant Instant Search, Mutually Exclusive Horizontal/Vertical Gesture Axis Lock, 3-Page `Main`/`Work`/`Dev` Horizontal Pager, Tailscale & Wireless Debugging Switches + Side-by-Side Experimental Max Feature Edition (`com.xsun.foldlauncher.max`) for Samsung Galaxy Z Fold 8 and Android Slab Phones**
 
 [![Android CI](https://github.com/katchum/fold-launcher/actions/workflows/android-ci.yml/badge.svg)](https://github.com/katchum/fold-launcher/actions/workflows/android-ci.yml)
 
@@ -10,7 +10,22 @@ Fold8 Launcher is a lightweight, 120Hz-native Jetpack Compose home screen replac
 
 ---
 
-## What's New in `v0.8.0`
+## What's New in `v0.9.0`
+
+### 1. QWERTY-Aware Typo-Tolerant App Search (`SearchEngine.kt`)
+- **Keyboard-Proximity & Transposition Typo Tolerance**: Upgraded `SearchEngine` with QWERTY adjacency-weighted Damerau-Levenshtein prefix & token edit distance (`qwertyPrefixTypoScore` + `qwertyAdjacent` map):
+  - Typing `"uver"` (`v` adjacent to `b` on QWERTY) ranks **Uber** (`#1`) and **Uber Eats** (`#2`) ahead of sparse subsequence matches like **Userscripts** (`#3`).
+  - Adjacent character transpositions (`"ubre"` → **Uber**, `"chorme"` → **Chrome**) and single-character omissions (`"trmux"` → **Termux**, `"tailscle"` → **Tailscale**) resolve cleanly with sub-millisecond zero-heap-churn evaluation.
+- **Tight Contiguous Subsequence Gate**: Non-contiguous subsequence matching now requires `>= 4` query characters and tight match spans (`maxSpan <= query.length + 3`) so scattered 3-letter coincidences never outrank prefix or QWERTY-adjacent typo matches.
+
+### 2. Mutually Exclusive Horizontal vs. Vertical Home Gesture Axis Lock (`LauncherScreens.kt`)
+- **Strict 1D Axis Lock (`PointerEventPass.Initial`)**: Home Screen touch input in `MinimalOneUiHomeScreen` now locks to a single axis as soon as movement exceeds `16px`:
+  - **Horizontal Axis (`|dx| > |dy| * 1.15f`)**: Locks exclusively to `HorizontalPager` (`Main` / `Work` / `Dev` page swipe) and suppresses vertical swipe-up/swipe-down triggers for the entire gesture.
+  - **Vertical Axis (`|dy| > |dx| * 1.15f`)**: Locks exclusively to vertical gestures (Swipe Up -> Bottom-Keyboard Search; Swipe Down -> System Notification Shade) and consumes pointer changes on `PointerEventPass.Initial` so `HorizontalPager` never drifts horizontally during a vertical swipe.
+
+---
+
+## Highlights from `v0.8.0`
 
 ### 1. 3-Page `Main` / `Work` / `Dev` Horizontal Home Pager (`MinimalOneUiHomeScreen`)
 - **Swipe Left/Right Between 3 Dedicated Non-Scrolling Pages**:

@@ -69,6 +69,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -155,6 +156,7 @@ private fun MinimalOneUiHomeScreen(
 ) {
     val keyboardController = LocalSoftwareKeyboardController.current
     val density = LocalDensity.current
+    val axisLockPx = with(density) { 12.dp.toPx() }
     val triggerPx = with(density) { 56.dp.toPx() }
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { 3 })
     val coroutineScope = rememberCoroutineScope()
@@ -175,14 +177,16 @@ private fun MinimalOneUiHomeScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .pointerInput(triggerPx, triggerInstantSearch, onExpandNotifications) {
+            .pointerInput(axisLockPx, triggerPx, triggerInstantSearch, onExpandNotifications) {
                 awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                     var totalDx = 0f
                     var totalDy = 0f
+                    // 0 = undecided, 1 = locked horizontal (Pager owns gesture), 2 = locked vertical (Search/Notifications owns gesture)
+                    var gestureAxis = 0
                     var triggered = false
                     while (true) {
-                        val event = awaitPointerEvent()
+                        val event = awaitPointerEvent(pass = PointerEventPass.Initial)
                         val change = event.changes.firstOrNull { it.id == down.id }
                             ?: event.changes.firstOrNull()
                             ?: break
@@ -190,15 +194,32 @@ private fun MinimalOneUiHomeScreen(
                         val delta = change.position - change.previousPosition
                         totalDx += delta.x
                         totalDy += delta.y
-                        if (!triggered) {
-                            if (totalDy < -triggerPx && abs(totalDy) > abs(totalDx) * 1.6f) {
-                                triggered = true
-                                change.consume()
-                                triggerInstantSearch()
-                            } else if (totalDy > triggerPx * 1.25f && abs(totalDy) > abs(totalDx) * 1.6f) {
-                                triggered = true
-                                change.consume()
-                                onExpandNotifications()
+
+                        if (gestureAxis == 0) {
+                            val absX = abs(totalDx)
+                            val absY = abs(totalDy)
+                            if (absX > axisLockPx || absY > axisLockPx || pagerState.isScrollInProgress) {
+                                gestureAxis = if (pagerState.isScrollInProgress || absX * 1.15f >= absY) {
+                                    1 // Locked to horizontal page swipe: never trigger Search or Notifications
+                                } else if (absY >= absX * 1.8f) {
+                                    2 // Locked to vertical swipe: consume events before HorizontalPager sees them
+                                } else {
+                                    1 // Ambiguous diagonal defaults safely to horizontal / no-search
+                                }
+                            }
+                        }
+
+                        if (gestureAxis == 2) {
+                            // Consume in Initial pass so HorizontalPager cannot scroll horizontally during a vertical swipe
+                            change.consume()
+                            if (!triggered) {
+                                if (totalDy < -triggerPx && abs(totalDy) > abs(totalDx) * 2.0f) {
+                                    triggered = true
+                                    triggerInstantSearch()
+                                } else if (totalDy > triggerPx * 1.25f && abs(totalDy) > abs(totalDx) * 2.0f) {
+                                    triggered = true
+                                    onExpandNotifications()
+                                }
                             }
                         }
                     }
