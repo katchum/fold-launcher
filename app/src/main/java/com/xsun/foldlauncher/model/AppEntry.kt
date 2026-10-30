@@ -1,6 +1,7 @@
 package com.xsun.foldlauncher.model
 
 import android.content.ComponentName
+import android.os.UserHandle
 import androidx.compose.ui.graphics.ImageBitmap
 
 data class AppEntry(
@@ -18,10 +19,16 @@ data class AppEntry(
         category.equals("Utilities", ignoreCase = true) ||
         packageName.startsWith("com.android.") ||
         packageName.startsWith("com.sec.android.") ||
-        packageName.startsWith("com.samsung.android.")
+        packageName.startsWith("com.samsung.android."),
+    val userHandle: UserHandle? = null,
+    val userSerialNumber: Long = 0L,
+    val isWorkProfile: Boolean = false
 ) {
     val componentName: ComponentName
         get() = ComponentName(packageName, activityName)
+
+    val uniqueKey: String
+        get() = if (isWorkProfile) "$packageName#work_$userSerialNumber" else packageName
 
     val normalizedLabel: String = label.lowercase().trim()
 
@@ -55,5 +62,7 @@ data class AppShortcutItem(
     val id: String,
     val packageName: String,
     val shortLabel: String,
-    val longLabel: String = shortLabel
+    val longLabel: String = shortLabel,
+    val userHandle: UserHandle? = null,
+    val isWorkProfile: Boolean = false
 )

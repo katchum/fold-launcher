@@ -221,20 +221,24 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _allInstalledApps,
         _hiddenPackages
     ) { installed, hidden ->
-        installed.filter { it.packageName !in hidden }
+        installed.filter { it.uniqueKey !in hidden && it.packageName !in hidden }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val mainPageApps: StateFlow<List<AppEntry>> = combine(
         allApps,
         _mainPagePackages
     ) { apps, pkgs ->
-        val matched = apps.filter { it.packageName in pkgs }
+        val matched = apps.filter { app ->
+            app.uniqueKey in pkgs || (!app.isWorkProfile && app.packageName in pkgs)
+        }
         if (matched.isNotEmpty() || rawPrefs.contains(KEY_MAIN_PAGE_PACKAGES)) {
             matched
         } else {
-            apps.filterNot {
-                it.packageName in DEFAULT_WORK_PAGE_PACKAGES || it.packageName in DEFAULT_DEV_PAGE_PACKAGES
-            }.ifEmpty { apps }.take(8)
+            apps.filter {
+                !it.isWorkProfile &&
+                    it.packageName !in DEFAULT_WORK_PAGE_PACKAGES &&
+                    it.packageName !in DEFAULT_DEV_PAGE_PACKAGES
+            }.ifEmpty { apps.filter { !it.isWorkProfile } }.take(8)
         }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
@@ -243,13 +247,28 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _workPagePackages,
         _mainPagePackages
     ) { apps, workPkgs, mainPkgs ->
-        val matched = apps.filter { it.packageName in workPkgs }
-        if (matched.isNotEmpty() || rawPrefs.contains(KEY_WORK_PAGE_PACKAGES)) {
-            matched
+        val workProfileApps = apps.filter { it.isWorkProfile }
+        val isCustomizedV2 = rawPrefs.getBoolean("work_page_customized_v2", false)
+
+        if (!isCustomizedV2 && workProfileApps.isNotEmpty()) {
+            // Dynamically populate Work tab with all launchable Work Profile (profile 10) apps by default
+            workProfileApps
+        } else if (isCustomizedV2) {
+            apps.filter { app ->
+                app.uniqueKey in workPkgs || (!app.isWorkProfile && app.packageName in workPkgs)
+            }
         } else {
-            apps.filterNot { it.packageName in mainPkgs || it.packageName in DEFAULT_DEV_PAGE_PACKAGES }
-                .ifEmpty { apps.drop(4) }
-                .take(8)
+            // Device has no Work Profile: gracefully fall back to configured workPagePackages
+            val matched = apps.filter { app ->
+                app.uniqueKey in workPkgs || app.packageName in workPkgs
+            }
+            if (matched.isNotEmpty() || rawPrefs.contains(KEY_WORK_PAGE_PACKAGES)) {
+                matched
+            } else {
+                apps.filterNot { it.packageName in mainPkgs || it.packageName in DEFAULT_DEV_PAGE_PACKAGES }
+                    .ifEmpty { apps.drop(4) }
+                    .take(8)
+            }
         }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
@@ -257,19 +276,23 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         allApps,
         _devPagePackages
     ) { apps, devPkgs ->
-        val matched = apps.filter { it.packageName in devPkgs }
+        val matched = apps.filter { app ->
+            app.uniqueKey in devPkgs || (!app.isWorkProfile && app.packageName in devPkgs)
+        }
         if (matched.isNotEmpty() || rawPrefs.contains(KEY_DEV_PAGE_PACKAGES)) {
             matched
         } else {
             apps.filter { app ->
-                val pkg = app.packageName.lowercase()
-                pkg.startsWith("dev.agentconversation") ||
-                    pkg.startsWith("com.termux") ||
-                    pkg.contains("tailscale") ||
-                    pkg.contains("github") ||
-                    pkg == "com.android.settings" ||
-                    pkg.contains("chrome")
-            }.ifEmpty { apps.takeLast(6) }
+                !app.isWorkProfile && run {
+                    val pkg = app.packageName.lowercase()
+                    pkg.startsWith("dev.agentconversation") ||
+                        pkg.startsWith("com.termux") ||
+                        pkg.contains("tailscale") ||
+                        pkg.contains("github") ||
+                        pkg == "com.android.settings" ||
+                        pkg.contains("chrome")
+                }
+            }.ifEmpty { apps.filter { !it.isWorkProfile }.takeLast(6) }
         }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
@@ -277,7 +300,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _allInstalledApps,
         _hiddenPackages
     ) { installed, hidden ->
-        installed.filter { it.packageName in hidden }
+        installed.filter { it.uniqueKey in hidden || it.packageName in hidden }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val allAppsMap: StateFlow<Map<String, AppEntry>> = _allInstalledApps
@@ -588,41 +611,64 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
-     * v0.8.0 Multi-page (`0 = Main`, `1 = Work`, `2 = Development`) app membership toggle.
-     * Persists immediately to `SharedPreferences` under `"main_page_packages"`, `"work_page_packages"`, or `"dev_page_packages"`.
+     * v0.9.0 Multi-page (`0 = Main`, `1 = Work`, `2 = Development`) app membership toggle.
+     * Supports both `app.uniqueKey` (distinguishing Work Profile `pkg#work_10` from Personal `pkg`) and `app.packageName`.
      */
     fun togglePageApp(pageIndex: Int, packageName: String) {
         if (packageName.isBlank()) return
+        val plainPkg = packageName.substringBefore("#work_")
         when (pageIndex) {
             0 -> {
                 val base = if (rawPrefs.contains(KEY_MAIN_PAGE_PACKAGES)) {
                     _mainPagePackages.value.toMutableSet()
                 } else {
-                    mainPageApps.value.map { it.packageName }.toMutableSet()
+                    mainPageApps.value.map { it.uniqueKey }.toMutableSet()
                 }
-                if (packageName in base) base.remove(packageName) else base.add(packageName)
+                if (packageName in base) {
+                    base.remove(packageName)
+                } else if (!packageName.contains("#work_") && plainPkg in base) {
+                    base.remove(plainPkg)
+                } else {
+                    base.add(packageName)
+                }
                 val updated = base.toSet()
                 _mainPagePackages.value = updated
                 rawPrefs.edit().putStringSet(KEY_MAIN_PAGE_PACKAGES, updated).apply()
             }
             1 -> {
-                val base = if (rawPrefs.contains(KEY_WORK_PAGE_PACKAGES)) {
+                val isCustomizedV2 = rawPrefs.getBoolean("work_page_customized_v2", false)
+                val base = if (isCustomizedV2 && rawPrefs.contains(KEY_WORK_PAGE_PACKAGES)) {
                     _workPagePackages.value.toMutableSet()
                 } else {
-                    workPageApps.value.map { it.packageName }.toMutableSet()
+                    workPageApps.value.map { it.uniqueKey }.toMutableSet()
                 }
-                if (packageName in base) base.remove(packageName) else base.add(packageName)
+                if (packageName in base) {
+                    base.remove(packageName)
+                } else if (!packageName.contains("#work_") && plainPkg in base) {
+                    base.remove(plainPkg)
+                } else {
+                    base.add(packageName)
+                }
                 val updated = base.toSet()
                 _workPagePackages.value = updated
-                rawPrefs.edit().putStringSet(KEY_WORK_PAGE_PACKAGES, updated).apply()
+                rawPrefs.edit()
+                    .putStringSet(KEY_WORK_PAGE_PACKAGES, updated)
+                    .putBoolean("work_page_customized_v2", true)
+                    .apply()
             }
             else -> {
                 val base = if (rawPrefs.contains(KEY_DEV_PAGE_PACKAGES)) {
                     _devPagePackages.value.toMutableSet()
                 } else {
-                    devPageApps.value.map { it.packageName }.toMutableSet()
+                    devPageApps.value.map { it.uniqueKey }.toMutableSet()
                 }
-                if (packageName in base) base.remove(packageName) else base.add(packageName)
+                if (packageName in base) {
+                    base.remove(packageName)
+                } else if (!packageName.contains("#work_") && plainPkg in base) {
+                    base.remove(plainPkg)
+                } else {
+                    base.add(packageName)
+                }
                 val updated = base.toSet()
                 _devPagePackages.value = updated
                 rawPrefs.edit().putStringSet(KEY_DEV_PAGE_PACKAGES, updated).apply()
@@ -640,7 +686,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             }
             1 -> {
                 _workPagePackages.value = updated
-                rawPrefs.edit().putStringSet(KEY_WORK_PAGE_PACKAGES, updated).apply()
+                rawPrefs.edit()
+                    .putStringSet(KEY_WORK_PAGE_PACKAGES, updated)
+                    .putBoolean("work_page_customized_v2", true)
+                    .apply()
             }
             else -> {
                 _devPagePackages.value = updated
@@ -1332,7 +1381,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     // Core Launcher Operations
     fun launchApp(app: AppEntry, sourceBounds: Rect? = null) {
-        preferences.incrementLaunchCount(app.packageName)
+        preferences.incrementLaunchCount(app.uniqueKey)
+        if (app.uniqueKey != app.packageName) {
+            preferences.incrementLaunchCount(app.packageName)
+        }
         _recentSessionPackages.value =
             (listOf(app.packageName) + _recentSessionPackages.value.filter { it != app.packageName }).take(10)
         syncAppFlagsInMemory()
@@ -1472,7 +1524,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun hideApp(app: AppEntry) {
         val current = preferences.hiddenPackages.toMutableSet()
-        current.add(app.packageName)
+        current.add(app.uniqueKey)
         preferences.hiddenPackages = current
         syncAppFlagsInMemory()
     }
@@ -1480,6 +1532,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun unhideApp(packageName: String) {
         val current = preferences.hiddenPackages.toMutableSet()
         current.remove(packageName)
+        current.removeAll { it.startsWith("$packageName#") }
         preferences.hiddenPackages = current
         syncAppFlagsInMemory()
     }
@@ -1490,7 +1543,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun openAppInfo(app: AppEntry) {
-        repository.openAppInfo(app.packageName)
+        repository.openAppInfo(app)
     }
 
     fun openAppInfo(packageName: String) {

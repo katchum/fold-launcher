@@ -317,9 +317,10 @@ private fun MinimalOneUiHomeScreen(
                             Spacer(modifier = Modifier.weight(1f))
 
                             StaticNonScrollingAppGrid(
-                                apps = workPageApps.take(maxAppsPerPage),
+                                apps = workPageApps.take(columns * 5),
                                 columns = columns,
                                 iconShapePreset = iconShapePreset,
+                                compact = workPageApps.size > maxAppsPerPage,
                                 onAppClick = onAppClick,
                                 onAppLongClick = onAppLongClick
                             )
@@ -377,9 +378,9 @@ private fun MinimalOneUiHomeScreen(
 
         if (editingPageIndex in 0..2) {
             val activeSet = when (editingPageIndex) {
-                0 -> mainPageApps.map { it.packageName }.toSet()
-                1 -> workPageApps.map { it.packageName }.toSet()
-                else -> devPageApps.map { it.packageName }.toSet()
+                0 -> mainPageApps.map { it.uniqueKey }.toSet()
+                1 -> workPageApps.map { it.uniqueKey }.toSet()
+                else -> devPageApps.map { it.uniqueKey }.toSet()
             }
             EditPageAppsSheet(
                 pageIndex = editingPageIndex,
@@ -411,6 +412,7 @@ private fun StaticNonScrollingAppGrid(
     iconShapePreset: IconShapePreset,
     onAppClick: (AppEntry) -> Unit,
     onAppLongClick: (AppEntry) -> Unit,
+    compact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     if (apps.isEmpty()) return
@@ -419,7 +421,7 @@ private fun StaticNonScrollingAppGrid(
     }
     Column(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        verticalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 14.dp)
     ) {
         rows.forEach { rowApps ->
             Row(
@@ -438,7 +440,7 @@ private fun StaticNonScrollingAppGrid(
                                 app = app,
                                 iconShapePreset = iconShapePreset,
                                 showLabel = true,
-                                compact = false,
+                                compact = compact,
                                 onClick = { onAppClick(app) },
                                 onLongClick = { onAppLongClick(app) }
                             )
@@ -634,6 +636,17 @@ private fun EditPageAppsSheet(
 
             HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
 
+            val sortedApps = remember(allApps, pageIndex) {
+                if (pageIndex == 1) {
+                    allApps.sortedWith(
+                        compareByDescending<AppEntry> { it.isWorkProfile }
+                            .thenBy { it.label.lowercase() }
+                    )
+                } else {
+                    allApps
+                }
+            }
+
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -641,8 +654,9 @@ private fun EditPageAppsSheet(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                allApps.forEach { app ->
-                    val checked = app.packageName in selectedPackages
+                sortedApps.forEach { app ->
+                    val checked = app.uniqueKey in selectedPackages ||
+                        (!app.isWorkProfile && app.packageName in selectedPackages)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -657,7 +671,7 @@ private fun EditPageAppsSheet(
                                 else Color.White.copy(alpha = 0.06f),
                                 RoundedCornerShape(16.dp)
                             )
-                            .clickable { onToggleApp(app.packageName) }
+                            .clickable { onToggleApp(app.uniqueKey) }
                             .padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -672,7 +686,7 @@ private fun EditPageAppsSheet(
                                 iconShapePreset = iconShapePreset,
                                 showLabel = false,
                                 compact = true,
-                                onClick = { onToggleApp(app.packageName) },
+                                onClick = { onToggleApp(app.uniqueKey) },
                                 onLongClick = {}
                             )
                             Column(modifier = Modifier.weight(1f)) {
@@ -685,9 +699,9 @@ private fun EditPageAppsSheet(
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = app.packageName,
+                                    text = if (app.isWorkProfile) "Work Profile · ${app.packageName}" else app.packageName,
                                     fontSize = 11.sp,
-                                    color = Color(0xFF94A3B8),
+                                    color = if (app.isWorkProfile) Color(0xFF38BDF8) else Color(0xFF94A3B8),
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
@@ -1464,7 +1478,7 @@ private fun MaxEditionHomeScreen(
                     ) {
                         items(
                             items = homeGridApps,
-                            key = { "${it.packageName}/${it.activityName}" }
+                            key = { "${it.uniqueKey}/${it.activityName}" }
                         ) { app ->
                             AppIconTile(
                                 app = app,
@@ -2155,7 +2169,7 @@ fun LauncherSettingsSheet(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = hidden.label,
+                            text = if (hidden.isWorkProfile) "${hidden.label} (Work)" else hidden.label,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium,
                             color = FoldLauncherColors.TextPrimary
@@ -2167,7 +2181,7 @@ fun LauncherSettingsSheet(
                             color = FoldLauncherColors.ElectricCyan,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(10.dp))
-                                .clickable { onUnhideApp(hidden.packageName) }
+                                .clickable { onUnhideApp(hidden.uniqueKey) }
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                         )
                     }

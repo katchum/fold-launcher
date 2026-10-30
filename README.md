@@ -26,6 +26,11 @@ Fold8 Launcher is a lightweight, 120Hz-native Jetpack Compose home screen replac
 ### 3. Hide System Bars Across All Launcher Screens, Bottom Sheets & Search (`applySystemBarsToWindow`)
 - **Full-Window & Modal Sheet System Bar Suppression**: When **Hide System Bars** is enabled in Launcher Settings, `applySystemBarsToWindow` hides `WindowInsetsCompat.Type.systemBars()` (both status and navigation bars) across the main `Activity` window (`onCreate`, `onResume`, `onWindowFocusChanged`), all `ModalBottomSheet` dialog windows (`DialogWindowProvider.window` in `LauncherSettingsSheet`, `EditPageAppsSheet`, and `AppContextMenuSheet`), and `OneUiMinimalAppSearchOverlay` when the IME opens/closes.
 
+### 4. Adaptive Samsung One UI Work Profile (`UserHandle{10}`) Discovery, Launching & Search (`AppRepository.kt`, `AppEntry.kt`, `AppIconTile.kt`)
+- **Automatic Multi-Profile Discovery (`UserManager.userProfiles` + `LauncherApps`)**: Enumerates both Personal (`UserHandle{0}`) and managed Work Profile (`UserHandle{10}`) apps via `LauncherApps.getActivityList(null, profile)` and `getUserBadgedIcon` / `getUserBadgedLabel`.
+- **Work Profile Launching & App Info (`LauncherApps.startMainActivity` / `startAppDetailsActivity`)**: Launches Work Profile apps and opens Work Profile App Info directly under their target `UserHandle` (`userSerialNumber != 0L`), with composite `selectionKey` (`packageName#userSerialNumber`) support and a One UI blue briefcase badge (`💼`) on Work Profile app tiles.
+- **Smart `Work` Page & Search Integration**: Automatically populates the `Work` home page (Page 1) with installed Work Profile apps when available (falling back cleanly to productivity apps on devices without a Work Profile) and surfaces both Personal and Work Profile apps in Bottom-Keyboard Search.
+
 ---
 
 ## Highlights from `v0.8.0`

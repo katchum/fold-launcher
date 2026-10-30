@@ -54,27 +54,24 @@ class AppRepository(
     private var isObserving = false
 
     private val launcherAppsCallback = object : LauncherApps.Callback() {
+        private fun evictPackage(pkg: String?) {
+            if (pkg == null) return
+            iconCache.keys.removeAll { it == pkg || it.startsWith("$pkg#") }
+            shortcutCache.keys.removeAll { it == pkg || it.startsWith("$pkg#") }
+        }
+
         override fun onPackageRemoved(packageName: String?, user: UserHandle?) {
-            packageName?.let {
-                iconCache.remove(it)
-                shortcutCache.remove(it)
-            }
+            evictPackage(packageName)
             notifyPackagesChanged()
         }
 
         override fun onPackageAdded(packageName: String?, user: UserHandle?) {
-            packageName?.let {
-                iconCache.remove(it)
-                shortcutCache.remove(it)
-            }
+            evictPackage(packageName)
             notifyPackagesChanged()
         }
 
         override fun onPackageChanged(packageName: String?, user: UserHandle?) {
-            packageName?.let {
-                iconCache.remove(it)
-                shortcutCache.remove(it)
-            }
+            evictPackage(packageName)
             notifyPackagesChanged()
         }
 
@@ -83,10 +80,7 @@ class AppRepository(
             user: UserHandle?,
             replacing: Boolean
         ) {
-            packageNames?.forEach {
-                iconCache.remove(it)
-                shortcutCache.remove(it)
-            }
+            packageNames?.forEach { evictPackage(it) }
             notifyPackagesChanged()
         }
 
@@ -95,10 +89,7 @@ class AppRepository(
             user: UserHandle?,
             replacing: Boolean
         ) {
-            packageNames?.forEach {
-                iconCache.remove(it)
-                shortcutCache.remove(it)
-            }
+            packageNames?.forEach { evictPackage(it) }
             notifyPackagesChanged()
         }
     }
@@ -107,9 +98,15 @@ class AppRepository(
         override fun onReceive(context: Context?, intent: Intent?) {
             val pkg = intent?.data?.schemeSpecificPart
             if (pkg != null) {
-                iconCache.remove(pkg)
-                shortcutCache.remove(pkg)
+                iconCache.keys.removeAll { it == pkg || it.startsWith("$pkg#") }
+                shortcutCache.keys.removeAll { it == pkg || it.startsWith("$pkg#") }
             }
+            notifyPackagesChanged()
+        }
+    }
+
+    private val managedProfileReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
             notifyPackagesChanged()
         }
     }
@@ -140,6 +137,23 @@ class AppRepository(
             )
         } catch (_: Exception) {
         }
+
+        try {
+            val profileFilter = IntentFilter().apply {
+                addAction(Intent.ACTION_MANAGED_PROFILE_ADDED)
+                addAction(Intent.ACTION_MANAGED_PROFILE_REMOVED)
+                addAction(Intent.ACTION_MANAGED_PROFILE_AVAILABLE)
+                addAction(Intent.ACTION_MANAGED_PROFILE_UNAVAILABLE)
+                addAction(Intent.ACTION_MANAGED_PROFILE_UNLOCKED)
+            }
+            ContextCompat.registerReceiver(
+                appContext,
+                managedProfileReceiver,
+                profileFilter,
+                ContextCompat.RECEIVER_EXPORTED
+            )
+        } catch (_: Exception) {
+        }
     }
 
     fun stopObservingPackages() {
@@ -156,6 +170,11 @@ class AppRepository(
             appContext.unregisterReceiver(packageBroadcastReceiver)
         } catch (_: Exception) {
         }
+
+        try {
+            appContext.unregisterReceiver(managedProfileReceiver)
+        } catch (_: Exception) {
+        }
     }
 
     private fun notifyPackagesChanged() {
@@ -165,8 +184,8 @@ class AppRepository(
     }
 
     /**
-     * Queries all launchable apps across user profiles with high-resolution icons,
-     * dynamic/manifest shortcuts, categories, and persisted user pin/launch metadata.
+     * Queries all launchable apps across all user profiles (Personal `profile 0` + Work Profile `profile 10` / managed profiles)
+     * with high-resolution icons, dynamic/manifest shortcuts, categories, and persisted user pin/launch metadata.
      */
     fun loadInstalledApps(includeHidden: Boolean = true): List<AppEntry> {
         val selfPackage = appContext.packageName
@@ -175,18 +194,34 @@ class AppRepository(
         val pinnedDock = preferences.pinnedDockPackages
         val hidden = preferences.hiddenPackages
         val counts = preferences.launchCounts
+        val myUser = Process.myUserHandle()
 
         val results = LinkedHashMap<String, AppEntry>()
 
-        val profiles: List<UserHandle> = try {
-            userManager?.userProfiles?.takeIf { it.isNotEmpty() } ?: listOf(Process.myUserHandle())
+        val profileSet = linkedSetOf<UserHandle>()
+        try {
+            launcherApps?.profiles?.let { profileSet.addAll(it) }
         } catch (_: Exception) {
-            listOf(Process.myUserHandle())
         }
+        try {
+            userManager?.userProfiles?.let { profileSet.addAll(it) }
+        } catch (_: Exception) {
+        }
+        if (profileSet.isEmpty()) {
+            profileSet.add(myUser)
+        }
+        val profiles: List<UserHandle> = profileSet.toList()
 
         val la = launcherApps
         if (la != null) {
             for (profile in profiles) {
+                val isWork = profile != myUser
+                val serial = try {
+                    userManager?.getSerialNumberForUser(profile) ?: (if (isWork) 10L else 0L)
+                } catch (_: Exception) {
+                    if (isWork) 10L else 0L
+                }
+
                 val activities: List<LauncherActivityInfo> = try {
                     la.getActivityList(null, profile)
                 } catch (_: Exception) {
@@ -194,40 +229,52 @@ class AppRepository(
                 }
                 for (info in activities) {
                     val pkg = info.applicationInfo.packageName
-                    if (pkg == selfPackage) continue
-                    if (!includeHidden && pkg in hidden) continue
-                    if (results.containsKey(pkg)) continue
+                    if (pkg == selfPackage && !isWork) continue
+                    val entryKey = if (isWork) "$pkg#work_$serial" else pkg
+                    if (!includeHidden && (entryKey in hidden || pkg in hidden)) continue
+                    if (results.containsKey(entryKey)) continue
 
                     val label = info.label?.toString()?.trim().takeUnless { it.isNullOrEmpty() } ?: pkg
                     val activityName = info.componentName?.className ?: ""
-                    val iconBitmap = iconCache.getOrPut(pkg) {
+                    val iconBitmap = iconCache.getOrPut(entryKey) {
                         val drawable = try {
-                            info.getBadgedIcon(0)
+                            info.getIcon(0)
                         } catch (_: Exception) {
                             try {
-                                packageManager.getApplicationIcon(pkg)
+                                info.applicationInfo.loadIcon(packageManager)
                             } catch (_: Exception) {
-                                null
+                                try {
+                                    info.getBadgedIcon(0)
+                                } catch (_: Exception) {
+                                    try {
+                                        packageManager.getApplicationIcon(pkg)
+                                    } catch (_: Exception) {
+                                        null
+                                    }
+                                }
                             }
                         }
                         drawable?.let { drawableToImageBitmap(it) } ?: createFallbackBitmap()
                     }
                     val category = resolveCategoryName(info.applicationInfo, pkg)
-                    val shortcuts = shortcutCache.getOrPut(pkg) {
-                        queryAppShortcuts(pkg, profile)
+                    val shortcuts = shortcutCache.getOrPut(entryKey) {
+                        queryAppShortcuts(pkg, profile, isWork)
                     }
 
-                    results[pkg] = AppEntry(
+                    results[entryKey] = AppEntry(
                         label = label,
                         packageName = pkg,
                         activityName = activityName,
                         icon = iconBitmap,
-                        launchCount = counts[pkg] ?: 0,
-                        isPinnedCover = pkg in pinnedCover,
-                        isPinnedInner = pkg in pinnedInner,
-                        isDockPinned = pkg in pinnedDock,
+                        launchCount = counts[entryKey] ?: counts[pkg] ?: 0,
+                        isPinnedCover = entryKey in pinnedCover || (!isWork && pkg in pinnedCover),
+                        isPinnedInner = entryKey in pinnedInner || (!isWork && pkg in pinnedInner),
+                        isDockPinned = entryKey in pinnedDock || (!isWork && pkg in pinnedDock),
                         category = category,
-                        shortcuts = shortcuts
+                        shortcuts = shortcuts,
+                        userHandle = profile,
+                        userSerialNumber = serial,
+                        isWorkProfile = isWork
                     )
                 }
             }
@@ -276,12 +323,17 @@ class AppRepository(
                     isPinnedInner = pkg in pinnedInner,
                     isDockPinned = pkg in pinnedDock,
                     category = category,
-                    shortcuts = emptyList()
+                    shortcuts = emptyList(),
+                    userHandle = myUser,
+                    userSerialNumber = 0L,
+                    isWorkProfile = false
                 )
             }
         }
 
-        return results.values.sortedBy { it.normalizedLabel }
+        return results.values.sortedWith(
+            compareBy<AppEntry> { it.normalizedLabel }.thenBy { it.isWorkProfile }
+        )
     }
 
     /**
@@ -290,7 +342,8 @@ class AppRepository(
      */
     fun queryAppShortcuts(
         packageName: String,
-        userHandle: UserHandle = Process.myUserHandle()
+        userHandle: UserHandle = Process.myUserHandle(),
+        isWorkProfile: Boolean = userHandle != Process.myUserHandle()
     ): List<AppShortcutItem> {
         val la = launcherApps ?: return emptyList()
         return try {
@@ -317,7 +370,9 @@ class AppRepository(
                         id = info.id,
                         packageName = info.`package`,
                         shortLabel = shortText,
-                        longLabel = longText
+                        longLabel = longText,
+                        userHandle = userHandle,
+                        isWorkProfile = isWorkProfile
                     )
                 }
         } catch (_: SecurityException) {
@@ -328,20 +383,23 @@ class AppRepository(
     }
 
     /**
-     * Launches an app with a smooth scale-up animation from [sourceBounds].
+     * Launches an app in its target [UserHandle] profile (Personal `profile 0` or Work Profile `profile 10`)
+     * with a smooth scale-up animation from [sourceBounds].
      */
     fun launchApp(app: AppEntry, sourceBounds: Rect? = null): Boolean {
         return launchPackage(
             packageName = app.packageName,
             activityName = app.activityName,
-            sourceBounds = sourceBounds
+            sourceBounds = sourceBounds,
+            userHandle = app.userHandle ?: Process.myUserHandle()
         )
     }
 
     fun launchPackage(
         packageName: String,
         activityName: String = "",
-        sourceBounds: Rect? = null
+        sourceBounds: Rect? = null,
+        userHandle: UserHandle = Process.myUserHandle()
     ): Boolean {
         val optionsBundle = try {
             if (sourceBounds != null && !sourceBounds.isEmpty) {
@@ -364,13 +422,23 @@ class AppRepository(
         }
 
         val la = launcherApps
-        if (la != null && activityName.isNotBlank()) {
+        if (la != null) {
             try {
-                val component = ComponentName(packageName, activityName)
-                la.startMainActivity(component, Process.myUserHandle(), sourceBounds, optionsBundle)
-                return true
+                val component = if (activityName.isNotBlank()) {
+                    ComponentName(packageName, activityName)
+                } else {
+                    la.getActivityList(packageName, userHandle).firstOrNull()?.componentName
+                }
+                if (component != null) {
+                    la.startMainActivity(component, userHandle, sourceBounds, optionsBundle)
+                    return true
+                }
             } catch (_: Exception) {
             }
+        }
+
+        if (userHandle != Process.myUserHandle()) {
+            return false
         }
 
         return try {
@@ -391,6 +459,10 @@ class AppRepository(
      * Launches a single app in split-screen / adjacent multi-window mode on the Z Fold 8 inner screen.
      */
     fun launchSplitScreenSingle(app: AppEntry): Boolean {
+        val targetUser = app.userHandle ?: Process.myUserHandle()
+        if (targetUser != Process.myUserHandle()) {
+            return launchApp(app)
+        }
         return try {
             val intent = packageManager.getLaunchIntentForPackage(app.packageName)?.apply {
                 addFlags(
@@ -441,6 +513,7 @@ class AppRepository(
      * Launches an [AppShortcutItem] via [LauncherApps.startShortcut], falling back to launching the app.
      */
     fun launchShortcut(shortcut: AppShortcutItem): Boolean {
+        val targetUser = shortcut.userHandle ?: Process.myUserHandle()
         val la = launcherApps
         if (la != null) {
             try {
@@ -449,13 +522,36 @@ class AppRepository(
                     shortcut.id,
                     null,
                     null,
-                    Process.myUserHandle()
+                    targetUser
                 )
                 return true
             } catch (_: Exception) {
             }
         }
-        return launchPackage(shortcut.packageName)
+        return launchPackage(shortcut.packageName, userHandle = targetUser)
+    }
+
+    /**
+     * Opens system App Info for [app] in its owning profile (`Personal` or `Work Profile`).
+     */
+    fun openAppInfo(app: AppEntry) {
+        val targetUser = app.userHandle ?: Process.myUserHandle()
+        val la = launcherApps
+        if (la != null) {
+            try {
+                val component = if (app.activityName.isNotBlank()) {
+                    ComponentName(app.packageName, app.activityName)
+                } else {
+                    la.getActivityList(app.packageName, targetUser).firstOrNull()?.componentName
+                }
+                if (component != null) {
+                    la.startAppDetailsActivity(component, targetUser, null, null)
+                    return
+                }
+            } catch (_: Exception) {
+            }
+        }
+        openAppInfo(app.packageName)
     }
 
     /**

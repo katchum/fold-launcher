@@ -1,5 +1,6 @@
 package com.xsun.foldlauncher.ui.components
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -14,9 +15,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -29,8 +32,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
@@ -72,43 +79,57 @@ fun AppIconTile(
         verticalArrangement = Arrangement.Center
     ) {
         Box(
-            modifier = Modifier
-                .size(iconSize)
-                .clip(shape)
-                .background(FoldLauncherColors.GlassSurfaceElevated)
-                .border(0.75.dp, FoldLauncherColors.GlassBorder, shape),
+            modifier = Modifier.size(iconSize),
             contentAlignment = Alignment.Center
         ) {
-            val bitmap = app.icon
-            if (bitmap != null) {
-                Image(
-                    bitmap = bitmap,
-                    contentDescription = app.label,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                val gradientColors = remember(app.packageName) {
-                    monogramGradientForPackage(app.packageName)
-                }
-                val monogramText = remember(app.label, app.acronym) {
-                    app.acronym.uppercase().take(2).ifEmpty {
-                        app.firstLetter.toString()
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(shape)
+                    .background(FoldLauncherColors.GlassSurfaceElevated)
+                    .border(0.75.dp, FoldLauncherColors.GlassBorder, shape),
+                contentAlignment = Alignment.Center
+            ) {
+                val bitmap = app.icon
+                if (bitmap != null) {
+                    Image(
+                        bitmap = bitmap,
+                        contentDescription = app.label,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    val gradientColors = remember(app.packageName) {
+                        monogramGradientForPackage(app.packageName)
+                    }
+                    val monogramText = remember(app.label, app.acronym) {
+                        app.acronym.uppercase().take(2).ifEmpty {
+                            app.firstLetter.toString()
+                        }
+                    }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Brush.linearGradient(gradientColors)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = monogramText,
+                            fontSize = if (compact) 16.sp else 20.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = FoldLauncherColors.TextPrimary
+                        )
                     }
                 }
-                Box(
+            }
+
+            if (app.isWorkProfile) {
+                OneUiWorkBriefcaseBadge(
+                    compact = compact,
                     modifier = Modifier
-                        .fillMaxSize()
-                        .background(Brush.linearGradient(gradientColors)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = monogramText,
-                        fontSize = if (compact) 16.sp else 20.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = FoldLauncherColors.TextPrimary
-                    )
-                }
+                        .align(Alignment.BottomEnd)
+                        .offset(x = 2.dp, y = 2.dp)
+                )
             }
         }
 
@@ -123,6 +144,72 @@ fun AppIconTile(
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+/**
+ * Samsung One UI Work Profile Briefcase Badge (`profile 10` / managed profile):
+ * Crisp white circular badge at the bottom-right corner containing a vivid One UI blue (`#0381FE`)
+ * briefcase icon with top handle and center clasp.
+ */
+@Composable
+fun OneUiWorkBriefcaseBadge(
+    compact: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    val badgeSize = if (compact) 17.dp else 21.dp
+    val oneUiBlue = Color(0xFF0381FE)
+
+    Box(
+        modifier = modifier
+            .size(badgeSize)
+            .clip(CircleShape)
+            .background(Color.White)
+            .border(1.dp, Color(0x29000000), CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize(0.58f)) {
+            val w = size.width
+            val h = size.height
+
+            // Briefcase top handle arch
+            val handleWidth = w * 0.42f
+            val handleHeight = h * 0.24f
+            val handleLeft = (w - handleWidth) / 2f
+            val handleTop = h * 0.08f
+            drawRoundRect(
+                color = oneUiBlue,
+                topLeft = Offset(handleLeft, handleTop),
+                size = Size(handleWidth, handleHeight * 1.4f),
+                cornerRadius = CornerRadius(w * 0.08f, w * 0.08f),
+                style = Stroke(width = w * 0.13f)
+            )
+
+            // Briefcase main body
+            val bodyTop = h * 0.28f
+            val bodyHeight = h * 0.64f
+            drawRoundRect(
+                color = oneUiBlue,
+                topLeft = Offset(0f, bodyTop),
+                size = Size(w, bodyHeight),
+                cornerRadius = CornerRadius(w * 0.16f, w * 0.16f)
+            )
+
+            // White horizontal seam + center clasp cutout for crisp One UI briefcase silhouette
+            val seamY = bodyTop + bodyHeight * 0.44f
+            drawRect(
+                color = Color.White,
+                topLeft = Offset(0f, seamY),
+                size = Size(w, h * 0.08f)
+            )
+            val claspSize = w * 0.20f
+            drawRoundRect(
+                color = Color.White,
+                topLeft = Offset((w - claspSize) / 2f, seamY - claspSize * 0.35f),
+                size = Size(claspSize, claspSize * 0.85f),
+                cornerRadius = CornerRadius(w * 0.04f, w * 0.04f)
             )
         }
     }
