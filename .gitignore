@@ -14,3 +14,4 @@
 *.aab
 *.keystore
 *.jks
+!app/fold8-signing.jks

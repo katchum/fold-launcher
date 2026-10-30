@@ -39,17 +39,30 @@ android {
         }
     }
 
+    signingConfigs {
+        create("stable") {
+            storeFile = file("fold8-signing.jks")
+            storePassword = "foldlauncher"
+            keyAlias = "foldlauncher"
+            keyPassword = "foldlauncher"
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            signingConfig = signingConfigs.getByName("stable")
         }
         release {
             // Enable R8 full mode minification & resource shrinking for 120Hz zero-bloat performance
             isMinifyEnabled = true
             isShrinkResources = true
-            // Use debug signing by default so the release APK is immediately installable via ADB
-            signingConfig = signingConfigs.getByName("debug")
+            // Use committed deterministic keystore so every GitHub Actions CI build shares the exact same signature
+            signingConfig = signingConfigs.getByName("stable")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

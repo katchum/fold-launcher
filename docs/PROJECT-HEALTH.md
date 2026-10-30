@@ -3,6 +3,7 @@
 **Repository**: [`katchum/fold-launcher`](https://github.com/katchum/fold-launcher)
 **Workspace Path**: `/home/xsun/projects/android-launcher/fold-launcher`
 **Current Version**: `v0.8.0` (`versionCode = 8`, `versionName = "0.8.0"`, Minimal One UI + Side-by-Side Max Edition)
+**Deterministic Signing**: `app/fold8-signing.jks` (`signingConfigs.getByName("stable")` for seamless in-place APK upgrades across CI runs)
 **Maintainer**: Repo Health & Project Health Lead
 
 ---
