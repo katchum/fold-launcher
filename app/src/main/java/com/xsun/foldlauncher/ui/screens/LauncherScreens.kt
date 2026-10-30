@@ -1,8 +1,5 @@
 package com.xsun.foldlauncher.ui.screens
 
-import android.app.Activity
-import android.app.KeyguardManager
-import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -15,17 +12,16 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -45,13 +41,15 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -68,24 +66,17 @@ import com.xsun.foldlauncher.service.SystemTweaker
 import com.xsun.foldlauncher.spatial.FlexVirtualTrackpadCard
 import com.xsun.foldlauncher.spatial.RadialThumbArcOverlay
 import com.xsun.foldlauncher.spatial.TentModeStandbyHud
-import com.xsun.foldlauncher.spatial.rememberSpatialTiltState
-import com.xsun.foldlauncher.spatial.spatialParallaxCard
-import com.xsun.foldlauncher.ui.animation.AlphabetWaveScrubber
 import com.xsun.foldlauncher.ui.animation.RadialTriggerCorner
 import com.xsun.foldlauncher.ui.animation.launcherGestures
 import com.xsun.foldlauncher.ui.components.AppIconTile
-import com.xsun.foldlauncher.ui.components.AppPairsQuickCard
-import com.xsun.foldlauncher.ui.components.NativeDashboardCards
+import com.xsun.foldlauncher.ui.components.OneUiConnectivityPillsRow
 import com.xsun.foldlauncher.ui.components.PersistentTaskbarDock
-import com.xsun.foldlauncher.ui.components.SystemQuickTileWidget
-import com.xsun.foldlauncher.ui.components.TopStatusBar
 import com.xsun.foldlauncher.ui.theme.FoldLauncherColors
 import com.xsun.foldlauncher.ui.theme.IconShapePreset
 import com.xsun.foldlauncher.vc.VcBackgroundMonitor
 import com.xsun.foldlauncher.vc.VcCommandCenterCard
-import com.xsun.foldlauncher.vc.VcPackages
+import com.xsun.foldlauncher.vc.VcLiveSummary
 import com.xsun.foldlauncher.viewmodel.WorkspaceProfile
-import kotlinx.coroutines.launch
 
 private val CORE_DRAWER_CATEGORY_PILLS = listOf("All", "VC & Dev", "Frequent", "System")
 
@@ -534,186 +525,189 @@ fun WorkspaceProfilePillBar(
 }
 
 /**
- * v0.3.0 Show-When-Locked 120Hz Lock-Screen Cockpit & Hardware Torch Card.
- * Gives the user instant 1-tap Torch control, live VC Agent status over the lock screen,
- * and a 1-tap `Unlock & Split VC + Termux` (`KeyguardManager.requestDismissKeyguard`) action.
+ * v0.6.0 Compact 1-Row One UI VC Bar:
+ * Shows live VC agent status + 1-tap `Open VC` + 1-tap `VC + Termux` split-screen + an `Expand` chevron
+ * if the user wants to view the full `VcCommandCenterCard`, plus a 1-tap `⚙` Launcher Settings button.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun LockScreenCockpitCard(
-    isKeyguardLocked: Boolean,
-    isTorchEnabled: Boolean,
-    onToggleTorch: () -> Unit,
-    onUnlockAndSplitVcTermux: () -> Unit,
-    pureOledBlack: Boolean = false,
+private fun OneUiCompactVcBar(
+    vcSummary: VcLiveSummary,
+    expanded: Boolean,
+    onToggleExpand: () -> Unit,
+    onOpenVc: () -> Unit,
+    onSplitVcTermux: () -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    val vcMonitor = remember(context) { VcBackgroundMonitor.getInstance(context) }
-    val vcSummary by vcMonitor.liveSummary.collectAsState()
-
-    val cardBg = if (pureOledBlack) {
-        FoldLauncherColors.OledBlack
-    } else {
-        FoldLauncherColors.GlassSurfaceElevated
+    val statusDotColor = when {
+        vcSummary.approvalCount > 0 -> FoldLauncherColors.AmberWarning
+        vcSummary.failedCount > 0 -> FoldLauncherColors.CoralDanger
+        vcSummary.workingCount > 0 || vcSummary.runningCount > 0 -> FoldLauncherColors.ElectricCyan
+        else -> FoldLauncherColors.EmeraldSuccess
     }
-    val borderColor = if (isKeyguardLocked) {
-        FoldLauncherColors.AmberWarning.copy(alpha = 0.75f)
-    } else {
-        FoldLauncherColors.ElectricCyan.copy(alpha = 0.65f)
+    val statusText = when {
+        vcSummary.approvalCount > 0 -> "VC · ${vcSummary.approvalCount} approval"
+        vcSummary.workingCount > 0 -> "VC · ${vcSummary.workingCount} working"
+        vcSummary.runningCount > 0 -> "VC · ${vcSummary.runningCount} active"
+        vcSummary.totalSessions > 0 -> "VC · ${vcSummary.totalSessions} ready"
+        else -> "VC Ready"
     }
 
-    Column(
+    val barShape = RoundedCornerShape(22.dp)
+    val pillShape = RoundedCornerShape(14.dp)
+
+    Row(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .background(cardBg)
-            .border(1.dp, borderColor, RoundedCornerShape(20.dp))
-            .padding(horizontal = 14.dp, vertical = 11.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+            .clip(barShape)
+            .background(Color(0xCC1C1C22))
+            .border(1.dp, Color(0x33FFFFFF), barShape)
+            .clickable(onClick = onToggleExpand)
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = if (isKeyguardLocked) {
-                        "🔒 120Hz SHOW-WHEN-LOCKED COCKPIT ACTIVE"
-                    } else {
-                        "⚡ QUICK COCKPIT · TORCH & VC SPLIT-SCREEN"
-                    },
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = if (isKeyguardLocked) FoldLauncherColors.AmberWarning else FoldLauncherColors.ElectricCyan
-                )
-                Text(
-                    text = "VC Agents: ${vcSummary.workingCount} working · ${vcSummary.approvalCount} approvals · ${vcSummary.runningCount} active",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = FoldLauncherColors.TextSecondary
-                )
-            }
-
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(
-                        if (isTorchEnabled) FoldLauncherColors.AmberWarning.copy(alpha = 0.24f)
-                        else FoldLauncherColors.GlassSurfaceHighlight
-                    )
-                    .border(
-                        1.dp,
-                        if (isTorchEnabled) FoldLauncherColors.AmberWarning else FoldLauncherColors.GlassBorder,
-                        RoundedCornerShape(12.dp)
-                    )
-                    .clickable(onClick = onToggleTorch)
-                    .padding(horizontal = 12.dp, vertical = 7.dp)
-            ) {
-                Text(
-                    text = if (isTorchEnabled) "🔦 Torch: ON" else "🔦 Torch: OFF",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = if (isTorchEnabled) FoldLauncherColors.AmberWarning else FoldLauncherColors.TextPrimary
-                )
-            }
-        }
-
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(FoldLauncherColors.CyanGlow)
-                    .border(1.dp, FoldLauncherColors.ElectricCyan, RoundedCornerShape(12.dp))
-                    .clickable {
-                        onUnlockAndSplitVcTermux()
-                    }
-                    .padding(horizontal = 12.dp, vertical = 7.dp)
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(statusDotColor)
+            )
+            Text(
+                text = statusText,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .clip(pillShape)
+                    .background(Color(0x2E0381FE))
+                    .border(1.dp, Color(0x8068B5FF), pillShape)
+                    .clickable(onClick = onOpenVc)
+                    .padding(horizontal = 10.dp, vertical = 5.dp)
             ) {
                 Text(
-                    text = "🔓 Unlock & Split VC + Termux",
+                    text = "Open VC",
                     fontSize = 11.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = FoldLauncherColors.CyanBright
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
                 )
             }
 
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(FoldLauncherColors.GlassSurfaceHighlight)
-                    .border(1.dp, FoldLauncherColors.GlassBorder, RoundedCornerShape(12.dp))
-                    .clickable { vcMonitor.launchVcVoiceTalk() }
-                    .padding(horizontal = 11.dp, vertical = 7.dp)
+                    .clip(pillShape)
+                    .background(Color(0x26FFFFFF))
+                    .border(1.dp, Color(0x33FFFFFF), pillShape)
+                    .clickable(onClick = onSplitVcTermux)
+                    .padding(horizontal = 10.dp, vertical = 5.dp)
             ) {
                 Text(
-                    text = "🎙 Talk to VC",
+                    text = "VC + Termux",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
-                    color = FoldLauncherColors.EmeraldSuccess
+                    color = Color(0xFFE3F2FF)
                 )
             }
 
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(FoldLauncherColors.GlassSurfaceHighlight)
-                    .border(1.dp, FoldLauncherColors.GlassBorder, RoundedCornerShape(12.dp))
-                    .clickable { vcMonitor.launchVc(null) }
-                    .padding(horizontal = 11.dp, vertical = 7.dp)
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(Color(0x22FFFFFF))
+                    .clickable(onClick = onToggleExpand),
+                contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "⚡ Open VC",
-                    fontSize = 11.sp,
+                    text = if (expanded) "▴" else "▾",
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
-                    color = FoldLauncherColors.TextPrimary
+                    color = Color.White
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(Color(0x22FFFFFF))
+                    .clickable(onClick = onOpenSettings),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "⚙",
+                    fontSize = 12.sp,
+                    color = Color(0xFFD0D4E0)
                 )
             }
         }
-    }
-}
-
-private fun performUnlockAndSplitFallback(context: Context) {
-    val launchAction = {
-        val vcPkg = SystemTweaker.findInstalledVcPackage(context) ?: VcPackages.PREVIEW
-        SystemTweaker.launchSplitScreenPair(
-            context = context,
-            primaryPackage = vcPkg,
-            secondaryPackage = VcPackages.TERMUX_PACKAGE
-        )
-    }
-    val activity = context as? Activity
-    val km = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
-    if (activity != null && km != null && km.isKeyguardLocked) {
-        km.requestDismissKeyguard(
-            activity,
-            object : KeyguardManager.KeyguardDismissCallback() {
-                override fun onDismissSucceeded() {
-                    launchAction()
-                }
-                override fun onDismissError() {
-                    launchAction()
-                }
-            }
-        )
-    } else {
-        launchAction()
     }
 }
 
 /**
- * One-handed Cover Screen (Z Fold 8 folded) & Standard Slab Phone (Galaxy S23 Ultra) Home Screen.
- * Combines:
- * - Oversized 26sp+ Top-Right Clock status bar with 3D spatial depth parallax
- * - Collapsible 120Hz Native Companion Cards (including Live VC Command Center & Floating Micro-HUD Pill control)
- * - Pinned Cover favorites strip
- * - Full 120Hz app grid with right-edge AlphabetWaveScrubber
- * - Bottom thumb-zone dock + One-Handed Radial Thumb Arc ("Arc Deck") overlay
+ * v0.6.0 Subtle One UI "Swipe up for apps & search" pill above the Home Dock.
+ * Tapping or swiping up opens the App Search Drawer and immediately focuses the search input
+ * & shows the software keyboard (`0ms`).
+ */
+@Composable
+private fun OneUiSwipeUpSearchPill(
+    onTriggerSearch: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color(0x991C1C22))
+                .border(1.dp, Color(0x2EFFFFFF), RoundedCornerShape(18.dp))
+                .clickable(onClick = onTriggerSearch)
+                .padding(horizontal = 16.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = "⌃",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFB8C4D8)
+            )
+            Text(
+                text = "Swipe up for apps & search",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                color = Color(0xFFDCE2EE)
+            )
+        }
+    }
+}
+
+/**
+ * v0.6.0 Streamlined One UI-Matched Cover Screen (Z Fold 8 folded) & Standard Slab Phone (Galaxy S23 Ultra) Home Screen.
+ * - Option A for Status Bar / Clock: Keeps Android's native top status bar visible (`statusBarsPadding()`)
+ *   with zero duplicate `TopStatusBar` or oversized home-screen clock.
+ * - Zero Lock-Screen Hijacking: Renders over the live system wallpaper with no `LockScreenCockpitCard`.
+ * - Single-screen One UI layout:
+ *   1. Top Row: `OneUiConnectivityPillsRow` (Wireless Debugging & Tailscale Quick-Toggle Pills).
+ *   2. Compact 1-Row VC Bar (`OneUiCompactVcBar`, expandable on demand).
+ *   3. Clean 4-column One UI Home App Grid over the live system wallpaper.
+ *   4. Subtle One UI `"Swipe up for apps & search"` pill + One UI Bottom Favorites Dock (`PersistentTaskbarDock`).
  */
 @Composable
 fun CoverOrSlabHomeScreen(
@@ -738,6 +732,12 @@ fun CoverOrSlabHomeScreen(
     onCycleFoldCloseActionMode: (() -> Unit)? = null,
     unfoldModeLabel: String = "🖥️ Inner Cockpit",
     onCycleUnfoldActionMode: (() -> Unit)? = null,
+    isWirelessAdbEnabled: Boolean = false,
+    wirelessAdbPort: Int? = null,
+    onToggleWirelessAdb: (() -> Unit)? = null,
+    onOpenWirelessAdbSettings: (() -> Unit)? = null,
+    onToggleTailscaleVpn: (() -> Unit)? = null,
+    onOpenTailscaleApp: (() -> Unit)? = null,
     tailscaleIp: String? = null,
     lanIp: String? = null,
     allApps: List<AppEntry>,
@@ -773,44 +773,33 @@ fun CoverOrSlabHomeScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val searchFocusRequester = remember { FocusRequester() }
     val vcMonitor = remember(context) { VcBackgroundMonitor.getInstance(context) }
     val vcSummary by vcMonitor.liveSummary.collectAsState()
     val vcConfig by vcMonitor.config.collectAsState()
     val vcFeedback by vcMonitor.lastSendFeedback.collectAsState()
 
-    val gridState = rememberLazyGridState()
-    val coroutineScope = rememberCoroutineScope()
-    val spatialTilt = rememberSpatialTiltState(enabled = true, hingeAngleFactor = 0f)
-
-    var selectedCategory by remember { mutableStateOf("All") }
-    var activeLetter by remember { mutableStateOf<Char?>(null) }
-    var showCompanionCards by remember { mutableStateOf(true) }
-    var showLockCockpit by remember { mutableStateOf(false) }
+    var vcExpanded by remember { mutableStateOf(false) }
     var arcTriggerGeneration by remember { mutableIntStateOf(0) }
     var arcRightHanded by remember { mutableStateOf(true) }
     var arcStartExpanded by remember { mutableStateOf(false) }
 
-    LaunchedEffect(workspaceProfile) {
-        if (workspaceProfile == WorkspaceProfile.VC_DEV) {
-            selectedCategory = "VC & Dev"
-            showCompanionCards = true
+    val triggerInstantSearch = remember(onOpenSearch, keyboardController) {
+        {
+            onOpenSearch()
+            try {
+                searchFocusRequester.requestFocus()
+            } catch (_: Exception) {
+            }
+            keyboardController?.show()
+            Unit
         }
     }
 
-    val isPureOled = workspaceProfile == WorkspaceProfile.OLED_BLACK
-    val isFocusMode = workspaceProfile == WorkspaceProfile.FOCUS
-    val isVcDevMode = workspaceProfile == WorkspaceProfile.VC_DEV
-
     val allAppsMap = remember(allApps) { allApps.associateBy { it.packageName } }
-    val categories = remember(allApps) {
-        (CORE_DRAWER_CATEGORY_PILLS + allApps.map { it.category }.distinct().sorted()).distinct()
-    }
-    val filteredApps = remember(allApps, selectedCategory) {
-        filterAppsByDrawerPill(allApps, selectedCategory)
-    }
-    val letters = remember(filteredApps) {
-        val available = filteredApps.map { it.firstLetter }.distinct().sorted()
-        if (available.isEmpty()) ('A'..'Z').toList() else available
+    val homeGridApps = remember(pinnedCoverApps, recentApps, allApps) {
+        (pinnedCoverApps + recentApps + allApps).distinctBy { it.packageName }.take(20)
     }
     val radialArcApps = remember(pinnedCoverApps, recentApps, allApps) {
         (pinnedCoverApps + recentApps + allApps).distinctBy { it.packageName }.take(8)
@@ -819,91 +808,48 @@ fun CoverOrSlabHomeScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .then(if (isPureOled) Modifier.background(FoldLauncherColors.OledBlack) else Modifier)
+            .statusBarsPadding()
+            .launcherGestures(
+                onSwipeUpSearch = triggerInstantSearch,
+                onSwipeDownNotifications = onExpandNotifications,
+                onDoubleTapLock = onDoubleTapLock,
+                onLongPressHomeSettings = onOpenSettings,
+                onCornerSwipeRadialArc = { corner ->
+                    arcRightHanded = (corner == RadialTriggerCorner.BOTTOM_RIGHT)
+                    arcStartExpanded = true
+                    arcTriggerGeneration++
+                }
+            )
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .launcherGestures(
-                    onSwipeUpSearch = onOpenSearch,
-                    onSwipeDownNotifications = onExpandNotifications,
-                    onDoubleTapLock = onDoubleTapLock,
-                    onLongPressHomeSettings = onOpenSettings,
-                    onCornerSwipeRadialArc = { corner ->
-                        arcRightHanded = (corner == RadialTriggerCorner.BOTTOM_RIGHT)
-                        arcStartExpanded = true
-                        arcTriggerGeneration++
-                    }
-                )
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            TopStatusBar(
-                postureState = postureState,
-                batteryPct = batteryPct,
-                isCharging = isCharging,
-                nextEventText = nextEventText,
-                isDeXConnected = isDeXConnected,
-                hingeAngleDegrees = postureState.hingeAngleDegrees,
-                postureOverrideLabel = postureOverride.shortLabel,
-                onCyclePostureOverride = onCyclePostureOverride,
-                onClockClick = onClockClick,
-                onSearchPillClick = onOpenSearch,
-                onSettingsClick = onOpenSettings,
-                modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.7f)
-            )
-
-            // v0.5.0 Workspace Profile Pill Bar + Hardware Torch, Haptics, Fold-Close, Unfold-Open & Lock Cockpit Controls
-            WorkspaceProfilePillBar(
-                workspaceProfile = workspaceProfile,
-                onSelectWorkspaceProfile = { profile ->
-                    onSelectWorkspaceProfile?.invoke(profile)
-                },
-                isTorchEnabled = isTorchEnabled,
-                onToggleTorch = onToggleTorch,
-                isDualScreenPresentationActive = isDualScreenPresentationActive,
-                onToggleDualScreenPresentation = onToggleDualScreenPresentation,
-                isKeyguardLocked = isKeyguardLocked,
-                showLockCockpit = showLockCockpit,
-                onToggleLockCockpit = { showLockCockpit = !showLockCockpit },
-                hingeHapticsEnabled = hingeHapticsEnabled,
-                onToggleHingeHaptics = onToggleHingeHaptics,
-                foldCloseModeLabel = foldCloseModeLabel,
-                onCycleFoldCloseActionMode = onCycleFoldCloseActionMode,
-                unfoldModeLabel = unfoldModeLabel,
-                onCycleUnfoldActionMode = onCycleUnfoldActionMode,
+            // 1. Top Row: Two side-by-side Wireless Debugging & Tailscale Quick-Toggle Pills
+            OneUiConnectivityPillsRow(
+                isWirelessAdbEnabled = isWirelessAdbEnabled,
+                wirelessAdbPort = wirelessAdbPort,
                 tailscaleIp = tailscaleIp,
-                lanIp = lanIp
+                lanIp = lanIp,
+                onToggleWirelessAdb = { onToggleWirelessAdb?.invoke() },
+                onOpenWirelessAdbSettings = { onOpenWirelessAdbSettings?.invoke() },
+                onToggleTailscale = { onToggleTailscaleVpn?.invoke() },
+                onOpenTailscaleApp = { onOpenTailscaleApp?.invoke() }
             )
 
-            if (isKeyguardLocked || showLockCockpit) {
-                LockScreenCockpitCard(
-                    isKeyguardLocked = isKeyguardLocked,
-                    isTorchEnabled = isTorchEnabled,
-                    onToggleTorch = {
-                        if (onToggleTorch != null) onToggleTorch()
-                        else SystemTweaker.toggleTorch(context, isTorchEnabled)
-                    },
-                    onUnlockAndSplitVcTermux = {
-                        if (onUnlockAndSplitVcTermux != null) onUnlockAndSplitVcTermux()
-                        else performUnlockAndSplitFallback(context)
-                    },
-                    pureOledBlack = isPureOled
-                )
-            }
+            // 2. Compact 1-Row VC Bar (expandable on demand)
+            OneUiCompactVcBar(
+                vcSummary = vcSummary,
+                expanded = vcExpanded,
+                onToggleExpand = { vcExpanded = !vcExpanded },
+                onOpenVc = { vcMonitor.launchVc(null) },
+                onSplitVcTermux = { vcMonitor.launchVcSplitScreen() },
+                onOpenSettings = onOpenSettings
+            )
 
-            if (postureState.isTentMode) {
-                TentModeStandbyBannerCard(
-                    hingeAngleDegrees = postureState.hingeAngleDegrees,
-                    batteryPct = batteryPct,
-                    isCharging = isCharging,
-                    nextEventText = nextEventText,
-                    onExitTentMode = { onSetPostureOverride?.invoke(PostureOverride.AUTO) }
-                )
-            }
-
-            if (isFocusMode) {
-                // Minimal Focus Mode: distraction-free live VC status + essential dock/apps
+            if (vcExpanded) {
                 VcCommandCenterCard(
                     summary = vcSummary,
                     config = vcConfig,
@@ -919,222 +865,59 @@ fun CoverOrSlabHomeScreen(
                     },
                     onUpdateConfig = { serverUrl, authToken, monitorEnabled, notifyBackground ->
                         vcMonitor.updateConfig(serverUrl, authToken, monitorEnabled, notifyBackground)
-                    },
-                    modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 1.0f)
+                    }
                 )
-            } else {
-                // Section header with toggle for 120Hz Native Companion & VC Cards
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "${workspaceProfile.badge} ${workspaceProfile.label.uppercase()} · ${filteredApps.size} APPS · 3D PARALLAX",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = FoldLauncherColors.ElectricCyan
-                    )
-                    Text(
-                        text = if (showCompanionCards) "Hide VC & Deck ▲" else "Show VC & Deck ▼",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = FoldLauncherColors.TextSecondary,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .clickable { showCompanionCards = !showCompanionCards }
-                            .padding(horizontal = 8.dp, vertical = 3.dp)
-                    )
-                }
-
-                if (showCompanionCards) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(0.46f, fill = false)
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        if (isVcDevMode) {
-                            VcCommandCenterCard(
-                                summary = vcSummary,
-                                config = vcConfig,
-                                lastSendFeedback = vcFeedback,
-                                onOpenVc = { sessionId -> vcMonitor.launchVc(sessionId) },
-                                onSplitScreenVc = { vcMonitor.launchVcSplitScreen() },
-                                onRefreshVc = { vcMonitor.refreshNow() },
-                                onSendQuickMessage = { sessionId, text, steerIfWorking ->
-                                    vcMonitor.sendQuickMessage(sessionId, text, steerIfWorking)
-                                },
-                                onMarkAttentionRead = { eventId, markAll ->
-                                    vcMonitor.markAttentionRead(eventId, markAll)
-                                },
-                                onUpdateConfig = { serverUrl, authToken, monitorEnabled, notifyBackground ->
-                                    vcMonitor.updateConfig(serverUrl, authToken, monitorEnabled, notifyBackground)
-                                },
-                                modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 1.1f)
-                            )
-                            AppPairsQuickCard(
-                                customAppPairs = appPairs,
-                                onLaunchAppPair = onLaunchAppPair,
-                                modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.95f)
-                            )
-                            SystemQuickTileWidget(
-                                isAccessibilityActive = isAccessibilityActive,
-                                isWriteSecureSettingsGranted = isWriteSecureSettingsGranted,
-                                lockScreenRotationEnabled = lockScreenRotationEnabled,
-                                onToggleLockRotation = onToggleLockRotation,
-                                onEnforceGboardDeX = onEnforceGboardDeX,
-                                onLockScreenNow = onLockScreenNow,
-                                onOpenWallpaperPicker = onOpenWallpaperPicker,
-                                onOpenDefaultLauncherPrompt = onOpenDefaultLauncherPrompt,
-                                isDefaultLauncher = isDefaultLauncher,
-                                hingeHapticsEnabled = hingeHapticsEnabled,
-                                foldCloseModeLabel = foldCloseModeLabel,
-                                onToggleHingeHaptics = { onToggleHingeHaptics?.invoke() },
-                                onCycleFoldCloseMode = { onCycleFoldCloseActionMode?.invoke() },
-                                unfoldModeLabel = unfoldModeLabel,
-                                onCycleUnfoldMode = { onCycleUnfoldActionMode?.invoke() },
-                                tailscaleIp = tailscaleIp,
-                                lanIp = lanIp,
-                                modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.88f)
-                            )
-                        } else {
-                            NativeDashboardCards(
-                                postureState = postureState,
-                                batteryPct = batteryPct,
-                                isCharging = isCharging,
-                                isAccessibilityActive = isAccessibilityActive,
-                                isWriteSecureSettingsGranted = isWriteSecureSettingsGranted,
-                                lockScreenRotationEnabled = lockScreenRotationEnabled,
-                                onToggleLockRotation = onToggleLockRotation,
-                                onEnforceGboardDeX = onEnforceGboardDeX,
-                                onLockScreenNow = onLockScreenNow,
-                                onOpenWallpaperPicker = onOpenWallpaperPicker,
-                                onOpenDefaultLauncherPrompt = onOpenDefaultLauncherPrompt,
-                                isDefaultLauncher = isDefaultLauncher,
-                                quickNoteText = quickNoteText,
-                                onQuickNoteChange = onQuickNoteChange,
-                                hingeAngleDegrees = postureState.hingeAngleDegrees,
-                                customAppPairs = appPairs,
-                                onLaunchAppPair = onLaunchAppPair,
-                                spatialTiltState = spatialTilt,
-                                onOpenSpotlight = onOpenSearch,
-                                onToggleRadialArc = {
-                                    arcStartExpanded = true
-                                    arcTriggerGeneration++
-                                },
-                                hingeHapticsEnabled = hingeHapticsEnabled,
-                                foldCloseModeLabel = foldCloseModeLabel,
-                                onToggleHingeHaptics = { onToggleHingeHaptics?.invoke() },
-                                onCycleFoldCloseMode = { onCycleFoldCloseActionMode?.invoke() },
-                                unfoldModeLabel = unfoldModeLabel,
-                                onCycleUnfoldMode = { onCycleUnfoldActionMode?.invoke() },
-                                tailscaleIp = tailscaleIp,
-                                lanIp = lanIp
-                            )
-                        }
-                    }
-                }
             }
 
-            // Pinned Cover Favorites Strip (hidden in Minimal Focus mode)
-            if (!isFocusMode && pinnedCoverApps.isNotEmpty()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.85f)
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(if (isPureOled) FoldLauncherColors.OledBlack else FoldLauncherColors.GlassSurface)
-                        .border(1.dp, FoldLauncherColors.GlassBorder, RoundedCornerShape(20.dp))
-                        .padding(horizontal = 10.dp, vertical = 8.dp)
-                ) {
-                    Text(
-                        text = "PINNED FAVORITES",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = FoldLauncherColors.CyanBright,
-                        modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)
-                    )
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        pinnedCoverApps.forEach { app ->
-                            AppIconTile(
-                                app = app,
-                                iconShapePreset = iconShapePreset,
-                                showLabel = true,
-                                compact = true,
-                                onClick = { onAppClick(app) },
-                                onLongClick = { onAppLongClick(app) },
-                                modifier = Modifier.width(68.dp)
-                            )
-                        }
-                    }
-                }
+            if (postureState.isTentMode) {
+                TentModeStandbyBannerCard(
+                    hingeAngleDegrees = postureState.hingeAngleDegrees,
+                    batteryPct = batteryPct,
+                    isCharging = isCharging,
+                    nextEventText = nextEventText,
+                    onExitTentMode = { onSetPostureOverride?.invoke(PostureOverride.AUTO) }
+                )
             }
 
-            // App Drawer Category Filter Pills (All, VC & Dev, Frequent, System)
-            AppDrawerCategoryPillsBar(
-                categories = categories,
-                selectedCategory = selectedCategory,
-                onSelectCategory = { selectedCategory = it }
-            )
-
-            // Main App Grid + Right-Edge One-Handed AlphabetWaveScrubber
-            Row(
+            // 3. Clean 4-Column One UI Home App Grid over the live system wallpaper
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
-                verticalAlignment = Alignment.CenterVertically
+                    .weight(1f)
+                    .launcherGestures(
+                        onSwipeUpSearch = triggerInstantSearch,
+                        onSwipeDownNotifications = onExpandNotifications,
+                        onDoubleTapLock = onDoubleTapLock,
+                        onLongPressHomeSettings = onOpenSettings
+                    )
             ) {
                 LazyVerticalGrid(
-                    state = gridState,
-                    columns = GridCells.Fixed(postureState.recommendedGridColumns.coerceAtLeast(4)),
-                    contentPadding = PaddingValues(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
+                    columns = GridCells.Fixed(4),
+                    userScrollEnabled = false,
+                    contentPadding = PaddingValues(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    modifier = Modifier.fillMaxSize()
                 ) {
                     items(
-                        items = filteredApps,
+                        items = homeGridApps,
                         key = { "${it.packageName}/${it.activityName}" }
                     ) { app ->
-                        DrawerAppTileWithDockPin(
+                        AppIconTile(
                             app = app,
-                            isDockPinned = app.isDockPinned || app.packageName in pinnedDockPackages,
                             iconShapePreset = iconShapePreset,
+                            showLabel = true,
                             compact = false,
                             onClick = { onAppClick(app) },
-                            onLongClick = { onAppLongClick(app) },
-                            onTogglePinDock = { onTogglePinDockPackage?.invoke(app.packageName) }
+                            onLongClick = { onAppLongClick(app) }
                         )
                     }
                 }
-
-                AlphabetWaveScrubber(
-                    letters = letters,
-                    activeLetter = activeLetter,
-                    onLetterSelected = { letter ->
-                        activeLetter = letter
-                        val targetIdx = filteredApps.indexOfFirst { it.firstLetter == letter }
-                        if (targetIdx >= 0) {
-                            coroutineScope.launch {
-                                gridState.scrollToItem(targetIdx)
-                            }
-                        }
-                    }
-                )
             }
 
-            // Bottom Thumb-Zone Dock
+            // 4. Subtle One UI "Swipe up for apps & search" Pill + Bottom Favorites Dock
+            OneUiSwipeUpSearchPill(onTriggerSearch = triggerInstantSearch)
+
             PersistentTaskbarDock(
                 dockApps = dockApps,
                 recentApps = recentApps,
@@ -1144,18 +927,17 @@ fun CoverOrSlabHomeScreen(
                 onAppClick = onAppClick,
                 onAppLongClick = onAppLongClick,
                 onLaunchAppPair = onLaunchAppPair,
-                onOpenAllAppsSearch = onOpenSearch
+                onOpenAllAppsSearch = triggerInstantSearch
             )
         }
 
-        // One-Handed Radial Thumb Arc ("Arc Deck") Overlay anchored at bottom thumb corner
         key(arcTriggerGeneration, arcRightHanded) {
             RadialThumbArcOverlay(
                 apps = radialArcApps,
                 iconShapePreset = iconShapePreset,
                 onAppClick = onAppClick,
                 onAppLongClick = onAppLongClick,
-                onOpenSearch = onOpenSearch,
+                onOpenSearch = triggerInstantSearch,
                 initialRightHanded = arcRightHanded,
                 initiallyExpanded = arcStartExpanded
             )
@@ -1164,11 +946,15 @@ fun CoverOrSlabHomeScreen(
 }
 
 /**
- * Unfolded 7.6"+ Z Fold 8 Inner Display & DeX Dual-Hemisphere Dashboard Screen.
- * Left pane hosts 120Hz native companion cards (VC Command Center, Floating Micro-HUD, DeX tweaks),
- * pinned inner favorites, folders, and split-screen pairs with 3D spatial depth parallax.
- * Right pane hosts a categorized full-speed app matrix with instant category chips and wave scrubber.
- * Bottom edge anchors the persistent PC-style taskbar dock + Radial Thumb Arc.
+ * v0.6.0 Streamlined One UI-Matched Unfolded 7.6"+ Z Fold 8 Inner Display Home Screen.
+ * - Option A for Status Bar / Clock: Keeps Android's native top status bar visible (`statusBarsPadding()`)
+ *   with zero duplicate `TopStatusBar` or oversized home-screen clock.
+ * - Zero Lock-Screen Hijacking: Renders over the live system wallpaper with no `LockScreenCockpitCard`.
+ * - Single-screen One UI layout:
+ *   1. Top Row: `OneUiConnectivityPillsRow` (Wireless Debugging & Tailscale Quick-Toggle Pills).
+ *   2. Compact 1-Row VC Bar (`OneUiCompactVcBar`, expandable on demand).
+ *   3. Clean 6-column One UI Home App Grid over the live system wallpaper.
+ *   4. Subtle One UI `"Swipe up for apps & search"` pill + One UI Bottom Favorites Dock (`PersistentTaskbarDock`).
  */
 @Composable
 fun UnfoldedInnerDashboardScreen(
@@ -1193,6 +979,12 @@ fun UnfoldedInnerDashboardScreen(
     onCycleFoldCloseActionMode: (() -> Unit)? = null,
     unfoldModeLabel: String = "🖥️ Inner Cockpit",
     onCycleUnfoldActionMode: (() -> Unit)? = null,
+    isWirelessAdbEnabled: Boolean = false,
+    wirelessAdbPort: Int? = null,
+    onToggleWirelessAdb: (() -> Unit)? = null,
+    onOpenWirelessAdbSettings: (() -> Unit)? = null,
+    onToggleTailscaleVpn: (() -> Unit)? = null,
+    onOpenTailscaleApp: (() -> Unit)? = null,
     tailscaleIp: String? = null,
     lanIp: String? = null,
     allApps: List<AppEntry>,
@@ -1229,135 +1021,99 @@ fun UnfoldedInnerDashboardScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val searchFocusRequester = remember { FocusRequester() }
     val vcMonitor = remember(context) { VcBackgroundMonitor.getInstance(context) }
     val vcSummary by vcMonitor.liveSummary.collectAsState()
     val vcConfig by vcMonitor.config.collectAsState()
     val vcFeedback by vcMonitor.lastSendFeedback.collectAsState()
 
-    val gridState = rememberLazyGridState()
-    val coroutineScope = rememberCoroutineScope()
-    val spatialTilt = rememberSpatialTiltState(
-        enabled = true,
-        hingeAngleFactor = if (postureState.isBookPosture) 0.35f else 0.1f
-    )
-
-    var selectedCategory by remember { mutableStateOf("All") }
-    var activeLetter by remember { mutableStateOf<Char?>(null) }
-    var showLockCockpit by remember { mutableStateOf(false) }
+    var vcExpanded by remember { mutableStateOf(false) }
     var arcTriggerGeneration by remember { mutableIntStateOf(0) }
     var arcRightHanded by remember { mutableStateOf(true) }
     var arcStartExpanded by remember { mutableStateOf(false) }
 
-    LaunchedEffect(workspaceProfile) {
-        if (workspaceProfile == WorkspaceProfile.VC_DEV) {
-            selectedCategory = "VC & Dev"
+    val triggerInstantSearch = remember(onOpenSearch, keyboardController) {
+        {
+            onOpenSearch()
+            try {
+                searchFocusRequester.requestFocus()
+            } catch (_: Exception) {
+            }
+            keyboardController?.show()
+            Unit
         }
     }
 
-    val isPureOled = workspaceProfile == WorkspaceProfile.OLED_BLACK
-    val isFocusMode = workspaceProfile == WorkspaceProfile.FOCUS
-    val isVcDevMode = workspaceProfile == WorkspaceProfile.VC_DEV
-    val surfaceBg = if (isPureOled) FoldLauncherColors.OledBlack else FoldLauncherColors.GlassSurface
-
     val allAppsMap = remember(allApps) { allApps.associateBy { it.packageName } }
-    val categories = remember(allApps) {
-        (CORE_DRAWER_CATEGORY_PILLS + allApps.map { it.category }.distinct().sorted()).distinct()
-    }
-    val filteredApps = remember(allApps, selectedCategory) {
-        filterAppsByDrawerPill(allApps, selectedCategory)
-    }
-    val letters = remember(filteredApps) {
-        val available = filteredApps.map { it.firstLetter }.distinct().sorted()
-        if (available.isEmpty()) ('A'..'Z').toList() else available
+    val homeGridApps = remember(pinnedInnerApps, recentApps, allApps) {
+        (pinnedInnerApps + recentApps + allApps).distinctBy { it.packageName }.take(24)
     }
     val radialArcApps = remember(pinnedInnerApps, recentApps, allApps) {
         (pinnedInnerApps + recentApps + allApps).distinctBy { it.packageName }.take(8)
     }
 
-    val hingeGapDp = remember(postureState) {
-        val left = postureState.hingeLeftDp
-        val right = postureState.hingeRightDp
-        if (left != null && right != null && right > left) {
-            (right - left).coerceIn(12, 36).dp
-        } else {
-            16.dp
-        }
-    }
-
     Box(
         modifier = modifier
             .fillMaxSize()
-            .then(if (isPureOled) Modifier.background(FoldLauncherColors.OledBlack) else Modifier)
+            .statusBarsPadding()
+            .launcherGestures(
+                onSwipeUpSearch = triggerInstantSearch,
+                onSwipeDownNotifications = onExpandNotifications,
+                onDoubleTapLock = onDoubleTapLock,
+                onLongPressHomeSettings = onOpenSettings,
+                onCornerSwipeRadialArc = { corner ->
+                    arcRightHanded = (corner == RadialTriggerCorner.BOTTOM_RIGHT)
+                    arcStartExpanded = true
+                    arcTriggerGeneration++
+                }
+            )
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .launcherGestures(
-                    onSwipeUpSearch = onOpenSearch,
-                    onSwipeDownNotifications = onExpandNotifications,
-                    onDoubleTapLock = onDoubleTapLock,
-                    onLongPressHomeSettings = onOpenSettings,
-                    onCornerSwipeRadialArc = { corner ->
-                        arcRightHanded = (corner == RadialTriggerCorner.BOTTOM_RIGHT)
-                        arcStartExpanded = true
-                        arcTriggerGeneration++
-                    }
-                )
-                .padding(horizontal = 18.dp, vertical = 12.dp),
+                .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // 1. Oversized High-Visibility Top Status Bar
-            TopStatusBar(
-                postureState = postureState,
-                batteryPct = batteryPct,
-                isCharging = isCharging,
-                nextEventText = nextEventText,
-                isDeXConnected = isDeXConnected,
-                hingeAngleDegrees = postureState.hingeAngleDegrees,
-                postureOverrideLabel = postureOverride.shortLabel,
-                onCyclePostureOverride = onCyclePostureOverride,
-                onClockClick = onClockClick,
-                onSearchPillClick = onOpenSearch,
-                onSettingsClick = onOpenSettings,
-                modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.65f)
-            )
-
-            // v0.5.0 Workspace Profile Pill Bar + Hardware Torch, Cover Mirror, Haptics, Fold-Close, Unfold-Open & Lock Cockpit
-            WorkspaceProfilePillBar(
-                workspaceProfile = workspaceProfile,
-                onSelectWorkspaceProfile = { profile ->
-                    onSelectWorkspaceProfile?.invoke(profile)
-                },
-                isTorchEnabled = isTorchEnabled,
-                onToggleTorch = onToggleTorch,
-                isDualScreenPresentationActive = isDualScreenPresentationActive,
-                onToggleDualScreenPresentation = onToggleDualScreenPresentation,
-                isKeyguardLocked = isKeyguardLocked,
-                showLockCockpit = showLockCockpit,
-                onToggleLockCockpit = { showLockCockpit = !showLockCockpit },
-                hingeHapticsEnabled = hingeHapticsEnabled,
-                onToggleHingeHaptics = onToggleHingeHaptics,
-                foldCloseModeLabel = foldCloseModeLabel,
-                onCycleFoldCloseActionMode = onCycleFoldCloseActionMode,
-                unfoldModeLabel = unfoldModeLabel,
-                onCycleUnfoldActionMode = onCycleUnfoldActionMode,
+            // 1. Top Row: Two side-by-side Wireless Debugging & Tailscale Quick-Toggle Pills
+            OneUiConnectivityPillsRow(
+                isWirelessAdbEnabled = isWirelessAdbEnabled,
+                wirelessAdbPort = wirelessAdbPort,
                 tailscaleIp = tailscaleIp,
-                lanIp = lanIp
+                lanIp = lanIp,
+                onToggleWirelessAdb = { onToggleWirelessAdb?.invoke() },
+                onOpenWirelessAdbSettings = { onOpenWirelessAdbSettings?.invoke() },
+                onToggleTailscale = { onToggleTailscaleVpn?.invoke() },
+                onOpenTailscaleApp = { onOpenTailscaleApp?.invoke() }
             )
 
-            if (isKeyguardLocked || showLockCockpit) {
-                LockScreenCockpitCard(
-                    isKeyguardLocked = isKeyguardLocked,
-                    isTorchEnabled = isTorchEnabled,
-                    onToggleTorch = {
-                        if (onToggleTorch != null) onToggleTorch()
-                        else SystemTweaker.toggleTorch(context, isTorchEnabled)
+            // 2. Compact 1-Row VC Bar (expandable on demand)
+            OneUiCompactVcBar(
+                vcSummary = vcSummary,
+                expanded = vcExpanded,
+                onToggleExpand = { vcExpanded = !vcExpanded },
+                onOpenVc = { vcMonitor.launchVc(null) },
+                onSplitVcTermux = { vcMonitor.launchVcSplitScreen() },
+                onOpenSettings = onOpenSettings
+            )
+
+            if (vcExpanded) {
+                VcCommandCenterCard(
+                    summary = vcSummary,
+                    config = vcConfig,
+                    lastSendFeedback = vcFeedback,
+                    onOpenVc = { sessionId -> vcMonitor.launchVc(sessionId) },
+                    onSplitScreenVc = { vcMonitor.launchVcSplitScreen() },
+                    onRefreshVc = { vcMonitor.refreshNow() },
+                    onSendQuickMessage = { sessionId, text, steerIfWorking ->
+                        vcMonitor.sendQuickMessage(sessionId, text, steerIfWorking)
                     },
-                    onUnlockAndSplitVcTermux = {
-                        if (onUnlockAndSplitVcTermux != null) onUnlockAndSplitVcTermux()
-                        else performUnlockAndSplitFallback(context)
+                    onMarkAttentionRead = { eventId, markAll ->
+                        vcMonitor.markAttentionRead(eventId, markAll)
                     },
-                    pureOledBlack = isPureOled
+                    onUpdateConfig = { serverUrl, authToken, monitorEnabled, notifyBackground ->
+                        vcMonitor.updateConfig(serverUrl, authToken, monitorEnabled, notifyBackground)
+                    }
                 )
             }
 
@@ -1371,302 +1127,45 @@ fun UnfoldedInnerDashboardScreen(
                 )
             }
 
-            // 2. Dual-Hemisphere Inner Workspace (Left Dashboard + Hinge Gutter + Right App Matrix)
-            Row(
+            // 3. Clean 6-Column One UI Inner Home App Grid over the live system wallpaper
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
-                verticalAlignment = Alignment.Top
-            ) {
-                // Left Hemisphere: Native 120Hz Widgets + VC Command Center + Pinned Favorites + Folders
-                Column(
-                    modifier = Modifier
-                        .weight(0.46f)
-                        .fillMaxHeight()
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    if (isFocusMode) {
-                        VcCommandCenterCard(
-                            summary = vcSummary,
-                            config = vcConfig,
-                            lastSendFeedback = vcFeedback,
-                            onOpenVc = { sessionId -> vcMonitor.launchVc(sessionId) },
-                            onSplitScreenVc = { vcMonitor.launchVcSplitScreen() },
-                            onRefreshVc = { vcMonitor.refreshNow() },
-                            onSendQuickMessage = { sessionId, text, steerIfWorking ->
-                                vcMonitor.sendQuickMessage(sessionId, text, steerIfWorking)
-                            },
-                            onMarkAttentionRead = { eventId, markAll ->
-                                vcMonitor.markAttentionRead(eventId, markAll)
-                            },
-                            onUpdateConfig = { serverUrl, authToken, monitorEnabled, notifyBackground ->
-                                vcMonitor.updateConfig(serverUrl, authToken, monitorEnabled, notifyBackground)
-                            },
-                            modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 1.1f)
-                        )
-                    } else if (isVcDevMode) {
-                        VcCommandCenterCard(
-                            summary = vcSummary,
-                            config = vcConfig,
-                            lastSendFeedback = vcFeedback,
-                            onOpenVc = { sessionId -> vcMonitor.launchVc(sessionId) },
-                            onSplitScreenVc = { vcMonitor.launchVcSplitScreen() },
-                            onRefreshVc = { vcMonitor.refreshNow() },
-                            onSendQuickMessage = { sessionId, text, steerIfWorking ->
-                                vcMonitor.sendQuickMessage(sessionId, text, steerIfWorking)
-                            },
-                            onMarkAttentionRead = { eventId, markAll ->
-                                vcMonitor.markAttentionRead(eventId, markAll)
-                            },
-                            onUpdateConfig = { serverUrl, authToken, monitorEnabled, notifyBackground ->
-                                vcMonitor.updateConfig(serverUrl, authToken, monitorEnabled, notifyBackground)
-                            },
-                            modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 1.15f)
-                        )
-                        AppPairsQuickCard(
-                            customAppPairs = appPairs,
-                            onLaunchAppPair = onLaunchAppPair,
-                            modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 1.0f)
-                        )
-                        SystemQuickTileWidget(
-                            isAccessibilityActive = isAccessibilityActive,
-                            isWriteSecureSettingsGranted = isWriteSecureSettingsGranted,
-                            lockScreenRotationEnabled = lockScreenRotationEnabled,
-                            onToggleLockRotation = onToggleLockRotation,
-                            onEnforceGboardDeX = onEnforceGboardDeX,
-                            onLockScreenNow = onLockScreenNow,
-                            onOpenWallpaperPicker = onOpenWallpaperPicker,
-                            onOpenDefaultLauncherPrompt = onOpenDefaultLauncherPrompt,
-                            isDefaultLauncher = isDefaultLauncher,
-                            hingeHapticsEnabled = hingeHapticsEnabled,
-                            foldCloseModeLabel = foldCloseModeLabel,
-                            onToggleHingeHaptics = { onToggleHingeHaptics?.invoke() },
-                            onCycleFoldCloseMode = { onCycleFoldCloseActionMode?.invoke() },
-                            unfoldModeLabel = unfoldModeLabel,
-                            onCycleUnfoldMode = { onCycleUnfoldActionMode?.invoke() },
-                            tailscaleIp = tailscaleIp,
-                            lanIp = lanIp,
-                            modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.92f)
-                        )
-                    } else {
-                        NativeDashboardCards(
-                            postureState = postureState,
-                            batteryPct = batteryPct,
-                            isCharging = isCharging,
-                            isAccessibilityActive = isAccessibilityActive,
-                            isWriteSecureSettingsGranted = isWriteSecureSettingsGranted,
-                            lockScreenRotationEnabled = lockScreenRotationEnabled,
-                            onToggleLockRotation = onToggleLockRotation,
-                            onEnforceGboardDeX = onEnforceGboardDeX,
-                            onLockScreenNow = onLockScreenNow,
-                            onOpenWallpaperPicker = onOpenWallpaperPicker,
-                            onOpenDefaultLauncherPrompt = onOpenDefaultLauncherPrompt,
-                            isDefaultLauncher = isDefaultLauncher,
-                            quickNoteText = quickNoteText,
-                            onQuickNoteChange = onQuickNoteChange,
-                            hingeAngleDegrees = postureState.hingeAngleDegrees,
-                            customAppPairs = appPairs,
-                            onLaunchAppPair = onLaunchAppPair,
-                            spatialTiltState = spatialTilt,
-                            onOpenSpotlight = onOpenSearch,
-                            onToggleRadialArc = {
-                                arcStartExpanded = true
-                                arcTriggerGeneration++
-                            },
-                            hingeHapticsEnabled = hingeHapticsEnabled,
-                            foldCloseModeLabel = foldCloseModeLabel,
-                            onToggleHingeHaptics = { onToggleHingeHaptics?.invoke() },
-                            onCycleFoldCloseMode = { onCycleFoldCloseActionMode?.invoke() },
-                            unfoldModeLabel = unfoldModeLabel,
-                            onCycleUnfoldMode = { onCycleUnfoldActionMode?.invoke() },
-                            tailscaleIp = tailscaleIp,
-                            lanIp = lanIp
-                        )
-                    }
-
-                    // Pinned Inner Screen Favorites Card (hidden in Minimal Focus mode)
-                    if (!isFocusMode) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.95f)
-                                .clip(RoundedCornerShape(22.dp))
-                                .background(surfaceBg)
-                                .border(1.dp, FoldLauncherColors.GlassBorder, RoundedCornerShape(22.dp))
-                                .padding(14.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "INNER DISPLAY FAVORITES",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = FoldLauncherColors.ElectricCyan
-                                )
-                                if (onCreateSampleAppPair != null) {
-                                    Text(
-                                        text = "+ Save Split Pair",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = FoldLauncherColors.CyanBright,
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(10.dp))
-                                            .background(FoldLauncherColors.CyanGlow)
-                                            .clickable(onClick = onCreateSampleAppPair)
-                                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                                    )
-                                }
-                            }
-
-                            @OptIn(ExperimentalLayoutApi::class)
-                            FlowRow(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                pinnedInnerApps.take(10).forEach { app ->
-                                    AppIconTile(
-                                        app = app,
-                                        iconShapePreset = iconShapePreset,
-                                        showLabel = true,
-                                        compact = false,
-                                        onClick = { onAppClick(app) },
-                                        onLongClick = { onAppLongClick(app) },
-                                        modifier = Modifier.width(74.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // Smart Folders Row (if folders are configured and not in Minimal Focus mode)
-                    if (!isFocusMode && folders.isNotEmpty()) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.85f)
-                                .clip(RoundedCornerShape(22.dp))
-                                .background(surfaceBg)
-                                .border(1.dp, FoldLauncherColors.GlassBorder, RoundedCornerShape(22.dp))
-                                .padding(14.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text(
-                                text = "SMART FOLDERS",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = FoldLauncherColors.CyanBright
-                            )
-                            folders.forEach { folder ->
-                                val resolved = folder.packageNames.mapNotNull { allAppsMap[it] }
-                                if (resolved.isNotEmpty()) {
-                                    Text(
-                                        text = "${folder.name} (${resolved.size})",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = FoldLauncherColors.TextSecondary
-                                    )
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .horizontalScroll(rememberScrollState()),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        resolved.forEach { app ->
-                                            AppIconTile(
-                                                app = app,
-                                                iconShapePreset = iconShapePreset,
-                                                showLabel = true,
-                                                compact = true,
-                                                onClick = { onAppClick(app) },
-                                                onLongClick = { onAppLongClick(app) },
-                                                modifier = Modifier.width(64.dp)
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Physical Hinge / Crease Safe Gutter
-                Spacer(modifier = Modifier.width(hingeGapDp))
-
-                // Right Hemisphere: Categorized 120Hz All-Apps Matrix + AlphabetWaveScrubber
-                Column(
-                    modifier = Modifier
-                        .weight(0.54f)
-                        .fillMaxHeight()
-                        .spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.9f)
-                        .clip(RoundedCornerShape(24.dp))
-                        .background(surfaceBg)
-                        .border(1.dp, FoldLauncherColors.GlassBorder, RoundedCornerShape(24.dp))
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    // Category Filter Bar (All, VC & Dev, Frequent, System + categories)
-                    AppDrawerCategoryPillsBar(
-                        categories = categories,
-                        selectedCategory = selectedCategory,
-                        onSelectCategory = { selectedCategory = it }
+                    .weight(1f)
+                    .launcherGestures(
+                        onSwipeUpSearch = triggerInstantSearch,
+                        onSwipeDownNotifications = onExpandNotifications,
+                        onDoubleTapLock = onDoubleTapLock,
+                        onLongPressHomeSettings = onOpenSettings
                     )
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        LazyVerticalGrid(
-                            state = gridState,
-                            columns = GridCells.Adaptive(minSize = 76.dp),
-                            contentPadding = PaddingValues(4.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxHeight()
-                        ) {
-                            items(
-                                items = filteredApps,
-                                key = { "${it.packageName}/${it.activityName}" }
-                            ) { app ->
-                                DrawerAppTileWithDockPin(
-                                    app = app,
-                                    isDockPinned = app.isDockPinned || app.packageName in pinnedDockPackages,
-                                    iconShapePreset = iconShapePreset,
-                                    compact = false,
-                                    onClick = { onAppClick(app) },
-                                    onLongClick = { onAppLongClick(app) },
-                                    onTogglePinDock = { onTogglePinDockPackage?.invoke(app.packageName) }
-                                )
-                            }
-                        }
-
-                        AlphabetWaveScrubber(
-                            letters = letters,
-                            activeLetter = activeLetter,
-                            onLetterSelected = { letter ->
-                                activeLetter = letter
-                                val idx = filteredApps.indexOfFirst { it.firstLetter == letter }
-                                if (idx >= 0) {
-                                    coroutineScope.launch {
-                                        gridState.scrollToItem(idx)
-                                    }
-                                }
-                            }
+            ) {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(6),
+                    userScrollEnabled = false,
+                    contentPadding = PaddingValues(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(
+                        items = homeGridApps,
+                        key = { "${it.packageName}/${it.activityName}" }
+                    ) { app ->
+                        AppIconTile(
+                            app = app,
+                            iconShapePreset = iconShapePreset,
+                            showLabel = true,
+                            compact = false,
+                            onClick = { onAppClick(app) },
+                            onLongClick = { onAppLongClick(app) }
                         )
                     }
                 }
             }
 
-            // 3. Persistent Floating PC-Style Taskbar Dock
+            // 4. Subtle One UI "Swipe up for apps & search" Pill + Bottom Favorites Dock
+            OneUiSwipeUpSearchPill(onTriggerSearch = triggerInstantSearch)
+
             PersistentTaskbarDock(
                 dockApps = dockApps,
                 recentApps = recentApps,
@@ -1676,18 +1175,17 @@ fun UnfoldedInnerDashboardScreen(
                 onAppClick = onAppClick,
                 onAppLongClick = onAppLongClick,
                 onLaunchAppPair = onLaunchAppPair,
-                onOpenAllAppsSearch = onOpenSearch
+                onOpenAllAppsSearch = triggerInstantSearch
             )
         }
 
-        // One-Handed Radial Thumb Arc ("Arc Deck") Overlay for thumb corner access on wide screens
         key(arcTriggerGeneration, arcRightHanded) {
             RadialThumbArcOverlay(
                 apps = radialArcApps,
                 iconShapePreset = iconShapePreset,
                 onAppClick = onAppClick,
                 onAppLongClick = onAppLongClick,
-                onOpenSearch = onOpenSearch,
+                onOpenSearch = triggerInstantSearch,
                 initialRightHanded = arcRightHanded,
                 initiallyExpanded = arcStartExpanded
             )
@@ -1696,11 +1194,7 @@ fun UnfoldedInnerDashboardScreen(
 }
 
 /**
- * Z Fold 8 Half-Opened Horizontal Flex / Tabletop Posture Home Screen.
- * Splits the screen across the horizontal crease into:
- * - Upper viewing/status hemisphere with TopStatusBar, VC Command Center, and NativeDashboardCards
- * - Lower tactile Control Deck featuring the interactive 120Hz FlexVirtualTrackpadCard (laser cursor,
- *   left/right click, VC deck, split-screen trigger), App Grid toggle, and PersistentTaskbarDock.
+ * v0.6.0 Streamlined One UI-Matched Half-Opened Horizontal Flex / Tabletop Posture Home Screen.
  */
 @Composable
 fun FlexTabletopHomeScreen(
@@ -1725,6 +1219,12 @@ fun FlexTabletopHomeScreen(
     onCycleFoldCloseActionMode: (() -> Unit)? = null,
     unfoldModeLabel: String = "🖥️ Inner Cockpit",
     onCycleUnfoldActionMode: (() -> Unit)? = null,
+    isWirelessAdbEnabled: Boolean = false,
+    wirelessAdbPort: Int? = null,
+    onToggleWirelessAdb: (() -> Unit)? = null,
+    onOpenWirelessAdbSettings: (() -> Unit)? = null,
+    onToggleTailscaleVpn: (() -> Unit)? = null,
+    onOpenTailscaleApp: (() -> Unit)? = null,
     tailscaleIp: String? = null,
     lanIp: String? = null,
     allApps: List<AppEntry>,
@@ -1759,284 +1259,128 @@ fun FlexTabletopHomeScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val searchFocusRequester = remember { FocusRequester() }
     val vcMonitor = remember(context) { VcBackgroundMonitor.getInstance(context) }
     val vcSummary by vcMonitor.liveSummary.collectAsState()
     val vcConfig by vcMonitor.config.collectAsState()
     val vcFeedback by vcMonitor.lastSendFeedback.collectAsState()
-    val spatialTilt = rememberSpatialTiltState(enabled = true, hingeAngleFactor = 0.55f)
     val allAppsMap = remember(allApps) { allApps.associateBy { it.packageName } }
 
-    var showVirtualTrackpad by remember { mutableStateOf(true) }
-    var selectedCategory by remember { mutableStateOf("All") }
-    var showLockCockpit by remember { mutableStateOf(false) }
+    var showVirtualTrackpad by remember { mutableStateOf(false) }
+    var vcExpanded by remember { mutableStateOf(false) }
 
-    LaunchedEffect(workspaceProfile) {
-        if (workspaceProfile == WorkspaceProfile.VC_DEV) {
-            selectedCategory = "VC & Dev"
+    val triggerInstantSearch = remember(onOpenSearch, keyboardController) {
+        {
+            onOpenSearch()
+            try {
+                searchFocusRequester.requestFocus()
+            } catch (_: Exception) {
+            }
+            keyboardController?.show()
+            Unit
         }
     }
 
-    val isPureOled = workspaceProfile == WorkspaceProfile.OLED_BLACK
-    val isFocusMode = workspaceProfile == WorkspaceProfile.FOCUS
-    val isVcDevMode = workspaceProfile == WorkspaceProfile.VC_DEV
-
-    val deckApps = remember(favoriteApps, allApps) {
-        if (favoriteApps.isNotEmpty()) {
-            (favoriteApps + allApps).distinctBy { it.packageName }
-        } else {
-            allApps
-        }
-    }
-    val categories = remember(deckApps) {
-        (CORE_DRAWER_CATEGORY_PILLS + deckApps.map { it.category }.distinct().sorted()).distinct()
-    }
-    val filteredDeckApps = remember(deckApps, selectedCategory) {
-        filterAppsByDrawerPill(deckApps, selectedCategory)
+    val deckApps = remember(favoriteApps, recentApps, allApps) {
+        (favoriteApps + recentApps + allApps).distinctBy { it.packageName }.take(18)
     }
 
     Column(
         modifier = modifier
             .fillMaxSize()
-            .then(if (isPureOled) Modifier.background(FoldLauncherColors.OledBlack) else Modifier)
+            .statusBarsPadding()
             .launcherGestures(
-                onSwipeUpSearch = onOpenSearch,
+                onSwipeUpSearch = triggerInstantSearch,
                 onSwipeDownNotifications = onExpandNotifications,
                 onDoubleTapLock = onDoubleTapLock,
                 onLongPressHomeSettings = onOpenSettings
             )
             .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // Upper Viewing Hemisphere (above horizontal fold crease)
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(0.46f)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+        // 1. Top Row: Two side-by-side Wireless Debugging & Tailscale Quick-Toggle Pills
+        OneUiConnectivityPillsRow(
+            isWirelessAdbEnabled = isWirelessAdbEnabled,
+            wirelessAdbPort = wirelessAdbPort,
+            tailscaleIp = tailscaleIp,
+            lanIp = lanIp,
+            onToggleWirelessAdb = { onToggleWirelessAdb?.invoke() },
+            onOpenWirelessAdbSettings = { onOpenWirelessAdbSettings?.invoke() },
+            onToggleTailscale = { onToggleTailscaleVpn?.invoke() },
+            onOpenTailscaleApp = { onOpenTailscaleApp?.invoke() }
+        )
+
+        // 2. Compact 1-Row VC Bar + Trackpad toggle
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            TopStatusBar(
-                postureState = postureState,
-                batteryPct = batteryPct,
-                isCharging = isCharging,
-                nextEventText = nextEventText,
-                isDeXConnected = isDeXConnected,
-                hingeAngleDegrees = postureState.hingeAngleDegrees,
-                postureOverrideLabel = postureOverride.shortLabel,
-                onCyclePostureOverride = onCyclePostureOverride,
-                onClockClick = onClockClick,
-                onSearchPillClick = onOpenSearch,
-                onSettingsClick = onOpenSettings,
-                modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.8f)
+            OneUiCompactVcBar(
+                vcSummary = vcSummary,
+                expanded = vcExpanded,
+                onToggleExpand = { vcExpanded = !vcExpanded },
+                onOpenVc = { vcMonitor.launchVc(null) },
+                onSplitVcTermux = { vcMonitor.launchVcSplitScreen() },
+                onOpenSettings = onOpenSettings,
+                modifier = Modifier.weight(1f)
             )
-
-            WorkspaceProfilePillBar(
-                workspaceProfile = workspaceProfile,
-                onSelectWorkspaceProfile = { profile ->
-                    onSelectWorkspaceProfile?.invoke(profile)
-                },
-                isTorchEnabled = isTorchEnabled,
-                onToggleTorch = onToggleTorch,
-                isDualScreenPresentationActive = isDualScreenPresentationActive,
-                onToggleDualScreenPresentation = onToggleDualScreenPresentation,
-                isKeyguardLocked = isKeyguardLocked,
-                showLockCockpit = showLockCockpit,
-                onToggleLockCockpit = { showLockCockpit = !showLockCockpit },
-                hingeHapticsEnabled = hingeHapticsEnabled,
-                onToggleHingeHaptics = onToggleHingeHaptics,
-                foldCloseModeLabel = foldCloseModeLabel,
-                onCycleFoldCloseActionMode = onCycleFoldCloseActionMode,
-                unfoldModeLabel = unfoldModeLabel,
-                onCycleUnfoldActionMode = onCycleUnfoldActionMode,
-                tailscaleIp = tailscaleIp,
-                lanIp = lanIp
-            )
-
-            if (isKeyguardLocked || showLockCockpit) {
-                LockScreenCockpitCard(
-                    isKeyguardLocked = isKeyguardLocked,
-                    isTorchEnabled = isTorchEnabled,
-                    onToggleTorch = {
-                        if (onToggleTorch != null) onToggleTorch()
-                        else SystemTweaker.toggleTorch(context, isTorchEnabled)
-                    },
-                    onUnlockAndSplitVcTermux = {
-                        if (onUnlockAndSplitVcTermux != null) onUnlockAndSplitVcTermux()
-                        else performUnlockAndSplitFallback(context)
-                    },
-                    pureOledBlack = isPureOled
-                )
-            }
-
-            if (postureState.isTentMode) {
-                TentModeStandbyBannerCard(
-                    hingeAngleDegrees = postureState.hingeAngleDegrees,
-                    batteryPct = batteryPct,
-                    isCharging = isCharging,
-                    nextEventText = nextEventText,
-                    onExitTentMode = { onSetPostureOverride?.invoke(PostureOverride.AUTO) }
-                )
-            }
-
-            if (isFocusMode) {
-                VcCommandCenterCard(
-                    summary = vcSummary,
-                    config = vcConfig,
-                    lastSendFeedback = vcFeedback,
-                    onOpenVc = { sessionId -> vcMonitor.launchVc(sessionId) },
-                    onSplitScreenVc = { vcMonitor.launchVcSplitScreen() },
-                    onRefreshVc = { vcMonitor.refreshNow() },
-                    onSendQuickMessage = { sessionId, text, steerIfWorking ->
-                        vcMonitor.sendQuickMessage(sessionId, text, steerIfWorking)
-                    },
-                    onMarkAttentionRead = { eventId, markAll ->
-                        vcMonitor.markAttentionRead(eventId, markAll)
-                    },
-                    onUpdateConfig = { serverUrl, authToken, monitorEnabled, notifyBackground ->
-                        vcMonitor.updateConfig(serverUrl, authToken, monitorEnabled, notifyBackground)
-                    },
-                    modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 1.0f)
-                )
-            } else if (isVcDevMode) {
-                VcCommandCenterCard(
-                    summary = vcSummary,
-                    config = vcConfig,
-                    lastSendFeedback = vcFeedback,
-                    onOpenVc = { sessionId -> vcMonitor.launchVc(sessionId) },
-                    onSplitScreenVc = { vcMonitor.launchVcSplitScreen() },
-                    onRefreshVc = { vcMonitor.refreshNow() },
-                    onSendQuickMessage = { sessionId, text, steerIfWorking ->
-                        vcMonitor.sendQuickMessage(sessionId, text, steerIfWorking)
-                    },
-                    onMarkAttentionRead = { eventId, markAll ->
-                        vcMonitor.markAttentionRead(eventId, markAll)
-                    },
-                    onUpdateConfig = { serverUrl, authToken, monitorEnabled, notifyBackground ->
-                        vcMonitor.updateConfig(serverUrl, authToken, monitorEnabled, notifyBackground)
-                    },
-                    modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 1.1f)
-                )
-                AppPairsQuickCard(
-                    customAppPairs = appPairs,
-                    onLaunchAppPair = onLaunchAppPair,
-                    modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.95f)
-                )
-                SystemQuickTileWidget(
-                    isAccessibilityActive = isAccessibilityActive,
-                    isWriteSecureSettingsGranted = isWriteSecureSettingsGranted,
-                    lockScreenRotationEnabled = lockScreenRotationEnabled,
-                    onToggleLockRotation = onToggleLockRotation,
-                    onEnforceGboardDeX = onEnforceGboardDeX,
-                    onLockScreenNow = onLockScreenNow,
-                    onOpenWallpaperPicker = onOpenWallpaperPicker,
-                    onOpenDefaultLauncherPrompt = onOpenDefaultLauncherPrompt,
-                    isDefaultLauncher = isDefaultLauncher,
-                    hingeHapticsEnabled = hingeHapticsEnabled,
-                    foldCloseModeLabel = foldCloseModeLabel,
-                    onToggleHingeHaptics = { onToggleHingeHaptics?.invoke() },
-                    onCycleFoldCloseMode = { onCycleFoldCloseActionMode?.invoke() },
-                    unfoldModeLabel = unfoldModeLabel,
-                    onCycleUnfoldMode = { onCycleUnfoldActionMode?.invoke() },
-                    tailscaleIp = tailscaleIp,
-                    lanIp = lanIp,
-                    modifier = Modifier.spatialParallaxCard(tilt = spatialTilt, depthLayer = 0.88f)
-                )
-            } else {
-                NativeDashboardCards(
-                    postureState = postureState,
-                    batteryPct = batteryPct,
-                    isCharging = isCharging,
-                    isAccessibilityActive = isAccessibilityActive,
-                    isWriteSecureSettingsGranted = isWriteSecureSettingsGranted,
-                    lockScreenRotationEnabled = lockScreenRotationEnabled,
-                    onToggleLockRotation = onToggleLockRotation,
-                    onEnforceGboardDeX = onEnforceGboardDeX,
-                    onLockScreenNow = onLockScreenNow,
-                    onOpenWallpaperPicker = onOpenWallpaperPicker,
-                    onOpenDefaultLauncherPrompt = onOpenDefaultLauncherPrompt,
-                    isDefaultLauncher = isDefaultLauncher,
-                    quickNoteText = quickNoteText,
-                    onQuickNoteChange = onQuickNoteChange,
-                    hingeAngleDegrees = postureState.hingeAngleDegrees,
-                    customAppPairs = appPairs,
-                    onLaunchAppPair = onLaunchAppPair,
-                    spatialTiltState = spatialTilt,
-                    onOpenSpotlight = onOpenSearch,
-                    hingeHapticsEnabled = hingeHapticsEnabled,
-                    foldCloseModeLabel = foldCloseModeLabel,
-                    onToggleHingeHaptics = { onToggleHingeHaptics?.invoke() },
-                    onCycleFoldCloseMode = { onCycleFoldCloseActionMode?.invoke() },
-                    unfoldModeLabel = unfoldModeLabel,
-                    onCycleUnfoldMode = { onCycleUnfoldActionMode?.invoke() },
-                    tailscaleIp = tailscaleIp,
-                    lanIp = lanIp
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xCC1C1C22))
+                    .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(16.dp))
+                    .clickable { showVirtualTrackpad = !showVirtualTrackpad }
+                    .padding(horizontal = 10.dp, vertical = 9.dp)
+            ) {
+                Text(
+                    text = if (showVirtualTrackpad) "⊞ Grid" else "⊹ Pad",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
                 )
             }
         }
 
-        // Horizontal Hinge Crease Indicator Bar
+        if (vcExpanded) {
+            VcCommandCenterCard(
+                summary = vcSummary,
+                config = vcConfig,
+                lastSendFeedback = vcFeedback,
+                onOpenVc = { sessionId -> vcMonitor.launchVc(sessionId) },
+                onSplitScreenVc = { vcMonitor.launchVcSplitScreen() },
+                onRefreshVc = { vcMonitor.refreshNow() },
+                onSendQuickMessage = { sessionId, text, steerIfWorking ->
+                    vcMonitor.sendQuickMessage(sessionId, text, steerIfWorking)
+                },
+                onMarkAttentionRead = { eventId, markAll ->
+                    vcMonitor.markAttentionRead(eventId, markAll)
+                },
+                onUpdateConfig = { serverUrl, authToken, monitorEnabled, notifyBackground ->
+                    vcMonitor.updateConfig(serverUrl, authToken, monitorEnabled, notifyBackground)
+                }
+            )
+        }
+
+        // 3. Main Area: Clean 6-Column One UI Home App Grid or Flex Trackpad
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(6.dp)
-                .clip(RoundedCornerShape(3.dp))
-                .background(FoldLauncherColors.HingeGuideTint)
-        )
-
-        // Lower Tactile Control Deck Hemisphere (below horizontal fold crease)
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(0.54f),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "FLEX TABLETOP CONTROL DECK",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = FoldLauncherColors.ElectricCyan
+                .weight(1f)
+                .launcherGestures(
+                    onSwipeUpSearch = triggerInstantSearch,
+                    onSwipeDownNotifications = onExpandNotifications,
+                    onDoubleTapLock = onDoubleTapLock,
+                    onLongPressHomeSettings = onOpenSettings
                 )
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(
-                                if (showVirtualTrackpad) FoldLauncherColors.CyanGlow
-                                else FoldLauncherColors.GlassSurfaceHighlight
-                            )
-                            .border(
-                                1.dp,
-                                if (showVirtualTrackpad) FoldLauncherColors.ElectricCyan
-                                else FoldLauncherColors.GlassBorder,
-                                RoundedCornerShape(10.dp)
-                            )
-                            .clickable { showVirtualTrackpad = !showVirtualTrackpad }
-                            .padding(horizontal = 9.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            text = if (showVirtualTrackpad) "⊞ Switch to App Grid" else "⊹ Switch to Trackpad",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = FoldLauncherColors.CyanBright
-                        )
-                    }
-                }
-            }
-
+        ) {
             if (showVirtualTrackpad) {
                 FlexVirtualTrackpadCard(
                     favoriteApps = deckApps,
                     onLaunchApp = onAppClick,
                     onContextApp = onAppLongClick,
-                    onOpenSearch = onOpenSearch,
+                    onOpenSearch = triggerInstantSearch,
                     onTriggerSplitScreen = {
                         val firstPair = appPairs.firstOrNull()
                         if (firstPair != null) {
@@ -2049,57 +1393,48 @@ fun FlexTabletopHomeScreen(
                         vcMonitor.launchVc(null)
                     },
                     hingeAngleDegrees = postureState.hingeAngleDegrees,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.fillMaxSize()
                 )
             } else {
-                AppDrawerCategoryPillsBar(
-                    categories = categories,
-                    selectedCategory = selectedCategory,
-                    onSelectCategory = { selectedCategory = it }
-                )
-
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(postureState.recommendedGridColumns.coerceAtLeast(5)),
-                    contentPadding = PaddingValues(4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .clip(RoundedCornerShape(22.dp))
-                        .background(FoldLauncherColors.GlassSurface)
-                        .border(1.dp, FoldLauncherColors.GlassBorder, RoundedCornerShape(22.dp))
-                        .padding(8.dp)
+                    columns = GridCells.Fixed(6),
+                    userScrollEnabled = false,
+                    contentPadding = PaddingValues(vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxSize()
                 ) {
                     items(
-                        items = filteredDeckApps,
+                        items = deckApps,
                         key = { "${it.packageName}/${it.activityName}" }
                     ) { app ->
-                        DrawerAppTileWithDockPin(
+                        AppIconTile(
                             app = app,
-                            isDockPinned = app.isDockPinned || app.packageName in pinnedDockPackages,
                             iconShapePreset = iconShapePreset,
+                            showLabel = true,
                             compact = true,
                             onClick = { onAppClick(app) },
-                            onLongClick = { onAppLongClick(app) },
-                            onTogglePinDock = { onTogglePinDockPackage?.invoke(app.packageName) }
+                            onLongClick = { onAppLongClick(app) }
                         )
                     }
                 }
             }
-
-            PersistentTaskbarDock(
-                dockApps = dockApps,
-                recentApps = recentApps,
-                appPairs = appPairs,
-                allAppsMap = allAppsMap,
-                iconShapePreset = iconShapePreset,
-                onAppClick = onAppClick,
-                onAppLongClick = onAppLongClick,
-                onLaunchAppPair = onLaunchAppPair,
-                onOpenAllAppsSearch = onOpenSearch
-            )
         }
+
+        // 4. Subtle One UI "Swipe up for apps & search" Pill + Bottom Favorites Dock
+        OneUiSwipeUpSearchPill(onTriggerSearch = triggerInstantSearch)
+
+        PersistentTaskbarDock(
+            dockApps = dockApps,
+            recentApps = recentApps,
+            appPairs = appPairs,
+            allAppsMap = allAppsMap,
+            iconShapePreset = iconShapePreset,
+            onAppClick = onAppClick,
+            onAppLongClick = onAppLongClick,
+            onLaunchAppPair = onLaunchAppPair,
+            onOpenAllAppsSearch = triggerInstantSearch
+        )
     }
 }
 

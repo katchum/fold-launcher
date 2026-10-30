@@ -80,6 +80,26 @@ data class NetworkTelemetrySnapshot(
         }
 }
 
+data class WirelessAdbSnapshot(
+    val isEnabled: Boolean = false,
+    val port: Int? = null,
+    val ipAddress: String? = null
+) {
+    val connectAddress: String?
+        get() = if (!ipAddress.isNullOrBlank() && port != null && port > 0) {
+            "$ipAddress:$port"
+        } else {
+            ipAddress
+        }
+
+    val statusLabel: String
+        get() = if (isEnabled) {
+            if (port != null && port > 0) "On • :$port" else "On"
+        } else {
+            "Off"
+        }
+}
+
 object SystemTweaker {
 
     const val SAMSUNG_HONEYBOARD_PACKAGE = "com.samsung.android.honeyboard"
@@ -90,6 +110,11 @@ object SystemTweaker {
     const val VC_PREVIEW_PACKAGE = "dev.agentconversation.preview"
     const val VC_TALK_ACTION = "dev.agentconversation.widget.TALK"
     const val DEFAULT_VC_HOST_URL = "http://100.96.188.90:8080"
+
+    const val TAILSCALE_PACKAGE = "com.tailscale.ipn"
+    const val TAILSCALE_RECEIVER = "com.tailscale.ipn.IPNReceiver"
+    const val TAILSCALE_ACTION_CONNECT = "com.tailscale.ipn.CONNECT_VPN"
+    const val TAILSCALE_ACTION_DISCONNECT = "com.tailscale.ipn.DISCONNECT_VPN"
 
     const val EXTRA_LOCK_SCREEN_COCKPIT = "com.xsun.foldlauncher.EXTRA_LOCK_SCREEN_COCKPIT"
 
@@ -106,6 +131,7 @@ object SystemTweaker {
         "org.mozilla.firefox"
     )
 
+    private const val KEY_ADB_WIFI_ENABLED = "adb_wifi_enabled"
     private const val KEY_LOCK_SCREEN_ALLOW_ROTATION = "lock_screen_allow_rotation"
     private const val KEY_SUB_DISPLAY_ROTATION_LOCK = "sub_display_accelerometer_rotation"
     private const val KEY_DEX_ON_SCREEN_KEYBOARD_LOCATION = "dex_on_screen_keyboard_location"
@@ -119,6 +145,9 @@ object SystemTweaker {
 
     private val _isTorchActive = MutableStateFlow(false)
     val isTorchActive: StateFlow<Boolean> = _isTorchActive.asStateFlow()
+
+    private val _wirelessAdbFlow = MutableStateFlow(false)
+    val wirelessAdbFlow: StateFlow<Boolean> = _wirelessAdbFlow.asStateFlow()
 
     private val _hingeDetentHapticsEnabled = MutableStateFlow(true)
     val hingeDetentHapticsEnabled: StateFlow<Boolean> = _hingeDetentHapticsEnabled.asStateFlow()
@@ -139,6 +168,7 @@ object SystemTweaker {
 
         val rawUnfold = prefs.getString(KEY_UNFOLD_ACTION_MODE, UnfoldActionMode.INNER_DASHBOARD.key)
         _unfoldActionMode.value = UnfoldActionMode.fromKey(rawUnfold)
+        _wirelessAdbFlow.value = isWirelessAdbEnabled(context)
     }
 
     fun setHingeDetentHapticsEnabled(context: Context, enabled: Boolean) {
@@ -490,6 +520,132 @@ object SystemTweaker {
         }
     }
 
+    /**
+     * Checks whether Android Wireless Debugging (`adb_wifi_enabled`) is currently active.
+     */
+    fun isWirelessAdbEnabled(context: Context): Boolean {
+        val enabled = try {
+            Settings.Global.getInt(context.contentResolver, KEY_ADB_WIFI_ENABLED, 0) == 1
+        } catch (_: Exception) {
+            false
+        }
+        _wirelessAdbFlow.value = enabled
+        return enabled
+    }
+
+    /**
+     * Enables or disables Android Wireless Debugging (`adb_wifi_enabled`) via `WRITE_SECURE_SETTINGS`.
+     */
+    fun setWirelessAdbEnabled(context: Context, enabled: Boolean): Boolean {
+        if (!hasWriteSecureSettings(context)) return false
+        return try {
+            Settings.Global.putInt(
+                context.contentResolver,
+                KEY_ADB_WIFI_ENABLED,
+                if (enabled) 1 else 0
+            )
+            _wirelessAdbFlow.value = enabled
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Toggles Android Wireless Debugging (`adb_wifi_enabled`) and returns the resulting state.
+     */
+    fun toggleWirelessAdb(context: Context): Boolean {
+        val current = isWirelessAdbEnabled(context)
+        val target = !current
+        return if (setWirelessAdbEnabled(context, target)) {
+            target
+        } else {
+            current
+        }
+    }
+
+    /**
+     * Reads the active Wireless ADB TLS/TCP port (`service.adb.tls.port` or `service.adb.tcp.port`)
+     * via `android.os.SystemProperties`.
+     */
+    @SuppressLint("PrivateApi")
+    fun readWirelessAdbPort(): Int? {
+        return try {
+            val sysPropClass = Class.forName("android.os.SystemProperties")
+            val getMethod = sysPropClass.getMethod("get", String::class.java, String::class.java)
+            for (prop in listOf("service.adb.tls.port", "service.adb.tcp.port")) {
+                val raw = (getMethod.invoke(null, prop, "") as? String)?.trim()
+                val port = raw?.toIntOrNull()
+                if (port != null && port > 0) {
+                    return port
+                }
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Builds a live [WirelessAdbSnapshot] combining `adb_wifi_enabled`, TLS/TCP port, and Tailscale/LAN IP.
+     */
+    fun readWirelessAdbSnapshot(context: Context): WirelessAdbSnapshot {
+        val enabled = isWirelessAdbEnabled(context)
+        val port = if (enabled) readWirelessAdbPort() else null
+        val net = readNetworkTelemetry(context)
+        return WirelessAdbSnapshot(
+            isEnabled = enabled,
+            port = port,
+            ipAddress = net.primaryIp
+        )
+    }
+
+    /**
+     * Opens Developer Options / Wireless Debugging settings screen.
+     */
+    fun openWirelessDebuggingSettings(context: Context) {
+        try {
+            val intent = Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Toggles Tailscale (`com.tailscale.ipn`) VPN connection via its explicit `IPNReceiver` broadcast
+     * (`CONNECT_VPN` / `DISCONNECT_VPN`), falling back to opening the Tailscale app if not installed
+     * or if broadcast dispatch fails.
+     */
+    fun toggleTailscaleVpn(context: Context, currentlyConnected: Boolean): Boolean {
+        val action = if (currentlyConnected) TAILSCALE_ACTION_DISCONNECT else TAILSCALE_ACTION_CONNECT
+        return try {
+            val broadcastIntent = Intent(action).apply {
+                setClassName(TAILSCALE_PACKAGE, TAILSCALE_RECEIVER)
+            }
+            context.sendBroadcast(broadcastIntent)
+            true
+        } catch (_: Exception) {
+            openTailscaleApp(context)
+        }
+    }
+
+    /**
+     * Launches the installed Tailscale app (`com.tailscale.ipn`).
+     */
+    fun openTailscaleApp(context: Context): Boolean {
+        return try {
+            val intent = context.packageManager.getLaunchIntentForPackage(TAILSCALE_PACKAGE)?.apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            } ?: return false
+            context.startActivity(intent)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     fun hasWriteSecureSettings(context: Context): Boolean {
         return ContextCompat.checkSelfPermission(
             context,
@@ -731,7 +887,7 @@ object SystemTweaker {
         val r2 = setFoldCloseStayAwake(context, true)
         val r3 = setLockScreenRotation(context, true)
         val r4 = setLockScreenShortcutsToVcAndLauncher(context)
-        FoldAccessibilityService.setLockScreenHudEnabled(context, true)
+        FoldAccessibilityService.setLockScreenHudEnabled(context, false)
         return r1 || r2 || r3 || r4
     }
 

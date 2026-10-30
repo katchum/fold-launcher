@@ -36,13 +36,14 @@
         <package android:name="com.termux" />
         <package android:name="com.termux.api" />
         <package android:name="com.android.chrome" />
+        <package android:name="com.tailscale.ipn" />
     </queries>
 
     <application
         android:allowBackup="true"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.DeviceDefault.Wallpaper.NoTitleBar"
+        android:theme="@style/Theme.FoldLauncher"
         android:usesCleartextTraffic="true">
 
         <activity

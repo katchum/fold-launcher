@@ -1,6 +1,6 @@
-# Fold8 Launcher (`com.xsun.foldlauncher`) — `v0.5.0`
+# Fold8 Launcher (`com.xsun.foldlauncher`) — `v0.6.0` (Streamlined One UI-Matched Edition)
 
-**Ultra-Fast, Zero-Bloat 120Hz Adaptive Home Launcher, Unfold-Open Auto-Split Continuity, Tailscale Mesh VPN Telemetry, Scratchpad Context Injector & VC Squad Command Center for Samsung Galaxy Z Fold 8 and Android Slab Phones**
+**Ultra-Fast, Zero-Bloat 120Hz One UI-Matched Home Launcher with 1-Tap Wireless Debugging & Tailscale Quick-Toggles, Real System Wallpaper, Zero Lock-Screen Hijacking, Instant Swipe-Up App Search & VC Command Bar for Samsung Galaxy Z Fold 8 and Android Slab Phones**
 
 [![Android CI](https://github.com/katchum/fold-launcher/actions/workflows/android-ci.yml/badge.svg)](https://github.com/katchum/fold-launcher/actions/workflows/android-ci.yml)
 
@@ -10,7 +10,27 @@ Fold8 Launcher is a lightweight, 120Hz-native Jetpack Compose home screen replac
 
 ---
 
-## What's New in `v0.5.0`
+## What's New in `v0.6.0` (Streamlined One UI-Matched Edition)
+
+### 1. Real System Wallpaper & Zero Lock-Screen Hijacking (`Theme.FoldLauncher`, `MainActivity`, `FoldAccessibilityService`)
+- **Seamless Real System Wallpaper (`windowShowWallpaper = true`, `windowBackground = @android:color/transparent`)**: Renders the user's real Samsung One UI wallpaper directly behind the launcher with a subtle translucent tint (`Color.Black.copy(alpha = 0.16f)`) for zero visual flash when unlocking from the One UI Lock Screen.
+- **Zero Lock-Screen Hijacking**: Removed `setShowWhenLocked(true)` / `setTurnScreenOn(true)` and disabled lock-screen accessibility overlays so the native Samsung One UI Lock Screen remains 100% untouched.
+- **Native System Status Bar Only**: Respects `statusBarsPadding()` and uses Android's native top status bar/clock with zero duplicate launcher clock header.
+
+### 2. One UI 9.0 Wireless Debugging & Tailscale Quick-Toggle Pills (`OneUiConnectivityPillsRow`, `WirelessAdbSnapshot`)
+- **Left Pill — Wireless Debugging (`adb_wifi_enabled`)**: 1-tap toggle via `Settings.Global.putInt(contentResolver, "adb_wifi_enabled", ...)` (when `WRITE_SECURE_SETTINGS` is granted), live port & IP subtitle (`On • :42595`), 1-tap `📋` endpoint copy (`<ip>:<port>`), and 1-tap `⚙️` shortcut to Developer Options.
+- **Right Pill — Tailscale Mesh VPN (`com.tailscale.ipn`)**: 1-tap VPN toggle (`CONNECT_VPN` / `DISCONNECT_VPN`), live Tailscale CGNAT IPv4 subtitle (`100.x.y.z`), 1-tap `📋` IP copy, and 1-tap `↗` shortcut to the Tailscale app.
+
+### 3. Minimal Single-Screen One UI Home Layout & Instant Swipe-Up App Search (`LauncherScreens.kt`)
+- **Streamlined Single-Screen Home Layout**:
+  1. Top Row: `OneUiConnectivityPillsRow` (Wireless Debugging + Tailscale Quick-Toggle Pills).
+  2. Compact 1-Row VC Bar: Live VC status dot + 1-tap `Open VC` + `VC + Termux` split + expandable `VcCommandCenterCard` chevron.
+  3. Clean One UI Home App Grid (`4` columns on Cover/Slab, `6` columns on Unfolded Inner) + Bottom Favorites Dock.
+- **0ms Swipe-Up App Search + Auto-Focused Keyboard**: Swiping up anywhere on the Home Screen (or tapping the `"Swipe up for apps & search"` pill) immediately opens the App Search Drawer, focuses the search input (`FocusRequester`), and brings up the software keyboard (`LocalSoftwareKeyboardController`).
+
+---
+
+## Highlights from `v0.5.0`
 
 ### 1. Unfold-Open Auto-Split Continuity (`UnfoldActionMode` & `isUnfoldOpenTransition`)
 - **Automatic Unfold-to-Workspace Handoff (`isUnfoldOpenTransition`)**: Detects when the Galaxy Z Fold 8 hinge opens from closed/flex (`<= 120°`) across the `155°` inner display threshold and automatically triggers your configured `UnfoldActionMode`:

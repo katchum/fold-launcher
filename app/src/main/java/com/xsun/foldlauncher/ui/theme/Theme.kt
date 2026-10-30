@@ -70,6 +70,7 @@ object FoldLauncherColors {
     val EmeraldSuccess = Color(0xFF34D399)
     val AmberWarning = Color(0xFFFBBF24)
     val CoralDanger = Color(0xFFF87171)
+    val CoralAlert = CoralDanger
 
     // High-Contrast Typography
     val TextPrimary = Color(0xFFF8FAFC)

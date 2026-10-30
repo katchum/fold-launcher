@@ -7,8 +7,13 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.database.ContentObserver
 import android.graphics.Rect
+import android.net.Uri
 import android.os.BatteryManager
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
@@ -39,6 +44,7 @@ import com.xsun.foldlauncher.vc.VcConnectionConfig
 import com.xsun.foldlauncher.vc.VcLiveSummary
 import com.xsun.foldlauncher.vc.VcPackages
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -64,9 +70,9 @@ enum class WorkspaceProfile(val label: String, val badge: String) {
 }
 
 /**
- * Consolidated v0.5.0 UI state snapshot for workspace profile, posture override,
+ * Consolidated v0.6.0 UI state snapshot for workspace profile, posture override,
  * custom dock pinning, hinge detent haptics, fold-close & unfold-open action modes,
- * Tailscale/LAN network telemetry, hardware torch, dual-screen presentation, and lock-screen keyguard state.
+ * Wireless ADB & Tailscale/LAN network telemetry, hardware torch, dual-screen presentation, and lock-screen keyguard state.
  */
 data class LauncherUiState(
     val workspaceProfile: WorkspaceProfile = WorkspaceProfile.ALL,
@@ -75,6 +81,8 @@ data class LauncherUiState(
     val hingeHapticsEnabled: Boolean = true,
     val foldCloseModeLabel: String = "📱 Keep Cover Awake",
     val unfoldModeLabel: String = "🖥️ Inner Cockpit",
+    val isWirelessAdbEnabled: Boolean = false,
+    val wirelessAdbPort: Int? = null,
     val tailscaleIp: String? = null,
     val lanIp: String? = null,
     val networkTelemetry: NetworkTelemetrySnapshot = NetworkTelemetrySnapshot(),
@@ -265,11 +273,17 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     )
     val foldCloseModeLabel: StateFlow<String> = _foldCloseModeLabel.asStateFlow()
 
-    // v0.5.0 Unfold-Open Action Mode (`"unfold_action_mode"`) & Live Tailscale / LAN Network Telemetry
+    // v0.5.0 / v0.6.0 Unfold-Open Action Mode (`"unfold_action_mode"`), Wireless ADB & Live Tailscale / LAN Network Telemetry
     private val _unfoldModeLabel = MutableStateFlow(
         rawPrefs.getString(KEY_UNFOLD_MODE, UNFOLD_OPEN_MODES.first()) ?: UNFOLD_OPEN_MODES.first()
     )
     val unfoldModeLabel: StateFlow<String> = _unfoldModeLabel.asStateFlow()
+
+    private val _isWirelessAdbEnabled = MutableStateFlow(false)
+    val isWirelessAdbEnabled: StateFlow<Boolean> = _isWirelessAdbEnabled.asStateFlow()
+
+    private val _wirelessAdbPort = MutableStateFlow<Int?>(null)
+    val wirelessAdbPort: StateFlow<Int?> = _wirelessAdbPort.asStateFlow()
 
     private val _tailscaleIp = MutableStateFlow<String?>(null)
     val tailscaleIp: StateFlow<String?> = _tailscaleIp.asStateFlow()
@@ -311,8 +325,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _isSettingsOpen = MutableStateFlow(false)
     val isSettingsOpen: StateFlow<Boolean> = _isSettingsOpen.asStateFlow()
 
-    // User preferences states
-    private val _hideSystemStatusBar = MutableStateFlow(preferences.hideSystemStatusBar)
+    // User preferences states (v0.6.0 Option A: keep native top status bar visible by default)
+    private val _hideSystemStatusBar = MutableStateFlow(false)
     val hideSystemStatusBar: StateFlow<Boolean> = _hideSystemStatusBar.asStateFlow()
 
     private val _iconShapePreset = MutableStateFlow(resolveIconShapePreset(preferences.iconShapePresetName))
@@ -364,9 +378,18 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    private var wirelessAdbObserverRegistered = false
+    private val wirelessAdbContentObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean, uri: Uri?) {
+            refreshWirelessAdbState()
+            syncUiStateSnapshot()
+        }
+    }
+
     init {
         FloatingHudController.ensureInitialized(appContext)
         registerBatteryMonitor()
+        registerWirelessAdbObserver()
         repository.startObservingPackages {
             refreshApps()
         }
@@ -414,6 +437,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             hingeHapticsEnabled = _hingeHapticsEnabled.value,
             foldCloseModeLabel = _foldCloseModeLabel.value,
             unfoldModeLabel = _unfoldModeLabel.value,
+            isWirelessAdbEnabled = _isWirelessAdbEnabled.value,
+            wirelessAdbPort = _wirelessAdbPort.value,
             tailscaleIp = _tailscaleIp.value,
             lanIp = _lanIp.value,
             networkTelemetry = _networkTelemetry.value,
@@ -453,6 +478,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _networkTelemetry.value = netSnapshot
         _tailscaleIp.value = netSnapshot.tailscaleIp
         _lanIp.value = netSnapshot.lanIp
+        refreshWirelessAdbState()
         val scratchpadSaved = scratchpadPrefs.getString(KEY_SCRATCHPAD_TEXT, null)
         if (!scratchpadSaved.isNullOrBlank() && _quickNoteText.value != scratchpadSaved) {
             _quickNoteText.value = scratchpadSaved
@@ -1351,6 +1377,276 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         SystemTweaker.openAccessibilitySettings(appContext)
     }
 
+    /**
+     * v0.6.0 Reads live Wireless Debugging (`adb_wifi_enabled`) state and active TCP/TLS port
+     * via `SystemTweaker.readWirelessAdbSnapshot(appContext)` (when available) + `Settings.Global`
+     * and `android.os.SystemProperties`.
+     */
+    private fun refreshWirelessAdbState() {
+        var enabled = try {
+            Settings.Global.getInt(appContext.contentResolver, "adb_wifi_enabled", 0) == 1
+        } catch (_: Exception) {
+            false
+        }
+        var port: Int? = null
+
+        // 1. Query SystemTweaker.readWirelessAdbSnapshot(appContext) if present
+        try {
+            val readMethod = SystemTweaker::class.java.methods.firstOrNull {
+                it.name == "readWirelessAdbSnapshot" && it.parameterCount == 1
+            }
+            val snap = readMethod?.invoke(SystemTweaker, appContext)
+            if (snap != null) {
+                val snapClass = snap.javaClass
+                val enabledVal = snapClass.methods.firstOrNull {
+                    it.name == "isEnabled" || it.name == "getEnabled" || it.name == "getIsEnabled"
+                }?.invoke(snap) as? Boolean
+                if (enabledVal != null) {
+                    enabled = enabledVal
+                }
+                val portVal = (snapClass.methods.firstOrNull {
+                    it.name == "getPort" || it.name == "getTcpPort" || it.name == "getTlsPort"
+                }?.invoke(snap) as? Number)?.toInt()
+                if (portVal != null && portVal > 0) {
+                    port = portVal
+                }
+            }
+        } catch (_: Exception) {
+        }
+
+        // 2. Also inspect system properties (`service.adb.tls.port` / `service.adb.tcp.port`)
+        if (port == null) {
+            try {
+                val sysProps = Class.forName("android.os.SystemProperties")
+                val getIntMethod = sysProps.getMethod("getInt", String::class.java, Int::class.javaPrimitiveType)
+                val tlsPort = (getIntMethod.invoke(null, "service.adb.tls.port", -1) as? Int) ?: -1
+                val tcpPort = (getIntMethod.invoke(null, "service.adb.tcp.port", -1) as? Int) ?: -1
+                port = when {
+                    tlsPort > 0 -> tlsPort
+                    tcpPort > 0 -> tcpPort
+                    enabled -> 5555
+                    else -> null
+                }
+            } catch (_: Exception) {
+                if (enabled) port = 5555
+            }
+        }
+
+        _isWirelessAdbEnabled.value = enabled
+        _wirelessAdbPort.value = if (enabled) port else null
+    }
+
+    private fun registerWirelessAdbObserver() {
+        if (wirelessAdbObserverRegistered) return
+        try {
+            val cr = appContext.contentResolver
+            val wifiAdbUri = Settings.Global.getUriFor("adb_wifi_enabled")
+            if (wifiAdbUri != null) {
+                cr.registerContentObserver(wifiAdbUri, false, wirelessAdbContentObserver)
+            }
+            val usbAdbUri = Settings.Global.getUriFor(Settings.Global.ADB_ENABLED)
+            if (usbAdbUri != null) {
+                cr.registerContentObserver(usbAdbUri, false, wirelessAdbContentObserver)
+            }
+            wirelessAdbObserverRegistered = true
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * v0.6.0 1-Tap Wireless Debugging Quick-Toggle (`adb_wifi_enabled`).
+     * Uses `WRITE_SECURE_SETTINGS` when granted; otherwise opens Wireless Debugging settings.
+     */
+    fun toggleWirelessAdb() {
+        val target = !_isWirelessAdbEnabled.value
+        var toggled = false
+
+        // 1. Try SystemTweaker.toggleWirelessAdb / setWirelessAdbEnabled if available
+        try {
+            val setMethod = SystemTweaker::class.java.methods.firstOrNull {
+                it.name == "setWirelessAdbEnabled" && it.parameterCount == 2
+            }
+            val toggleMethod = SystemTweaker::class.java.methods.firstOrNull {
+                it.name == "toggleWirelessAdb" && it.parameterCount >= 1
+            }
+            val result = when {
+                setMethod != null -> setMethod.invoke(SystemTweaker, appContext, target) as? Boolean
+                toggleMethod != null && toggleMethod.parameterCount == 1 ->
+                    toggleMethod.invoke(SystemTweaker, appContext) as? Boolean
+                toggleMethod != null && toggleMethod.parameterCount == 2 ->
+                    toggleMethod.invoke(SystemTweaker, appContext, _isWirelessAdbEnabled.value) as? Boolean
+                else -> null
+            }
+            if (result == true) {
+                toggled = true
+            }
+        } catch (_: Exception) {
+        }
+
+        // 2. Direct Settings.Global write (`adb_wifi_enabled`)
+        if (!toggled && SystemTweaker.hasWriteSecureSettings(appContext)) {
+            try {
+                val cr = appContext.contentResolver
+                if (target) {
+                    Settings.Global.putInt(cr, Settings.Global.ADB_ENABLED, 1)
+                }
+                toggled = Settings.Global.putInt(cr, "adb_wifi_enabled", if (target) 1 else 0)
+            } catch (_: Exception) {
+                toggled = false
+            }
+        }
+
+        refreshWirelessAdbState()
+        syncUiStateSnapshot()
+
+        if (toggled || _isWirelessAdbEnabled.value == target) {
+            val portSuffix = _wirelessAdbPort.value?.let { " (:$it)" } ?: ""
+            val msg = if (_isWirelessAdbEnabled.value) {
+                "Wireless ADB: ON$portSuffix"
+            } else {
+                "Wireless ADB: OFF"
+            }
+            _omniStatusMessage.value = msg
+            try {
+                Toast.makeText(appContext, msg, Toast.LENGTH_SHORT).show()
+            } catch (_: Exception) {
+            }
+        } else {
+            openWirelessAdbSettings()
+        }
+    }
+
+    /**
+     * v0.6.0 Opens Android Developer Options / Wireless Debugging settings screen.
+     */
+    fun openWirelessAdbSettings() {
+        try {
+            val openMethod = SystemTweaker::class.java.methods.firstOrNull {
+                it.name == "openWirelessAdbSettings" && it.parameterCount == 1
+            }
+            if (openMethod != null) {
+                openMethod.invoke(SystemTweaker, appContext)
+                return
+            }
+        } catch (_: Exception) {
+        }
+
+        try {
+            val devIntent = Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).apply {
+                putExtra(":settings:fragment_args_key", "toggle_adb_wireless")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            appContext.startActivity(devIntent)
+        } catch (_: Exception) {
+            try {
+                val fallback = Intent(Settings.ACTION_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                appContext.startActivity(fallback)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /**
+     * v0.6.0 1-Tap Tailscale Mesh VPN Quick-Toggle (`com.tailscale.ipn.CONNECT_VPN` / `DISCONNECT_VPN`),
+     * falling back to opening the Tailscale app if direct broadcast requires interactive session approval.
+     */
+    fun toggleTailscaleVpn() {
+        val currentlyConnected = !_tailscaleIp.value.isNullOrBlank()
+        var handled = false
+
+        try {
+            val toggleMethod = SystemTweaker::class.java.methods.firstOrNull {
+                it.name == "toggleTailscaleVpn" && it.parameterCount >= 1
+            }
+            if (toggleMethod != null) {
+                val res = if (toggleMethod.parameterCount == 1) {
+                    toggleMethod.invoke(SystemTweaker, appContext) as? Boolean
+                } else {
+                    toggleMethod.invoke(SystemTweaker, appContext, currentlyConnected) as? Boolean
+                }
+                if (res == true) handled = true
+            }
+        } catch (_: Exception) {
+        }
+
+        if (!handled) {
+            try {
+                val tailscalePkg = "com.tailscale.ipn"
+                val hasTailscale = appContext.packageManager.getLaunchIntentForPackage(tailscalePkg) != null
+                if (hasTailscale) {
+                    val action = if (currentlyConnected) {
+                        "com.tailscale.ipn.DISCONNECT_VPN"
+                    } else {
+                        "com.tailscale.ipn.CONNECT_VPN"
+                    }
+                    val broadcastIntent = Intent(action).apply {
+                        setPackage(tailscalePkg)
+                        setClassName(tailscalePkg, "com.tailscale.ipn.IPNReceiver")
+                    }
+                    appContext.sendBroadcast(broadcastIntent)
+                    handled = true
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        if (!handled) {
+            openTailscaleApp()
+            return
+        }
+
+        val targetMsg = if (currentlyConnected) "Tailscale VPN: Disconnecting…" else "Tailscale VPN: Connecting…"
+        _omniStatusMessage.value = targetMsg
+        try {
+            Toast.makeText(appContext, targetMsg, Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) {
+        }
+
+        viewModelScope.launch {
+            delay(900L)
+            refreshSystemCompanionState()
+            delay(1600L)
+            refreshSystemCompanionState()
+        }
+    }
+
+    /**
+     * v0.6.0 Opens the Tailscale app (`com.tailscale.ipn`) or Android VPN Settings if not installed.
+     */
+    fun openTailscaleApp() {
+        try {
+            val openMethod = SystemTweaker::class.java.methods.firstOrNull {
+                it.name == "openTailscaleApp" && it.parameterCount == 1
+            }
+            if (openMethod != null) {
+                val res = openMethod.invoke(SystemTweaker, appContext) as? Boolean
+                if (res == true) return
+            }
+        } catch (_: Exception) {
+        }
+
+        try {
+            val launchIntent = appContext.packageManager.getLaunchIntentForPackage("com.tailscale.ipn")?.apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            if (launchIntent != null) {
+                appContext.startActivity(launchIntent)
+                return
+            }
+        } catch (_: Exception) {
+        }
+
+        try {
+            val vpnSettings = Intent(Settings.ACTION_VPN_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            appContext.startActivity(vpnSettings)
+        } catch (_: Exception) {
+        }
+    }
+
     private fun registerBatteryMonitor() {
         if (batteryReceiverRegistered) return
         try {
@@ -1372,6 +1668,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     override fun onCleared() {
         repository.stopObservingPackages()
+        if (wirelessAdbObserverRegistered) {
+            try {
+                appContext.contentResolver.unregisterContentObserver(wirelessAdbContentObserver)
+            } catch (_: Exception) {
+            }
+            wirelessAdbObserverRegistered = false
+        }
         if (batteryReceiverRegistered) {
             try {
                 appContext.unregisterReceiver(batteryReceiver)

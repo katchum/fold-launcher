@@ -21,16 +21,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.Color
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.xsun.foldlauncher.hud.EXTRA_OPEN_SPOTLIGHT
 import com.xsun.foldlauncher.posture.DevicePosture
-import com.xsun.foldlauncher.posture.PostureOverride
 import com.xsun.foldlauncher.posture.rememberPostureState
-import com.xsun.foldlauncher.service.SystemTweaker
 import com.xsun.foldlauncher.ui.animation.PostureAnimatedContainer
 import com.xsun.foldlauncher.ui.components.AppContextMenuSheet
 import com.xsun.foldlauncher.ui.components.SpotlightSearchOverlay
@@ -38,10 +35,8 @@ import com.xsun.foldlauncher.ui.screens.CoverOrSlabHomeScreen
 import com.xsun.foldlauncher.ui.screens.FlexTabletopHomeScreen
 import com.xsun.foldlauncher.ui.screens.LauncherSettingsSheet
 import com.xsun.foldlauncher.ui.screens.UnfoldedInnerDashboardScreen
-import com.xsun.foldlauncher.ui.theme.FoldLauncherColors
 import com.xsun.foldlauncher.ui.theme.FoldLauncherTheme
 import com.xsun.foldlauncher.viewmodel.LauncherViewModel
-import com.xsun.foldlauncher.viewmodel.WorkspaceProfile
 
 class MainActivity : ComponentActivity() {
 
@@ -56,10 +51,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-            setShowWhenLocked(true)
-        }
 
         WindowCompat.setDecorFitsSystemWindows(window, false)
         onBackPressedDispatcher.addCallback(this, backPressedCallback)
@@ -89,16 +80,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-            setShowWhenLocked(true)
-            val isLockScreenCockpit =
-                intent?.getBooleanExtra("com.xsun.foldlauncher.extra.LOCK_SCREEN_COCKPIT", false) == true ||
-                    intent?.getBooleanExtra(SystemTweaker.EXTRA_LOCK_SCREEN_COCKPIT, false) == true
-            if (isLockScreenCockpit) {
-                setTurnScreenOn(true)
-            }
-        }
-
         if (intent?.getBooleanExtra(EXTRA_OPEN_SPOTLIGHT, false) == true ||
             intent?.getBooleanExtra("EXTRA_OPEN_SPOTLIGHT", false) == true
         ) {
@@ -163,6 +144,8 @@ private fun FoldLauncherRoot(
     val hingeHapticsEnabled by viewModel.hingeHapticsEnabled.collectAsState()
     val foldCloseModeLabel by viewModel.foldCloseModeLabel.collectAsState()
     val unfoldModeLabel by viewModel.unfoldModeLabel.collectAsState()
+    val isWirelessAdbEnabled by viewModel.isWirelessAdbEnabled.collectAsState()
+    val wirelessAdbPort by viewModel.wirelessAdbPort.collectAsState()
     val tailscaleIp by viewModel.tailscaleIp.collectAsState()
     val lanIp by viewModel.lanIp.collectAsState()
 
@@ -197,21 +180,10 @@ private fun FoldLauncherRoot(
     val lockScreenRotationEnabled by viewModel.lockScreenRotationEnabled.collectAsState()
     val isDeXConnected by viewModel.isDeXConnected.collectAsState()
 
-    val rootBackgroundBrush = if (workspaceProfile == WorkspaceProfile.OLED_BLACK) {
-        SolidColor(FoldLauncherColors.OledBlack)
-    } else {
-        Brush.verticalGradient(
-            colors = listOf(
-                FoldLauncherColors.DeepVoid.copy(alpha = 0.78f),
-                FoldLauncherColors.OledBlack.copy(alpha = 0.92f)
-            )
-        )
-    }
-
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(rootBackgroundBrush)
+            .background(Color.Black.copy(alpha = 0.16f))
             .windowInsetsPadding(WindowInsets.safeDrawing)
     ) {
         PostureAnimatedContainer(
@@ -242,6 +214,12 @@ private fun FoldLauncherRoot(
                         onCycleFoldCloseActionMode = viewModel::cycleFoldCloseActionMode,
                         unfoldModeLabel = unfoldModeLabel,
                         onCycleUnfoldActionMode = viewModel::cycleUnfoldActionMode,
+                        isWirelessAdbEnabled = isWirelessAdbEnabled,
+                        wirelessAdbPort = wirelessAdbPort,
+                        onToggleWirelessAdb = viewModel::toggleWirelessAdb,
+                        onOpenWirelessAdbSettings = viewModel::openWirelessAdbSettings,
+                        onToggleTailscaleVpn = viewModel::toggleTailscaleVpn,
+                        onOpenTailscaleApp = viewModel::openTailscaleApp,
                         tailscaleIp = tailscaleIp,
                         lanIp = lanIp,
                         allApps = allApps,
@@ -302,6 +280,12 @@ private fun FoldLauncherRoot(
                         onCycleFoldCloseActionMode = viewModel::cycleFoldCloseActionMode,
                         unfoldModeLabel = unfoldModeLabel,
                         onCycleUnfoldActionMode = viewModel::cycleUnfoldActionMode,
+                        isWirelessAdbEnabled = isWirelessAdbEnabled,
+                        wirelessAdbPort = wirelessAdbPort,
+                        onToggleWirelessAdb = viewModel::toggleWirelessAdb,
+                        onOpenWirelessAdbSettings = viewModel::openWirelessAdbSettings,
+                        onToggleTailscaleVpn = viewModel::toggleTailscaleVpn,
+                        onOpenTailscaleApp = viewModel::openTailscaleApp,
                         tailscaleIp = tailscaleIp,
                         lanIp = lanIp,
                         allApps = allApps,
@@ -361,6 +345,12 @@ private fun FoldLauncherRoot(
                         onCycleFoldCloseActionMode = viewModel::cycleFoldCloseActionMode,
                         unfoldModeLabel = unfoldModeLabel,
                         onCycleUnfoldActionMode = viewModel::cycleUnfoldActionMode,
+                        isWirelessAdbEnabled = isWirelessAdbEnabled,
+                        wirelessAdbPort = wirelessAdbPort,
+                        onToggleWirelessAdb = viewModel::toggleWirelessAdb,
+                        onOpenWirelessAdbSettings = viewModel::openWirelessAdbSettings,
+                        onToggleTailscaleVpn = viewModel::toggleTailscaleVpn,
+                        onOpenTailscaleApp = viewModel::openTailscaleApp,
                         tailscaleIp = tailscaleIp,
                         lanIp = lanIp,
                         allApps = allApps,

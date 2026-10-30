@@ -2,8 +2,10 @@ package com.xsun.foldlauncher.posture
 
 import com.xsun.foldlauncher.service.NetworkTelemetrySnapshot
 import com.xsun.foldlauncher.service.SystemTweaker
+import com.xsun.foldlauncher.service.WirelessAdbSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -266,5 +268,32 @@ class PostureClassifierTest {
         )
         assertTrue(tsSnapshot.isTailscaleConnected)
         assertEquals("TS 100.101.43.86", tsSnapshot.statusBadge)
+    }
+
+    @Test
+    fun wirelessAdbSnapshot_formatsConnectAddressAndStatusLabel() {
+        val activeWithPort = WirelessAdbSnapshot(
+            isEnabled = true,
+            port = 42595,
+            ipAddress = "100.101.43.86"
+        )
+        assertEquals("100.101.43.86:42595", activeWithPort.connectAddress)
+        assertEquals("On • :42595", activeWithPort.statusLabel)
+
+        val activeWithoutPort = WirelessAdbSnapshot(
+            isEnabled = true,
+            port = null,
+            ipAddress = "100.68.53.123"
+        )
+        assertEquals("100.68.53.123", activeWithoutPort.connectAddress)
+        assertEquals("On", activeWithoutPort.statusLabel)
+
+        val disabled = WirelessAdbSnapshot(
+            isEnabled = false,
+            port = null,
+            ipAddress = null
+        )
+        assertNull(disabled.connectAddress)
+        assertEquals("Off", disabled.statusLabel)
     }
 }

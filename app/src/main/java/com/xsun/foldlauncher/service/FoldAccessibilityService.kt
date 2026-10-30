@@ -231,15 +231,9 @@ class FoldAccessibilityService : AccessibilityService() {
         }
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                val action = intent?.action ?: return
+                intent?.action ?: return
                 refreshKeyguardAndHudState()
                 DualScreenPresentationController.refreshActivePresentation()
-                if (action == Intent.ACTION_SCREEN_ON) {
-                    val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
-                    if (km?.isKeyguardLocked == true && _autoCockpitOnWake.value) {
-                        SystemTweaker.launchLockScreenCockpit(this@FoldAccessibilityService)
-                    }
-                }
             }
         }
         try {
@@ -267,7 +261,8 @@ class FoldAccessibilityService : AccessibilityService() {
         val locked = km?.isKeyguardLocked == true
         _isKeyguardLocked.value = locked
 
-        val shouldShowOverlay = _alwaysShowMicroHud.value || (locked && _lockScreenHudEnabled.value)
+        // Never draw overlays on top of the One UI Lock Screen; only render when unlocked and explicitly enabled.
+        val shouldShowOverlay = !locked && _alwaysShowMicroHud.value
         if (shouldShowOverlay) {
             ensureLockHudOverlay()
             updateLockHudText()
@@ -297,12 +292,7 @@ class FoldAccessibilityService : AccessibilityService() {
                 setStroke((1.2f * density).toInt().coerceAtLeast(1), Color.parseColor("#66B9E6C8"))
             }
             setOnClickListener {
-                val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
-                if (km?.isKeyguardLocked == true) {
-                    SystemTweaker.launchLockScreenCockpit(this@FoldAccessibilityService)
-                } else {
-                    SystemTweaker.launchVc(this@FoldAccessibilityService)
-                }
+                SystemTweaker.launchVc(this@FoldAccessibilityService)
             }
         }
 
@@ -323,7 +313,6 @@ class FoldAccessibilityService : AccessibilityService() {
         container.addView(clockTv)
 
         val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
 
         val lp = WindowManager.LayoutParams(
@@ -516,7 +505,7 @@ class FoldAccessibilityService : AccessibilityService() {
         private val _isKeyguardLocked = MutableStateFlow(false)
         val isKeyguardLocked: StateFlow<Boolean> = _isKeyguardLocked.asStateFlow()
 
-        private val _lockScreenHudEnabled = MutableStateFlow(true)
+        private val _lockScreenHudEnabled = MutableStateFlow(false)
         val lockScreenHudEnabled: StateFlow<Boolean> = _lockScreenHudEnabled.asStateFlow()
 
         private val _alwaysShowMicroHud = MutableStateFlow(false)
@@ -548,7 +537,7 @@ class FoldAccessibilityService : AccessibilityService() {
 
         fun loadLockHudPreferences(context: Context) {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            _lockScreenHudEnabled.value = prefs.getBoolean(KEY_LOCK_HUD_ENABLED, true)
+            _lockScreenHudEnabled.value = prefs.getBoolean(KEY_LOCK_HUD_ENABLED, false)
             _alwaysShowMicroHud.value = prefs.getBoolean(KEY_ALWAYS_MICRO_HUD, false)
             _autoCockpitOnWake.value = prefs.getBoolean(KEY_AUTO_COCKPIT_ON_WAKE, false)
             SystemTweaker.loadHingePreferences(context)
