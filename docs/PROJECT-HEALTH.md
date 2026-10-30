@@ -1,8 +1,8 @@
-# Fold8 & Slab Launcher (`com.xsun.foldlauncher`) — Project & Repo Health (`v0.7.0`)
+# Fold8 & Slab Launcher (`com.xsun.foldlauncher`) — Project & Repo Health (`v0.8.0`)
 
 **Repository**: [`katchum/fold-launcher`](https://github.com/katchum/fold-launcher)
 **Workspace Path**: `/home/xsun/projects/android-launcher/fold-launcher`
-**Current Version**: `v0.7.0` (`versionCode = 7`, `versionName = "0.7.0"`, Fresh Minimal One UI Edition)
+**Current Version**: `v0.8.0` (`versionCode = 8`, `versionName = "0.8.0"`, Minimal One UI + Side-by-Side Max Edition)
 **Maintainer**: Repo Health & Project Health Lead
 
 ---
@@ -75,6 +75,9 @@ All 5 pure-JVM unit test suites reside under `app/src/test/java/com/xsun/foldlau
   - [`v0.4.0`](https://github.com/katchum/fold-launcher/releases/tag/v0.4.0) (`0204c9c33ef586e180b1f81c2b21c398f2fd2fc0`)
   - [`v0.5.0`](https://github.com/katchum/fold-launcher/releases/tag/v0.5.0): Unfold-Open Auto-Split Continuity (`UnfoldActionMode` & `isUnfoldOpenTransition`), Live Tailscale Mesh VPN & LAN IP Telemetry (`NetworkTelemetrySnapshot`, `TailscaleMeshTelemetryPill`), Persistent Scratchpad & 1-Tap Device Telemetry Context Injector (`VcScratchpadPacket`, `buildTelemetryEnrichedPrompt`), and Omni-Bar Unfold/Scratchpad commands.
 
-### 4.2 Dual-Device Live ADB Targets (`--user 0` Policy)
-1. **Samsung Galaxy Z Fold 8 (`SM-F976U1` / `SM-F971U1`)**: `100.101.43.86:42595` (One UI 9.0 / Android 16)
-2. **Samsung Galaxy S23 Ultra (`SM-S918U1`)**: `100.68.53.123:40919` (One UI 8.5 / Android 16)
+### 4.2 Device Policy & Live ADB Targets (`--user 0` Policy)
+1. **Samsung Galaxy Z Fold 8 (`SM-F976U1` / `SM-F971U1`, `100.101.43.86`)**: Personal foldable target (One UI 9.0 / Android 16). Do not auto-install APKs over ADB without explicit user request; user installs from the Tailscale APK portal (`http://100.79.158.94:8765/`) or GitHub Releases.
+2. **Samsung Galaxy S25 Edge (`SM-S937U`, `100.117.236.8`, serial `R3CY50RW0TP`)**: Personal daily-driver phone.
+   - **Specifically NOT configured for SSH into `z13`** (unlike the S23 test bench's restricted `from="<S23 tailnet IP>"` SSH route).
+   - **Never run `adb disconnect` on `100.117.236.8`** (if connected via `adb reverse tcp:4317 tcp:4317`, disconnecting drops its VC tunnel), and never push/install APKs or foreground-switch apps on the S25 via ADB.
+3. **Samsung Galaxy S23 Ultra (`SM-S918U1`, `100.68.53.123`)**: Dedicated automated ADB test bench device (One UI 8.5 / Android 16).

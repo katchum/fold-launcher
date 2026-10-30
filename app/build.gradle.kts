@@ -12,12 +12,30 @@ android {
         applicationId = "com.xsun.foldlauncher"
         minSdk = 29
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.7.0"
+        versionCode = 8
+        versionName = "0.8.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
+        }
+    }
+
+    flavorDimensions += "edition"
+
+    productFlavors {
+        create("minimal") {
+            dimension = "edition"
+            isDefault = true
+            resValue("string", "app_name", "Fold8 Launcher")
+            buildConfigField("boolean", "IS_MAX_EDITION", "false")
+        }
+        create("max") {
+            dimension = "edition"
+            applicationIdSuffix = ".max"
+            versionNameSuffix = "-max"
+            resValue("string", "app_name", "Fold8 Launcher Max")
+            buildConfigField("boolean", "IS_MAX_EDITION", "true")
         }
     }
 

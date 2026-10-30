@@ -12,10 +12,7 @@ import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -30,6 +27,7 @@ import com.xsun.foldlauncher.posture.DevicePosture
 import com.xsun.foldlauncher.posture.rememberPostureState
 import com.xsun.foldlauncher.ui.animation.PostureAnimatedContainer
 import com.xsun.foldlauncher.ui.components.AppContextMenuSheet
+import com.xsun.foldlauncher.ui.components.SpotlightSearchOverlay
 import com.xsun.foldlauncher.ui.screens.CoverOrSlabHomeScreen
 import com.xsun.foldlauncher.ui.screens.FlexTabletopHomeScreen
 import com.xsun.foldlauncher.ui.screens.LauncherSettingsSheet
@@ -153,6 +151,9 @@ private fun FoldLauncherRoot(
     val hiddenApps by viewModel.hiddenApps.collectAsState()
     val pinnedCoverApps by viewModel.pinnedCoverApps.collectAsState()
     val pinnedInnerApps by viewModel.pinnedInnerApps.collectAsState()
+    val mainPageApps by viewModel.mainPageApps.collectAsState()
+    val workPageApps by viewModel.workPageApps.collectAsState()
+    val devPageApps by viewModel.devPageApps.collectAsState()
     val dockApps by viewModel.dockApps.collectAsState()
     val recentApps by viewModel.recentApps.collectAsState()
     val appPairs by viewModel.appPairs.collectAsState()
@@ -160,6 +161,8 @@ private fun FoldLauncherRoot(
 
     val searchQuery by viewModel.searchQuery.collectAsState()
     val rankedSearchApps by viewModel.rankedSearchApps.collectAsState()
+    val inlineMathResult by viewModel.inlineMathResult.collectAsState()
+    val clipboardItems by viewModel.clipboardItems.collectAsState()
 
     val isSearchOpen by viewModel.isSearchOpen.collectAsState()
     val selectedContextMenuApp by viewModel.selectedContextMenuApp.collectAsState()
@@ -225,6 +228,10 @@ private fun FoldLauncherRoot(
                         recentApps = recentApps,
                         appPairs = appPairs,
                         folders = folders,
+                        mainPageApps = mainPageApps,
+                        workPageApps = workPageApps,
+                        devPageApps = devPageApps,
+                        onTogglePageApp = viewModel::togglePageApp,
                         iconShapePreset = iconShapePreset,
                         batteryPct = batteryPct,
                         isCharging = isCharging,
@@ -290,6 +297,10 @@ private fun FoldLauncherRoot(
                         dockApps = dockApps,
                         recentApps = recentApps,
                         appPairs = appPairs,
+                        mainPageApps = mainPageApps,
+                        workPageApps = workPageApps,
+                        devPageApps = devPageApps,
+                        onTogglePageApp = viewModel::togglePageApp,
                         iconShapePreset = iconShapePreset,
                         batteryPct = batteryPct,
                         isCharging = isCharging,
@@ -356,6 +367,10 @@ private fun FoldLauncherRoot(
                         recentApps = recentApps,
                         appPairs = appPairs,
                         folders = folders,
+                        mainPageApps = mainPageApps,
+                        workPageApps = workPageApps,
+                        devPageApps = devPageApps,
+                        onTogglePageApp = viewModel::togglePageApp,
                         iconShapePreset = iconShapePreset,
                         batteryPct = batteryPct,
                         isCharging = isCharging,
@@ -388,18 +403,37 @@ private fun FoldLauncherRoot(
             }
         }
 
-        // Clean Full-Screen One UI App Search Drawer (0ms keyboard focus, zero omni/clipboard clutter)
-        OneUiMinimalAppSearchOverlay(
-            visible = isSearchOpen,
-            query = searchQuery,
-            onQueryChange = viewModel::onSearchQueryChange,
-            rankedApps = rankedSearchApps,
-            iconShapePreset = iconShapePreset,
-            columns = if (postureState.posture == DevicePosture.COMPACT) 4 else 6,
-            onLaunchApp = { app -> viewModel.launchApp(app) },
-            onAppLongClick = viewModel::openContextMenu,
-            onDismiss = viewModel::closeSearch
-        )
+        if (BuildConfig.IS_MAX_EDITION) {
+            SpotlightSearchOverlay(
+                visible = isSearchOpen,
+                query = searchQuery,
+                onQueryChange = viewModel::onSearchQueryChange,
+                rankedApps = rankedSearchApps,
+                inlineMathResult = inlineMathResult,
+                iconShapePreset = iconShapePreset,
+                onLaunchApp = { app -> viewModel.launchApp(app) },
+                onAppLongClick = viewModel::openContextMenu,
+                onWebSearch = viewModel::launchWebSearch,
+                onDismiss = viewModel::closeSearch,
+                allApps = allApps,
+                clipboardItems = clipboardItems,
+                onExecuteOmniAction = viewModel::onOmniActionFromSpotlight,
+                onToggleThumbArc = viewModel::toggleRadialThumbArc
+            )
+        } else {
+            // v0.8.0 Bottom-Keyboard Search Overlay (0 apps when empty, top 4-8 matches, swipe down to exit)
+            OneUiMinimalAppSearchOverlay(
+                visible = isSearchOpen,
+                query = searchQuery,
+                onQueryChange = viewModel::onSearchQueryChange,
+                rankedApps = rankedSearchApps,
+                iconShapePreset = iconShapePreset,
+                columns = if (postureState.posture == DevicePosture.COMPACT) 4 else 6,
+                onLaunchApp = { app -> viewModel.launchApp(app) },
+                onAppLongClick = viewModel::openContextMenu,
+                onDismiss = viewModel::closeSearch
+            )
+        }
 
         // Long-Press App Context Menu Sheet
         val contextApp = selectedContextMenuApp

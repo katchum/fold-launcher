@@ -1,6 +1,6 @@
-# Fold8 Launcher (`com.xsun.foldlauncher`) — `v0.7.0` (Fresh Minimal One UI Edition)
+# Fold8 Launcher (`com.xsun.foldlauncher`) — `v0.8.0` (Minimal One UI + Side-by-Side Max Edition)
 
-**Ultra-Fast, Zero-Bloat 120Hz Minimal One UI Home Launcher with Non-Scrolling Home Canvas, Clean Tailscale & Wireless Debugging Switch Rows, Background DeX-to-Gboard Guard & Instant Swipe-Up App Search for Samsung Galaxy Z Fold 8 and Android Slab Phones**
+**Ultra-Fast, Zero-Bloat 120Hz One UI Home Launcher (`com.xsun.foldlauncher`) with 3-Page `Main`/`Work`/`Dev` Horizontal Pager, Bottom-Keyboard Instant Search, Tailscale & Wireless Debugging Switches + Side-by-Side Experimental Max Feature Edition (`com.xsun.foldlauncher.max`) for Samsung Galaxy Z Fold 8 and Android Slab Phones**
 
 [![Android CI](https://github.com/katchum/fold-launcher/actions/workflows/android-ci.yml/badge.svg)](https://github.com/katchum/fold-launcher/actions/workflows/android-ci.yml)
 
@@ -10,7 +10,27 @@ Fold8 Launcher is a lightweight, 120Hz-native Jetpack Compose home screen replac
 
 ---
 
-## What's New in `v0.7.0` (Fresh Minimal One UI Edition)
+## What's New in `v0.8.0`
+
+### 1. 3-Page `Main` / `Work` / `Dev` Horizontal Home Pager (`MinimalOneUiHomeScreen`)
+- **Swipe Left/Right Between 3 Dedicated Non-Scrolling Pages**:
+  - **Page 0 (`Main`)**: Daily communication, browser, camera, media, and personal apps (`4x2` on Cover/Slab, `6x2` on Unfolded Inner).
+  - **Page 1 (`Work`)**: Productivity, calendar, email, notes, and workspace apps.
+  - **Page 2 (`Dev`)**: **Tailscale & Wireless Debugging Switch Card (`OneUiConnectivityPillsRow`)** + developer tools (VC, Termux, GitHub, Settings, ADB utilities).
+- **Interactive Page Customizer (`+ Edit Page`)**: Tap the page pill (`Main` / `Work` / `Dev`) or `+ Edit` to customize which apps appear on each page (`togglePageApp`).
+
+### 2. Bottom-Keyboard Search Overlay (`OneUiMinimalAppSearchOverlay`)
+- **Zero-Clutter Empty State (`0` Apps Shown Before Typing)**: Opening search via upward swipe anywhere on the Home Screen immediately focuses the search input at the bottom (right above the IME keyboard) with **zero initial app grid clutter**.
+- **Top `4–8` Matches Only (`1–2` Rows)**: As soon as you type, displays only the top `4–8` highest-ranked matches right above the bottom search bar (`Enter`/`Search` launches the #1 match immediately).
+- **Swipe Down or Tap Backdrop to Exit**: Swiping down anywhere on the search overlay or tapping the translucent backdrop closes search and hides the keyboard (`0ms`).
+
+### 3. Dual Side-by-Side Product Flavors (`minimal` vs `max`)
+- **`Fold8 Launcher` (`minimal` flavor, `com.xsun.foldlauncher`)**: Clean, distraction-free One UI 9.0 daily driver (`BuildConfig.IS_MAX_EDITION == false`).
+- **`Fold8 Launcher Max` (`max` flavor, `com.xsun.foldlauncher.max`)**: Installs **side-by-side** on the same phone (`BuildConfig.IS_MAX_EDITION == true`) and unlocks the full experimental cockpit (VC Command Center, Omni-Bar, Radial Thumb Arc, Flex Trackpad, Tent Standby HUD, and Workspace Profiles).
+
+---
+
+## Highlights from `v0.7.0` (Fresh Minimal One UI Edition)
 
 ### 1. Fixed, Non-Scrolling Single-Screen Home Layout (`LauncherScreens.kt`)
 - **Zero Vertical Home Scrolling**: Removed scrollable grids and legacy demo cards from the Home Screen so the Home Screen is a fixed, non-scrolling single canvas over your live Samsung One UI wallpaper (`windowShowWallpaper = true`).

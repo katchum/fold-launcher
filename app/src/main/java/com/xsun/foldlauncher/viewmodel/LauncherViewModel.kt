@@ -18,10 +18,12 @@ import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.xsun.foldlauncher.BuildConfig
 import com.xsun.foldlauncher.data.AppRepository
 import com.xsun.foldlauncher.data.LauncherPreferences
 import com.xsun.foldlauncher.hud.FloatingHudController
 import com.xsun.foldlauncher.hud.FloatingHudUiState
+import com.xsun.foldlauncher.hud.VcHudAgentStatus
 import com.xsun.foldlauncher.model.AppEntry
 import com.xsun.foldlauncher.model.AppPair
 import com.xsun.foldlauncher.model.AppShortcutItem
@@ -77,6 +79,9 @@ data class LauncherUiState(
     val workspaceProfile: WorkspaceProfile = WorkspaceProfile.ALL,
     val postureOverride: PostureOverride = PostureOverride.AUTO,
     val pinnedDockPackages: Set<String> = emptySet(),
+    val mainPagePackages: Set<String> = emptySet(),
+    val workPagePackages: Set<String> = emptySet(),
+    val devPagePackages: Set<String> = emptySet(),
     val hingeHapticsEnabled: Boolean = true,
     val foldCloseModeLabel: String = "📱 Keep Cover Awake",
     val unfoldModeLabel: String = "🖥️ Inner Cockpit",
@@ -106,9 +111,63 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         private const val PREFS_SCRATCHPAD = "fold_scratchpad_prefs"
         private const val KEY_SCRATCHPAD_TEXT = "scratchpad_text"
         private const val KEY_PINNED_DOCK = "pinned_dock_packages"
+        private const val KEY_MAIN_PAGE_PACKAGES = "main_page_packages"
+        private const val KEY_WORK_PAGE_PACKAGES = "work_page_packages"
+        private const val KEY_DEV_PAGE_PACKAGES = "dev_page_packages"
         private const val KEY_HINGE_HAPTICS = "hinge_haptics_enabled"
         private const val KEY_FOLD_CLOSE_MODE = "fold_close_action_mode"
         private const val KEY_UNFOLD_MODE = "unfold_action_mode"
+
+        val DEFAULT_MAIN_PAGE_PACKAGES: Set<String> = linkedSetOf(
+            "com.samsung.android.dialer",
+            "com.google.android.dialer",
+            "com.android.dialer",
+            "com.google.android.apps.messaging",
+            "com.samsung.android.messaging",
+            "com.android.chrome",
+            "com.sec.android.app.sbrowser",
+            "com.sec.android.app.camera",
+            "com.android.camera2",
+            "com.google.android.apps.maps",
+            "com.google.android.youtube",
+            "com.google.android.apps.photos",
+            "com.sec.android.gallery3d",
+            "com.sec.android.app.clockpackage",
+            "com.google.android.deskclock",
+            "com.android.vending"
+        )
+
+        val DEFAULT_WORK_PAGE_PACKAGES: Set<String> = linkedSetOf(
+            "com.google.android.gm",
+            "com.samsung.android.email.provider",
+            "com.microsoft.office.outlook",
+            "com.google.android.calendar",
+            "com.samsung.android.calendar",
+            "com.samsung.android.app.notes",
+            "com.google.android.keep",
+            "com.google.android.apps.docs",
+            "com.sec.android.app.myfiles",
+            "com.google.android.apps.nbu.files",
+            "com.android.documentsui",
+            "com.samsung.android.app.contacts",
+            "com.google.android.contacts",
+            "com.Slack",
+            "com.microsoft.teams",
+            "com.google.android.apps.tachyon",
+            "us.zoom.videomeetings"
+        )
+
+        val DEFAULT_DEV_PAGE_PACKAGES: Set<String> = linkedSetOf(
+            "dev.agentconversation.vci",
+            "dev.agentconversation.preview",
+            "dev.agentconversation",
+            "com.termux",
+            "com.tailscale.ipn",
+            "com.github.android",
+            "com.android.settings",
+            "com.android.chrome",
+            "com.google.android.inputmethod.latin"
+        )
 
         val FOLD_CLOSE_MODES: List<String> = listOf(
             "📱 Keep Cover Awake",
@@ -142,11 +201,76 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _pinnedDockPackages = MutableStateFlow(preferences.pinnedDockPackages)
     val pinnedDockPackages: StateFlow<Set<String>> = _pinnedDockPackages.asStateFlow()
 
+    // v0.8.0 Separate 3-Page App Sets (`"main_page_packages"`, `"work_page_packages"`, `"dev_page_packages"`)
+    private val _mainPagePackages = MutableStateFlow(
+        rawPrefs.getStringSet(KEY_MAIN_PAGE_PACKAGES, null)?.toSet() ?: DEFAULT_MAIN_PAGE_PACKAGES
+    )
+    val mainPagePackages: StateFlow<Set<String>> = _mainPagePackages.asStateFlow()
+
+    private val _workPagePackages = MutableStateFlow(
+        rawPrefs.getStringSet(KEY_WORK_PAGE_PACKAGES, null)?.toSet() ?: DEFAULT_WORK_PAGE_PACKAGES
+    )
+    val workPagePackages: StateFlow<Set<String>> = _workPagePackages.asStateFlow()
+
+    private val _devPagePackages = MutableStateFlow(
+        rawPrefs.getStringSet(KEY_DEV_PAGE_PACKAGES, null)?.toSet() ?: DEFAULT_DEV_PAGE_PACKAGES
+    )
+    val devPagePackages: StateFlow<Set<String>> = _devPagePackages.asStateFlow()
+
     val allApps: StateFlow<List<AppEntry>> = combine(
         _allInstalledApps,
         _hiddenPackages
     ) { installed, hidden ->
         installed.filter { it.packageName !in hidden }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val mainPageApps: StateFlow<List<AppEntry>> = combine(
+        allApps,
+        _mainPagePackages
+    ) { apps, pkgs ->
+        val matched = apps.filter { it.packageName in pkgs }
+        if (matched.isNotEmpty() || rawPrefs.contains(KEY_MAIN_PAGE_PACKAGES)) {
+            matched
+        } else {
+            apps.filterNot {
+                it.packageName in DEFAULT_WORK_PAGE_PACKAGES || it.packageName in DEFAULT_DEV_PAGE_PACKAGES
+            }.ifEmpty { apps }.take(8)
+        }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val workPageApps: StateFlow<List<AppEntry>> = combine(
+        allApps,
+        _workPagePackages,
+        _mainPagePackages
+    ) { apps, workPkgs, mainPkgs ->
+        val matched = apps.filter { it.packageName in workPkgs }
+        if (matched.isNotEmpty() || rawPrefs.contains(KEY_WORK_PAGE_PACKAGES)) {
+            matched
+        } else {
+            apps.filterNot { it.packageName in mainPkgs || it.packageName in DEFAULT_DEV_PAGE_PACKAGES }
+                .ifEmpty { apps.drop(4) }
+                .take(8)
+        }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val devPageApps: StateFlow<List<AppEntry>> = combine(
+        allApps,
+        _devPagePackages
+    ) { apps, devPkgs ->
+        val matched = apps.filter { it.packageName in devPkgs }
+        if (matched.isNotEmpty() || rawPrefs.contains(KEY_DEV_PAGE_PACKAGES)) {
+            matched
+        } else {
+            apps.filter { app ->
+                val pkg = app.packageName.lowercase()
+                pkg.startsWith("dev.agentconversation") ||
+                    pkg.startsWith("com.termux") ||
+                    pkg.contains("tailscale") ||
+                    pkg.contains("github") ||
+                    pkg == "com.android.settings" ||
+                    pkg.contains("chrome")
+            }.ifEmpty { apps.takeLast(6) }
+        }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val hiddenApps: StateFlow<List<AppEntry>> = combine(
@@ -386,6 +510,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     init {
+        if (BuildConfig.IS_MAX_EDITION) {
+            FloatingHudController.ensureInitialized(appContext)
+        }
         registerBatteryMonitor()
         registerWirelessAdbObserver()
         repository.startObservingPackages {
@@ -405,6 +532,21 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             }
         }
 
+        if (BuildConfig.IS_MAX_EDITION) {
+            // Sync live VC summary status with the System-Wide Floating Micro-HUD Pill dot in Max Edition
+            viewModelScope.launch {
+                vcMonitor.liveSummary.collect { summary ->
+                    val hudDotStatus = when {
+                        summary.approvalCount > 0 -> VcHudAgentStatus.APPROVAL_NEEDED
+                        summary.failedCount > 0 -> VcHudAgentStatus.ERROR
+                        summary.workingCount > 0 || summary.runningCount > 0 -> VcHudAgentStatus.WORKING
+                        else -> VcHudAgentStatus.IDLE_READY
+                    }
+                    FloatingHudController.setVcAgentStatus(appContext, hudDotStatus)
+                }
+            }
+        }
+
         // Sync live hardware torch state from SystemTweaker
         viewModelScope.launch {
             SystemTweaker.isTorchActive.collect { active ->
@@ -419,6 +561,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             workspaceProfile = _workspaceProfile.value,
             postureOverride = _postureOverride.value,
             pinnedDockPackages = _pinnedDockPackages.value,
+            mainPagePackages = _mainPagePackages.value,
+            workPagePackages = _workPagePackages.value,
+            devPagePackages = _devPagePackages.value,
             hingeHapticsEnabled = _hingeHapticsEnabled.value,
             foldCloseModeLabel = _foldCloseModeLabel.value,
             unfoldModeLabel = _unfoldModeLabel.value,
@@ -440,6 +585,69 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             isWriteSecureSettingsGranted = _isWriteSecureSettingsGranted.value,
             lockScreenRotationEnabled = _lockScreenRotationEnabled.value
         )
+    }
+
+    /**
+     * v0.8.0 Multi-page (`0 = Main`, `1 = Work`, `2 = Development`) app membership toggle.
+     * Persists immediately to `SharedPreferences` under `"main_page_packages"`, `"work_page_packages"`, or `"dev_page_packages"`.
+     */
+    fun togglePageApp(pageIndex: Int, packageName: String) {
+        if (packageName.isBlank()) return
+        when (pageIndex) {
+            0 -> {
+                val base = if (rawPrefs.contains(KEY_MAIN_PAGE_PACKAGES)) {
+                    _mainPagePackages.value.toMutableSet()
+                } else {
+                    mainPageApps.value.map { it.packageName }.toMutableSet()
+                }
+                if (packageName in base) base.remove(packageName) else base.add(packageName)
+                val updated = base.toSet()
+                _mainPagePackages.value = updated
+                rawPrefs.edit().putStringSet(KEY_MAIN_PAGE_PACKAGES, updated).apply()
+            }
+            1 -> {
+                val base = if (rawPrefs.contains(KEY_WORK_PAGE_PACKAGES)) {
+                    _workPagePackages.value.toMutableSet()
+                } else {
+                    workPageApps.value.map { it.packageName }.toMutableSet()
+                }
+                if (packageName in base) base.remove(packageName) else base.add(packageName)
+                val updated = base.toSet()
+                _workPagePackages.value = updated
+                rawPrefs.edit().putStringSet(KEY_WORK_PAGE_PACKAGES, updated).apply()
+            }
+            else -> {
+                val base = if (rawPrefs.contains(KEY_DEV_PAGE_PACKAGES)) {
+                    _devPagePackages.value.toMutableSet()
+                } else {
+                    devPageApps.value.map { it.packageName }.toMutableSet()
+                }
+                if (packageName in base) base.remove(packageName) else base.add(packageName)
+                val updated = base.toSet()
+                _devPagePackages.value = updated
+                rawPrefs.edit().putStringSet(KEY_DEV_PAGE_PACKAGES, updated).apply()
+            }
+        }
+        syncUiStateSnapshot()
+    }
+
+    fun setPageApps(pageIndex: Int, packages: Set<String>) {
+        val updated = packages.toSet()
+        when (pageIndex) {
+            0 -> {
+                _mainPagePackages.value = updated
+                rawPrefs.edit().putStringSet(KEY_MAIN_PAGE_PACKAGES, updated).apply()
+            }
+            1 -> {
+                _workPagePackages.value = updated
+                rawPrefs.edit().putStringSet(KEY_WORK_PAGE_PACKAGES, updated).apply()
+            }
+            else -> {
+                _devPagePackages.value = updated
+                rawPrefs.edit().putStringSet(KEY_DEV_PAGE_PACKAGES, updated).apply()
+            }
+        }
+        syncUiStateSnapshot()
     }
 
     fun refreshAll() {
@@ -469,6 +677,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         if (!scratchpadSaved.isNullOrBlank() && _quickNoteText.value != scratchpadSaved) {
             _quickNoteText.value = scratchpadSaved
             preferences.quickNoteText = scratchpadSaved
+        }
+        if (BuildConfig.IS_MAX_EDITION && a11yEnabled) {
+            FloatingHudController.syncOverlayWithService()
         }
         syncUiStateSnapshot()
     }
