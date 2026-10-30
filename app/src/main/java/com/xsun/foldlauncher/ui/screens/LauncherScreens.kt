@@ -75,6 +75,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -83,7 +84,9 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.DialogWindowProvider
 import com.xsun.foldlauncher.BuildConfig
+import com.xsun.foldlauncher.applySystemBarsToWindow
 import com.xsun.foldlauncher.hud.FloatingHudControlCard
 import com.xsun.foldlauncher.model.AppEntry
 import com.xsun.foldlauncher.model.AppPair
@@ -132,6 +135,7 @@ private val HOME_PAGE_TITLES = listOf("Main", "Work", "Dev")
 @Composable
 private fun MinimalOneUiHomeScreen(
     columns: Int,
+    hideSystemStatusBar: Boolean = false,
     isWirelessAdbEnabled: Boolean,
     wirelessAdbPort: Int?,
     tailscaleIp: String?,
@@ -154,6 +158,11 @@ private fun MinimalOneUiHomeScreen(
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val view = LocalView.current
+    LaunchedEffect(hideSystemStatusBar) {
+        val actWindow = (view.context as? android.app.Activity)?.window
+        applySystemBarsToWindow(actWindow, hideSystemStatusBar)
+    }
     val keyboardController = LocalSoftwareKeyboardController.current
     val density = LocalDensity.current
     val axisLockPx = with(density) { 12.dp.toPx() }
@@ -374,6 +383,7 @@ private fun MinimalOneUiHomeScreen(
             }
             EditPageAppsSheet(
                 pageIndex = editingPageIndex,
+                hideSystemStatusBar = hideSystemStatusBar,
                 onSelectPageIndex = { editingPageIndex = it },
                 allApps = allApps,
                 selectedPackages = activeSet,
@@ -522,6 +532,7 @@ private fun OneUiMinimalPageIndicatorBar(
 @Composable
 private fun EditPageAppsSheet(
     pageIndex: Int,
+    hideSystemStatusBar: Boolean = false,
     onSelectPageIndex: (Int) -> Unit,
     allApps: List<AppEntry>,
     selectedPackages: Set<String>,
@@ -540,6 +551,13 @@ private fun EditPageAppsSheet(
         contentColor = Color.White,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     ) {
+        val sheetView = LocalView.current
+        LaunchedEffect(hideSystemStatusBar) {
+            val dialogWin = (sheetView.parent as? DialogWindowProvider)?.window
+            val actWin = (sheetView.context as? android.app.Activity)?.window
+            applySystemBarsToWindow(dialogWin, hideSystemStatusBar)
+            applySystemBarsToWindow(actWin, hideSystemStatusBar)
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -722,6 +740,7 @@ private fun EditPageAppsSheet(
 @Composable
 fun OneUiMinimalAppSearchOverlay(
     visible: Boolean,
+    hideSystemStatusBar: Boolean = false,
     query: String,
     onQueryChange: (String) -> Unit,
     rankedApps: List<AppEntry>,
@@ -731,6 +750,7 @@ fun OneUiMinimalAppSearchOverlay(
     onAppLongClick: (AppEntry) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val view = LocalView.current
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val density = LocalDensity.current
@@ -743,7 +763,9 @@ fun OneUiMinimalAppSearchOverlay(
         }
     }
 
-    LaunchedEffect(visible) {
+    LaunchedEffect(visible, hideSystemStatusBar) {
+        val actWin = (view.context as? android.app.Activity)?.window
+        applySystemBarsToWindow(actWin, hideSystemStatusBar)
         if (visible) {
             runCatching { focusRequester.requestFocus() }
             keyboardController?.show()
@@ -753,8 +775,10 @@ fun OneUiMinimalAppSearchOverlay(
             delay(80)
             runCatching { focusRequester.requestFocus() }
             keyboardController?.show()
+            applySystemBarsToWindow(actWin, hideSystemStatusBar)
         } else {
             keyboardController?.hide()
+            applySystemBarsToWindow(actWin, hideSystemStatusBar)
         }
     }
 
@@ -1529,6 +1553,7 @@ fun CoverOrSlabHomeScreen(
     workPageApps: List<AppEntry> = emptyList(),
     devPageApps: List<AppEntry> = emptyList(),
     onTogglePageApp: ((Int, String) -> Unit)? = null,
+    hideSystemStatusBar: Boolean = false,
     iconShapePreset: IconShapePreset,
     batteryPct: Int,
     isCharging: Boolean,
@@ -1602,6 +1627,7 @@ fun CoverOrSlabHomeScreen(
     } else {
         MinimalOneUiHomeScreen(
             columns = 4,
+            hideSystemStatusBar = hideSystemStatusBar,
             isWirelessAdbEnabled = isWirelessAdbEnabled,
             wirelessAdbPort = wirelessAdbPort,
             tailscaleIp = tailscaleIp,
@@ -1671,6 +1697,7 @@ fun UnfoldedInnerDashboardScreen(
     workPageApps: List<AppEntry> = emptyList(),
     devPageApps: List<AppEntry> = emptyList(),
     onTogglePageApp: ((Int, String) -> Unit)? = null,
+    hideSystemStatusBar: Boolean = false,
     iconShapePreset: IconShapePreset,
     batteryPct: Int,
     isCharging: Boolean,
@@ -1745,6 +1772,7 @@ fun UnfoldedInnerDashboardScreen(
     } else {
         MinimalOneUiHomeScreen(
             columns = 6,
+            hideSystemStatusBar = hideSystemStatusBar,
             isWirelessAdbEnabled = isWirelessAdbEnabled,
             wirelessAdbPort = wirelessAdbPort,
             tailscaleIp = tailscaleIp,
@@ -1813,6 +1841,7 @@ fun FlexTabletopHomeScreen(
     workPageApps: List<AppEntry> = emptyList(),
     devPageApps: List<AppEntry> = emptyList(),
     onTogglePageApp: ((Int, String) -> Unit)? = null,
+    hideSystemStatusBar: Boolean = false,
     iconShapePreset: IconShapePreset,
     batteryPct: Int,
     isCharging: Boolean,
@@ -1886,6 +1915,7 @@ fun FlexTabletopHomeScreen(
     } else {
         MinimalOneUiHomeScreen(
             columns = 6,
+            hideSystemStatusBar = hideSystemStatusBar,
             isWirelessAdbEnabled = isWirelessAdbEnabled,
             wirelessAdbPort = wirelessAdbPort,
             tailscaleIp = tailscaleIp,
@@ -1940,6 +1970,13 @@ fun LauncherSettingsSheet(
         contentColor = FoldLauncherColors.TextPrimary,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     ) {
+        val sheetView = LocalView.current
+        LaunchedEffect(hideSystemStatusBar) {
+            val dialogWin = (sheetView.parent as? DialogWindowProvider)?.window
+            val actWin = (sheetView.context as? android.app.Activity)?.window
+            applySystemBarsToWindow(dialogWin, hideSystemStatusBar)
+            applySystemBarsToWindow(actWin, hideSystemStatusBar)
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1990,13 +2027,13 @@ fun LauncherSettingsSheet(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Hide System Status Bar",
+                        text = "Hide System Bars",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = FoldLauncherColors.TextPrimary
                     )
                     Text(
-                        text = "Keep off (recommended) to show native Android clock & status icons",
+                        text = "Hides status & navigation bars across all launcher screens, sheets, and search",
                         fontSize = 11.sp,
                         color = FoldLauncherColors.TextSecondary
                     )

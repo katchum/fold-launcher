@@ -24,6 +24,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -31,11 +32,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.DialogWindowProvider
+import com.xsun.foldlauncher.applySystemBarsToWindow
 import com.xsun.foldlauncher.model.AppEntry
 import com.xsun.foldlauncher.model.AppShortcutItem
 import com.xsun.foldlauncher.ui.animation.iconPressPhysics
@@ -141,6 +145,7 @@ private fun monogramGradientForPackage(packageName: String): List<Color> {
 @Composable
 fun AppContextMenuSheet(
     app: AppEntry,
+    hideSystemStatusBar: Boolean = false,
     onDismiss: () -> Unit,
     onLaunch: (AppEntry) -> Unit,
     onLaunchAdjacentSplit: (AppEntry) -> Unit,
@@ -161,6 +166,13 @@ fun AppContextMenuSheet(
         contentColor = FoldLauncherColors.TextPrimary,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     ) {
+        val sheetView = LocalView.current
+        LaunchedEffect(hideSystemStatusBar) {
+            val dialogWin = (sheetView.parent as? DialogWindowProvider)?.window
+            val actWin = (sheetView.context as? android.app.Activity)?.window
+            applySystemBarsToWindow(dialogWin, hideSystemStatusBar)
+            applySystemBarsToWindow(actWin, hideSystemStatusBar)
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()

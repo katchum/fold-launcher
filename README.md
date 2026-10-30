@@ -23,6 +23,9 @@ Fold8 Launcher is a lightweight, 120Hz-native Jetpack Compose home screen replac
   - **Horizontal Axis (`|dx| > |dy| * 1.15f`)**: Locks exclusively to `HorizontalPager` (`Main` / `Work` / `Dev` page swipe) and suppresses vertical swipe-up/swipe-down triggers for the entire gesture.
   - **Vertical Axis (`|dy| > |dx| * 1.15f`)**: Locks exclusively to vertical gestures (Swipe Up -> Bottom-Keyboard Search; Swipe Down -> System Notification Shade) and consumes pointer changes on `PointerEventPass.Initial` so `HorizontalPager` never drifts horizontally during a vertical swipe.
 
+### 3. Hide System Bars Across All Launcher Screens, Bottom Sheets & Search (`applySystemBarsToWindow`)
+- **Full-Window & Modal Sheet System Bar Suppression**: When **Hide System Bars** is enabled in Launcher Settings, `applySystemBarsToWindow` hides `WindowInsetsCompat.Type.systemBars()` (both status and navigation bars) across the main `Activity` window (`onCreate`, `onResume`, `onWindowFocusChanged`), all `ModalBottomSheet` dialog windows (`DialogWindowProvider.window` in `LauncherSettingsSheet`, `EditPageAppsSheet`, and `AppContextMenuSheet`), and `OneUiMinimalAppSearchOverlay` when the IME opens/closes.
+
 ---
 
 ## Highlights from `v0.8.0`

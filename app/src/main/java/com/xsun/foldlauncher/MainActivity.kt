@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.Window
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
@@ -98,6 +99,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
+        applySystemBarVisibility(viewModel.hideSystemStatusBar.value)
         if (hasFocus) {
             viewModel.captureClipboardOnResume()
         }
@@ -116,14 +118,20 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun applySystemBarVisibility(hideStatusBar: Boolean) {
-        val controller = WindowCompat.getInsetsController(window, window.decorView)
-        controller.systemBarsBehavior =
-            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        if (hideStatusBar) {
-            controller.hide(WindowInsetsCompat.Type.statusBars())
-        } else {
-            controller.show(WindowInsetsCompat.Type.statusBars())
-        }
+        applySystemBarsToWindow(window, hideStatusBar)
+    }
+}
+
+fun applySystemBarsToWindow(targetWindow: Window?, hideSystemBars: Boolean) {
+    val win = targetWindow ?: return
+    val decor = win.decorView
+    val controller = WindowCompat.getInsetsController(win, decor)
+    controller.systemBarsBehavior =
+        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    if (hideSystemBars) {
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+    } else {
+        controller.show(WindowInsetsCompat.Type.systemBars())
     }
 }
 
@@ -232,6 +240,7 @@ private fun FoldLauncherRoot(
                         workPageApps = workPageApps,
                         devPageApps = devPageApps,
                         onTogglePageApp = viewModel::togglePageApp,
+                        hideSystemStatusBar = hideSystemStatusBar,
                         iconShapePreset = iconShapePreset,
                         batteryPct = batteryPct,
                         isCharging = isCharging,
@@ -301,6 +310,7 @@ private fun FoldLauncherRoot(
                         workPageApps = workPageApps,
                         devPageApps = devPageApps,
                         onTogglePageApp = viewModel::togglePageApp,
+                        hideSystemStatusBar = hideSystemStatusBar,
                         iconShapePreset = iconShapePreset,
                         batteryPct = batteryPct,
                         isCharging = isCharging,
@@ -371,6 +381,7 @@ private fun FoldLauncherRoot(
                         workPageApps = workPageApps,
                         devPageApps = devPageApps,
                         onTogglePageApp = viewModel::togglePageApp,
+                        hideSystemStatusBar = hideSystemStatusBar,
                         iconShapePreset = iconShapePreset,
                         batteryPct = batteryPct,
                         isCharging = isCharging,
@@ -424,6 +435,7 @@ private fun FoldLauncherRoot(
             // v0.8.0 Bottom-Keyboard Search Overlay (0 apps when empty, top 4-8 matches, swipe down to exit)
             OneUiMinimalAppSearchOverlay(
                 visible = isSearchOpen,
+                hideSystemStatusBar = hideSystemStatusBar,
                 query = searchQuery,
                 onQueryChange = viewModel::onSearchQueryChange,
                 rankedApps = rankedSearchApps,
@@ -440,6 +452,7 @@ private fun FoldLauncherRoot(
         if (contextApp != null) {
             AppContextMenuSheet(
                 app = contextApp,
+                hideSystemStatusBar = hideSystemStatusBar,
                 onDismiss = viewModel::dismissContextMenu,
                 onLaunch = { app -> viewModel.launchApp(app) },
                 onLaunchAdjacentSplit = viewModel::launchSplitScreenSingle,
