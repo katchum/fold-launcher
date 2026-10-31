@@ -1,6 +1,6 @@
-# Fold8 Launcher (`com.xsun.foldlauncher`) — `v0.9.0` (Minimal One UI + Side-by-Side Max Edition)
+# Fold8 Launcher (`com.xsun.foldlauncher`) — `v0.10.0` (Minimal One UI + Side-by-Side Max Edition)
 
-**Ultra-Fast, Zero-Bloat 120Hz One UI Home Launcher (`com.xsun.foldlauncher`) with QWERTY Typo-Tolerant Instant Search, Mutually Exclusive Horizontal/Vertical Gesture Axis Lock, 3-Page `Main`/`Work`/`Dev` Horizontal Pager, Tailscale & Wireless Debugging Switches + Side-by-Side Experimental Max Feature Edition (`com.xsun.foldlauncher.max`) for Samsung Galaxy Z Fold 8 and Android Slab Phones**
+**Ultra-Fast, Zero-Bloat 120Hz One UI Home Launcher (`com.xsun.foldlauncher`) with `Dev` • `Main` • `Work` 3-Page Layout, Top Quick-Navigation & Ride-Compare Bar (Google Maps + Uber/Lyft Split-Screen), Recent Apps Thumbnail Strip + Smooth Bottom-Keyboard Search, Compact Single-Row Dev Switches & Side-by-Side Max Edition (`com.xsun.foldlauncher.max`)**
 
 [![Android CI](https://github.com/katchum/fold-launcher/actions/workflows/android-ci.yml/badge.svg)](https://github.com/katchum/fold-launcher/actions/workflows/android-ci.yml)
 
@@ -10,7 +10,31 @@ Fold8 Launcher is a lightweight, 120Hz-native Jetpack Compose home screen replac
 
 ---
 
-## What's New in `v0.9.0`
+## What's New in `v0.10.0`
+
+### 1. Centered `Dev` • `Main` • `Work` 3-Page Layout (`MinimalOneUiHomeScreen`)
+- **Starts on `Main` in the Center (`initialPage = 1`)**:
+  - **Page 0 (`Dev` — Swipe Right from `Main`)**: Compact single-row **Tailscale & Wireless Debugging** switches (`OneUiConnectivityPillsRow`) + developer tools.
+  - **Page 1 (`Main` — Default Center Home Page)**: **Top Quick-Navigation & Ride-Compare Bar (`OneUiQuickNavigationBar`)** + daily personal apps.
+  - **Page 2 (`Work` — Swipe Left from `Main`)**: Adaptive Samsung One UI Work Profile (`UserHandle{10}`) & productivity apps.
+- **Swipe-Down Opens Full Quick Settings Panel (`expandQuickSettingsPanel`)**: Swiping down on the Home Screen now expands the full Samsung One UI Quick Settings panel (`expandSettingsPanel` via `StatusBarManager`, falling back to `GLOBAL_ACTION_QUICK_SETTINGS`).
+
+### 2. Top-of-Main Quick-Navigation & Ride-Compare Bar (`OneUiQuickNavigationBar.kt`)
+- **5 Expandable Travel Modes (`🚌 Bus`, `🚲 Bike`, `🚶 Walk`, `🚗 Drive`, `🚕 Ride`)**:
+  - **`Bus` / `Bike` / `Walk` / `Drive`**: Starts Google Maps turn-by-turn navigation (`google.navigation:q=...&mode=d|b|w`) or live transit route directions (`travelmode=transit&dir_action=navigate`) immediately upon picking a destination.
+  - **`Ride (Uber + Lyft)`**: Launches **Uber (`com.ubercab`) and Lyft (`me.lyft.android`) side-by-side in Android split-screen (`FLAG_ACTIVITY_LAUNCH_ADJACENT`)** with pickup = `my_location`, dropoff address & coordinates pre-filled, and ride price estimates open!
+- **Live Location Autocomplete Dropdown**: Combines recent destinations, on-device `android.location.Geocoder`, and Photon OpenStreetMap GeoJSON autocomplete.
+
+### 3. Recent Apps Thumbnail Strip & Smooth Bottom-Keyboard Search (`OneUiMinimalAppSearchOverlay`)
+- **Top Horizontally Scrollable Recent App Thumbnails (`RecentAppsThumbnailStrip`)**: Opening Swipe-Up Search displays a horizontally scrollable strip of recent/frequently used app preview cards at the top for 1-tap switching.
+- **Smooth `AnimatedVisibility` 2-Row Suggested Matches at Bottom**: Typing in the bottom search bar smoothly animates (`fadeIn + expandVertically`) up to 2 rows (`8` matches) right above the keyboard.
+
+### 4. Compact Single-Row Side-by-Side Tailscale & Wireless ADB Pills (`NativeWidgets.kt`)
+- Redesigned `OneUiConnectivityPillsRow` on the `Dev` page into a compact single-row side-by-side layout (`Tailscale` pill on the left, `Wireless ADB` pill on the right) with 1-tap IP/port copy and compact switches.
+
+---
+
+## Highlights from `v0.9.0`
 
 ### 1. QWERTY-Aware Typo-Tolerant App Search (`SearchEngine.kt`)
 - **Keyboard-Proximity & Transposition Typo Tolerance**: Upgraded `SearchEngine` with QWERTY adjacency-weighted Damerau-Levenshtein prefix & token edit distance (`qwertyPrefixTypoScore` + `qwertyAdjacent` map):

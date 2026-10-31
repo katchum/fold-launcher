@@ -53,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -371,38 +372,38 @@ fun OneUiConnectivityPillsRow(
         if (wirelessAdbPort != null && wirelessAdbPort > 0) ":$wirelessAdbPort" else ""
     }"
     val adbAddressText = if (isWirelessAdbEnabled) rawAdbEndpoint else "Off"
-    val adbDisplaySubtitle = if (adbCopied) "Copied ADB address" else adbAddressText
+    val adbDisplaySubtitle = if (adbCopied) "Copied ADB" else adbAddressText
 
-    val cardShape = RoundedCornerShape(26.dp)
-    val cardBackground = Color(0xD917181E)
-    val cardBorder = Color.White.copy(alpha = 0.10f)
+    val pillShape = RoundedCornerShape(18.dp)
+    val pillBackground = Color(0xD917181E)
+    val pillBorder = Color.White.copy(alpha = 0.10f)
     val mutedDotColor = Color(0xFF6B7280)
     val tailscaleConnectedDot = Color(0xFF34D399)
     val wirelessAdbEnabledDot = Color(0xFF38BDF8)
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(cardShape)
-            .background(cardBackground)
-            .border(1.dp, cardBorder, cardShape)
-            .padding(horizontal = 18.dp, vertical = 10.dp)
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        // Row 1 — Tailscale
+        // Left Compact Pill — Tailscale
         Row(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 6.dp),
+                .weight(1f)
+                .clip(pillShape)
+                .background(pillBackground)
+                .border(1.dp, pillBorder, pillShape)
+                .padding(start = 11.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(3.dp)
+                verticalArrangement = Arrangement.spacedBy(1.dp)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(9.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.clickable {
                         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onOpenTailscaleApp()
@@ -410,13 +411,13 @@ fun OneUiConnectivityPillsRow(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(9.dp)
+                            .size(7.dp)
                             .clip(CircleShape)
                             .background(if (isTailscaleConnected) tailscaleConnectedDot else mutedDotColor)
                     )
                     Text(
                         text = "Tailscale",
-                        fontSize = 15.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = Color.White,
                         maxLines = 1,
@@ -426,7 +427,7 @@ fun OneUiConnectivityPillsRow(
 
                 Text(
                     text = tailscaleDisplaySubtitle,
-                    fontSize = 13.sp,
+                    fontSize = 10.sp,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Medium,
                     color = when {
@@ -437,8 +438,8 @@ fun OneUiConnectivityPillsRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier
-                        .padding(start = 18.dp)
-                        .clip(RoundedCornerShape(6.dp))
+                        .padding(start = 13.dp)
+                        .clip(RoundedCornerShape(4.dp))
                         .clickable {
                             val ipToCopy = resolvedTailscaleIp ?: resolvedLanIp
                             if (!ipToCopy.isNullOrBlank()) {
@@ -453,11 +454,8 @@ fun OneUiConnectivityPillsRow(
                                 onOpenTailscaleApp()
                             }
                         }
-                        .padding(vertical = 2.dp)
                 )
             }
-
-            Spacer(modifier = Modifier.width(12.dp))
 
             Switch(
                 checked = isTailscaleConnected,
@@ -465,6 +463,7 @@ fun OneUiConnectivityPillsRow(
                     haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     onToggleTailscale()
                 },
+                modifier = Modifier.scale(0.76f),
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = Color.White,
                     checkedTrackColor = tailscaleConnectedDot,
@@ -474,23 +473,24 @@ fun OneUiConnectivityPillsRow(
             )
         }
 
-        HorizontalDivider(color = Color.White.copy(alpha = 0.07f))
-
-        // Row 2 — Wireless Debugging
+        // Right Compact Pill — Wireless ADB
         Row(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 6.dp),
+                .weight(1f)
+                .clip(pillShape)
+                .background(pillBackground)
+                .border(1.dp, pillBorder, pillShape)
+                .padding(start = 11.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(3.dp)
+                verticalArrangement = Arrangement.spacedBy(1.dp)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(9.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.clickable {
                         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onOpenWirelessAdbSettings()
@@ -498,13 +498,13 @@ fun OneUiConnectivityPillsRow(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(9.dp)
+                            .size(7.dp)
                             .clip(CircleShape)
                             .background(if (isWirelessAdbEnabled) wirelessAdbEnabledDot else mutedDotColor)
                     )
                     Text(
-                        text = "Wireless Debugging",
-                        fontSize = 15.sp,
+                        text = "Wireless ADB",
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = Color.White,
                         maxLines = 1,
@@ -514,7 +514,7 @@ fun OneUiConnectivityPillsRow(
 
                 Text(
                     text = adbDisplaySubtitle,
-                    fontSize = 13.sp,
+                    fontSize = 10.sp,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Medium,
                     color = when {
@@ -525,8 +525,8 @@ fun OneUiConnectivityPillsRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier
-                        .padding(start = 18.dp)
-                        .clip(RoundedCornerShape(6.dp))
+                        .padding(start = 13.dp)
+                        .clip(RoundedCornerShape(4.dp))
                         .clickable {
                             val host = resolvedTailscaleIp ?: resolvedLanIp
                             if (host != null || (wirelessAdbPort != null && wirelessAdbPort > 0)) {
@@ -544,11 +544,8 @@ fun OneUiConnectivityPillsRow(
                                 onOpenWirelessAdbSettings()
                             }
                         }
-                        .padding(vertical = 2.dp)
                 )
             }
-
-            Spacer(modifier = Modifier.width(12.dp))
 
             Switch(
                 checked = isWirelessAdbEnabled,
@@ -556,6 +553,7 @@ fun OneUiConnectivityPillsRow(
                     haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     onToggleWirelessAdb()
                 },
+                modifier = Modifier.scale(0.76f),
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = Color.White,
                     checkedTrackColor = wirelessAdbEnabledDot,

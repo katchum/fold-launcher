@@ -1,8 +1,14 @@
 package com.xsun.foldlauncher.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -33,9 +39,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -102,6 +111,7 @@ import com.xsun.foldlauncher.ui.animation.RadialTriggerCorner
 import com.xsun.foldlauncher.ui.animation.launcherGestures
 import com.xsun.foldlauncher.ui.components.AppIconTile
 import com.xsun.foldlauncher.ui.components.OneUiConnectivityPillsRow
+import com.xsun.foldlauncher.ui.components.OneUiQuickNavigationBar
 import com.xsun.foldlauncher.ui.components.PersistentTaskbarDock
 import com.xsun.foldlauncher.ui.theme.FoldLauncherColors
 import com.xsun.foldlauncher.ui.theme.IconShapePreset
@@ -113,23 +123,21 @@ import kotlin.math.abs
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private val HOME_PAGE_TITLES = listOf("Main", "Work", "Dev")
+private val HOME_PAGE_TITLES = listOf("Dev", "Main", "Work")
 
 /**
- * v0.8.0 Three-Page (`Main` | `Work` | `Development`) Minimal One UI Home Screen (`minimal` edition).
+ * v1.0.0 Three-Page (`Dev` on left | `Main` in middle | `Work` on right) Minimal One UI Home Screen (`minimal` edition).
  *
- * - Uses `HorizontalPager` (`rememberPagerState(initialPage = 0, pageCount = { 3 })`) across all postures:
- *   - Page 0 (`Main`): Shows ONLY the user's configured Main Apps grid over the system wallpaper (up to 12 apps on
- *     4-col Cover/Slab or 18 apps on 6-col Inner, rendered in static non-scrolling rows). No Tailscale/ADB card,
- *     no search bar, no bottom dock.
- *   - Page 1 (`Work`): Exclusively shows the user's separately configured Work Apps grid + an understated
- *     `"+ Edit Work Apps"` pill that opens the multi-select page app editor sheet.
- *   - Page 2 (`Development`): Shows `OneUiConnectivityPillsRow` (Tailscale switch + IP & Wireless Debugging switch +
+ * - Uses `HorizontalPager` (`rememberPagerState(initialPage = 1, pageCount = { 3 })`) across all postures:
+ *   - Page 0 (Left — `Dev`): Shows `OneUiConnectivityPillsRow` (Tailscale switch + IP & Wireless Debugging switch +
  *     `<ip>:<port>`) at the top, plus the user's configured Dev Apps grid below.
- * - No bottom dock and no home search bar on any of the 3 pages—only a minimal 3-page indicator (`Main • Work • Dev`)
+ *   - Page 1 (Middle — `Main`, Default Home): Shows ONLY the user's configured Main Apps grid over the system wallpaper
+ *     (up to 12 apps on 4-col Cover/Slab or 18 apps on 6-col Inner, rendered in static non-scrolling rows).
+ *   - Page 2 (Right — `Work`): Exclusively shows the user's Work Profile (`UserHandle{10}`) / Work Apps grid + an
+ *     understated `"+ Edit Work Apps"` pill that opens the multi-select page app editor sheet.
+ * - No bottom dock and no home search bar on any of the 3 pages—only a minimal 3-page indicator (`Dev • Main • Work`)
  *   with a subtle `✎` page-apps edit button at the bottom.
- * - Less sensitive upward swipe gesture: requires at least `56.dp` (~1 app icon height) of upward vertical drag AND
- *   `abs(totalDy) > abs(totalDx) * 1.6f` before opening App Search.
+ * - Swiping up opens App Search; swiping down opens the Samsung One UI Quick Settings / Control Center pane.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -167,10 +175,16 @@ private fun MinimalOneUiHomeScreen(
     val density = LocalDensity.current
     val axisLockPx = with(density) { 12.dp.toPx() }
     val triggerPx = with(density) { 56.dp.toPx() }
-    val pagerState = rememberPagerState(initialPage = 0, pageCount = { 3 })
+    val pagerState = rememberPagerState(initialPage = 1, pageCount = { 3 })
     val coroutineScope = rememberCoroutineScope()
 
     var editingPageIndex by remember { mutableIntStateOf(-1) }
+
+    BackHandler(enabled = pagerState.currentPage != 1 && editingPageIndex < 0) {
+        coroutineScope.launch {
+            pagerState.animateScrollToPage(1)
+        }
+    }
 
     val triggerInstantSearch = remember(onOpenSearch, keyboardController) {
         {
@@ -191,7 +205,7 @@ private fun MinimalOneUiHomeScreen(
                     val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                     var totalDx = 0f
                     var totalDy = 0f
-                    // 0 = undecided, 1 = locked horizontal (Pager owns gesture), 2 = locked vertical (Search/Notifications owns gesture)
+                    // 0 = undecided, 1 = locked horizontal (Pager owns gesture), 2 = locked vertical (Search/QuickSettings owns gesture)
                     var gestureAxis = 0
                     var triggered = false
                     while (true) {
@@ -209,7 +223,7 @@ private fun MinimalOneUiHomeScreen(
                             val absY = abs(totalDy)
                             if (absX > axisLockPx || absY > axisLockPx || pagerState.isScrollInProgress) {
                                 gestureAxis = if (pagerState.isScrollInProgress || absX * 1.15f >= absY) {
-                                    1 // Locked to horizontal page swipe: never trigger Search or Notifications
+                                    1 // Locked to horizontal page swipe: never trigger Search or Quick Settings
                                 } else if (absY >= absX * 1.8f) {
                                     2 // Locked to vertical swipe: consume events before HorizontalPager sees them
                                 } else {
@@ -225,7 +239,7 @@ private fun MinimalOneUiHomeScreen(
                                 if (totalDy < -triggerPx && abs(totalDy) > abs(totalDx) * 2.0f) {
                                     triggered = true
                                     triggerInstantSearch()
-                                } else if (totalDy > triggerPx * 1.25f && abs(totalDy) > abs(totalDx) * 2.0f) {
+                                } else if (totalDy > triggerPx && abs(totalDy) > abs(totalDx) * 2.0f) {
                                     triggered = true
                                     onExpandNotifications()
                                 }
@@ -256,80 +270,7 @@ private fun MinimalOneUiHomeScreen(
             ) { pageIndex ->
                 when (pageIndex) {
                     0 -> {
-                        // Page 0 — Main View: ONLY the user's configured Main Apps grid over the system wallpaper
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(horizontal = horizontalPad),
-                            verticalArrangement = Arrangement.Bottom
-                        ) {
-                            Spacer(modifier = Modifier.weight(1f))
-                            StaticNonScrollingAppGrid(
-                                apps = mainPageApps.take(maxAppsPerPage),
-                                columns = columns,
-                                iconShapePreset = iconShapePreset,
-                                onAppClick = onAppClick,
-                                onAppLongClick = onAppLongClick
-                            )
-                            Spacer(modifier = Modifier.height(16.dp))
-                        }
-                    }
-
-                    1 -> {
-                        // Page 1 — Work View: Exclusively the user's separately configured Work Apps + understated Edit pill
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(horizontal = horizontalPad),
-                            verticalArrangement = Arrangement.Bottom
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 4.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "WORK",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 1.1.sp,
-                                    color = Color.White.copy(alpha = 0.55f)
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .background(Color(0x9917181E))
-                                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
-                                        .clickable { editingPageIndex = 1 }
-                                        .padding(horizontal = 11.dp, vertical = 5.dp)
-                                ) {
-                                    Text(
-                                        text = "+ Edit Work Apps",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = Color(0xFFCBD5E1)
-                                    )
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.weight(1f))
-
-                            StaticNonScrollingAppGrid(
-                                apps = workPageApps.take(columns * 5),
-                                columns = columns,
-                                iconShapePreset = iconShapePreset,
-                                compact = workPageApps.size > maxAppsPerPage,
-                                onAppClick = onAppClick,
-                                onAppLongClick = onAppLongClick
-                            )
-                            Spacer(modifier = Modifier.height(16.dp))
-                        }
-                    }
-
-                    else -> {
-                        // Page 2 — Development View: OneUiConnectivityPillsRow at top + configured Dev Apps grid
+                        // Page 0 (Left) — Development View: OneUiConnectivityPillsRow at top + configured Dev Apps grid
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -358,10 +299,85 @@ private fun MinimalOneUiHomeScreen(
                             Spacer(modifier = Modifier.height(16.dp))
                         }
                     }
+
+                    1 -> {
+                        // Page 1 (Middle — Default Home) — Main View: Top Quick Navigation Bar + configured Main Apps grid over the system wallpaper
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = horizontalPad)
+                        ) {
+                            OneUiQuickNavigationBar(
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(modifier = Modifier.weight(1f))
+                            StaticNonScrollingAppGrid(
+                                apps = mainPageApps.take(maxAppsPerPage),
+                                columns = columns,
+                                iconShapePreset = iconShapePreset,
+                                onAppClick = onAppClick,
+                                onAppLongClick = onAppLongClick
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                        }
+                    }
+
+                    else -> {
+                        // Page 2 (Right) — Work View: Exclusively the user's Work Profile / Work Apps + understated Edit pill
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = horizontalPad),
+                            verticalArrangement = Arrangement.Bottom
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "WORK",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.1.sp,
+                                    color = Color.White.copy(alpha = 0.55f)
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(Color(0x9917181E))
+                                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                                        .clickable { editingPageIndex = 2 }
+                                        .padding(horizontal = 11.dp, vertical = 5.dp)
+                                ) {
+                                    Text(
+                                        text = "+ Edit Work Apps",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = Color(0xFFCBD5E1)
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.weight(1f))
+
+                            StaticNonScrollingAppGrid(
+                                apps = workPageApps.take(columns * 5),
+                                columns = columns,
+                                iconShapePreset = iconShapePreset,
+                                compact = workPageApps.size > maxAppsPerPage,
+                                onAppClick = onAppClick,
+                                onAppLongClick = onAppLongClick
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                        }
+                    }
                 }
             }
 
-            // Minimal 3-Page Indicator ("Main  •  Work  •  Dev") + subtle "✎" page apps editor button
+            // Minimal 3-Page Indicator ("Dev  •  Main  •  Work") + subtle "✎" page apps editor button
             OneUiMinimalPageIndicatorBar(
                 currentPage = pagerState.currentPage,
                 onSelectPage = { targetPage ->
@@ -378,9 +394,9 @@ private fun MinimalOneUiHomeScreen(
 
         if (editingPageIndex in 0..2) {
             val activeSet = when (editingPageIndex) {
-                0 -> mainPageApps.map { it.uniqueKey }.toSet()
-                1 -> workPageApps.map { it.uniqueKey }.toSet()
-                else -> devPageApps.map { it.uniqueKey }.toSet()
+                0 -> devPageApps.map { it.uniqueKey }.toSet()
+                1 -> mainPageApps.map { it.uniqueKey }.toSet()
+                else -> workPageApps.map { it.uniqueKey }.toSet()
             }
             EditPageAppsSheet(
                 pageIndex = editingPageIndex,
@@ -637,7 +653,7 @@ private fun EditPageAppsSheet(
             HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
 
             val sortedApps = remember(allApps, pageIndex) {
-                if (pageIndex == 1) {
+                if (pageIndex == 2) {
                     allApps.sortedWith(
                         compareByDescending<AppEntry> { it.isWorkProfile }
                             .thenBy { it.label.lowercase() }
@@ -735,17 +751,20 @@ private fun EditPageAppsSheet(
 }
 
 /**
- * v0.8.0 Redesigned Swipe-Up App Search Overlay (`OneUiMinimalAppSearchOverlay`).
+ * v1.0.0 Swipe-Up App Search Overlay (`OneUiMinimalAppSearchOverlay`) with:
  *
- * 1. Search Text Box Docked Right on Top of the Keyboard:
+ * 1. Horizontally Scrollable Recent App Thumbnail Cards (`RecentAppsThumbnailStrip`) on Top:
+ *    - Shown immediately when Search opens with an empty query (`query.trim().isEmpty()`), AND kept on top
+ *      while typing (`query.trim().isNotEmpty()`).
+ *    - Horizontally scrollable `LazyRow` of rich mini-window thumbnail preview cards (`RecentAppThumbnailCard`).
+ * 2. Smooth 2-Row Suggested Matches Section on Bottom When Typing:
+ *    - When `query.trim().isNotEmpty()`, smoothly animates in (`AnimatedVisibility` with `expandVertically` +
+ *      `fadeIn` using `LauncherSpringSpecs.Snappy120HzIntOffset` & `animateContentSize`) a 2-row (`4` per row,
+ *      up to `8` apps) Suggested Matches card right below the Recent Apps thumbnail strip and directly above the
+ *      bottom-docked search input box.
+ * 3. Search Text Box Docked Right on Top of the Keyboard:
  *    - Anchored at the bottom of the overlay (`Modifier.fillMaxSize().imePadding().navigationBarsPadding()`),
  *      sitting directly on top of the software keyboard.
- * 2. Show ZERO Apps When Search Query Is Empty:
- *    - When `query.trim().isEmpty()`, no app icons or full app drawer are shown—only the clean translucent
- *      backdrop and the focused search text box sitting right above the keyboard.
- * 3. Show Only the Top 4–8 Matching Apps When Typing:
- *    - When `query.trim().isNotEmpty()`, renders at most 8 matching apps (`rankedApps.take(8)`) in 1–2 clean,
- *      non-scrolling rows (`4` per row) immediately above the search text box within easy thumb reach.
  * 4. No Close (`✕`) Button — Swipe Down (`>= 48.dp`), Backdrop Tap, or System Back Exits Search:
  *    - Swiping down anywhere on the Search overlay (`detectVerticalDragGestures` downward drag `>= 48.dp`)
  *      cleanly hides the keyboard and exits Search (`keyboardController?.hide(); onDismiss()`), symmetric with
@@ -757,6 +776,7 @@ fun OneUiMinimalAppSearchOverlay(
     hideSystemStatusBar: Boolean = false,
     query: String,
     onQueryChange: (String) -> Unit,
+    recentApps: List<AppEntry> = emptyList(),
     rankedApps: List<AppEntry>,
     iconShapePreset: IconShapePreset,
     columns: Int = 4,
@@ -811,6 +831,9 @@ fun OneUiMinimalAppSearchOverlay(
     ) {
         val searchBarShape = RoundedCornerShape(24.dp)
         val trimmedQuery = query.trim()
+        val displayRecentApps = remember(recentApps, rankedApps) {
+            if (recentApps.isNotEmpty()) recentApps else rankedApps.take(8)
+        }
         val topMatches = remember(trimmedQuery, rankedApps) {
             if (trimmedQuery.isEmpty()) emptyList() else rankedApps.take(8)
         }
@@ -863,52 +886,112 @@ fun OneUiMinimalAppSearchOverlay(
                         )
                 )
 
-                // Show ONLY the top 4-8 matching apps in 1-2 static rows (4 per row) when typing;
-                // show ZERO apps when query is empty.
-                if (matchRows.isNotEmpty()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(26.dp))
-                            .background(Color(0xD917181E))
-                            .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(26.dp))
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                onClick = {}
+                // Smoothly animated bottom-anchored Search deck:
+                // - Top: Horizontally Scrollable Recent App Thumbnail Cards (always visible when empty AND when typing)
+                // - Bottom: 2-Row Suggested Matches section that smoothly expands underneath Recent Apps when typing
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .animateContentSize(
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioNoBouncy,
+                                stiffness = Spring.StiffnessMediumLow
                             )
-                            .padding(horizontal = 10.dp, vertical = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        )
+                ) {
+                    if (displayRecentApps.isNotEmpty()) {
+                        RecentAppsThumbnailStrip(
+                            recentApps = displayRecentApps,
+                            iconShapePreset = iconShapePreset,
+                            compact = matchRows.isNotEmpty(),
+                            onLaunchApp = onLaunchApp,
+                            onAppLongClick = onAppLongClick
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                    }
+
+                    AnimatedVisibility(
+                        visible = matchRows.isNotEmpty(),
+                        enter = expandVertically(
+                            animationSpec = LauncherSpringSpecs.Snappy120HzIntOffset,
+                            expandFrom = Alignment.Bottom
+                        ) + fadeIn(animationSpec = LauncherSpringSpecs.SearchSheetSpring),
+                        exit = shrinkVertically(
+                            animationSpec = LauncherSpringSpecs.Snappy120HzIntOffset,
+                            shrinkTowards = Alignment.Bottom
+                        ) + fadeOut(animationSpec = LauncherSpringSpecs.SearchSheetSpring)
                     ) {
-                        matchRows.forEach { rowApps ->
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 10.dp)
+                                .clip(RoundedCornerShape(26.dp))
+                                .background(Color(0xD917181E))
+                                .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(26.dp))
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = {}
+                                )
+                                .padding(horizontal = 12.dp, vertical = 12.dp)
+                                .animateContentSize(
+                                    animationSpec = spring(
+                                        dampingRatio = Spring.DampingRatioNoBouncy,
+                                        stiffness = Spring.StiffnessMediumLow
+                                    )
+                                ),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                for (colIdx in 0 until 4) {
-                                    val app = rowApps.getOrNull(colIdx)
-                                    Box(
-                                        modifier = Modifier.weight(1f),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        if (app != null) {
-                                            AppIconTile(
-                                                app = app,
-                                                iconShapePreset = iconShapePreset,
-                                                showLabel = true,
-                                                compact = false,
-                                                onClick = { onLaunchApp(app) },
-                                                onLongClick = { onAppLongClick(app) }
-                                            )
+                                Text(
+                                    text = "SUGGESTED MATCHES",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.0.sp,
+                                    color = Color(0xFF94A3B8)
+                                )
+                                Text(
+                                    text = "${topMatches.size} ${if (topMatches.size == 1) "app" else "apps"}",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = Color(0xFF38BDF8)
+                                )
+                            }
+
+                            matchRows.forEach { rowApps ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    for (colIdx in 0 until 4) {
+                                        val app = rowApps.getOrNull(colIdx)
+                                        Box(
+                                            modifier = Modifier.weight(1f),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (app != null) {
+                                                AppIconTile(
+                                                    app = app,
+                                                    iconShapePreset = iconShapePreset,
+                                                    showLabel = true,
+                                                    compact = false,
+                                                    onClick = { onLaunchApp(app) },
+                                                    onLongClick = { onAppLongClick(app) }
+                                                )
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
                     }
-
-                    Spacer(modifier = Modifier.height(10.dp))
                 }
 
                 // Search Text Box Docked Right on Top of the Keyboard (no close '✕' button)
@@ -967,6 +1050,181 @@ fun OneUiMinimalAppSearchOverlay(
                 }
             }
         }
+    }
+}
+
+/**
+ * Horizontally scrollable Recent Apps thumbnail strip (`RecentAppsThumbnailStrip`) displayed at the top
+ * of `OneUiMinimalAppSearchOverlay` both when the search box is empty and while typing.
+ */
+@Composable
+private fun RecentAppsThumbnailStrip(
+    recentApps: List<AppEntry>,
+    iconShapePreset: IconShapePreset,
+    compact: Boolean = false,
+    onLaunchApp: (AppEntry) -> Unit,
+    onAppLongClick: (AppEntry) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val listState = rememberLazyListState()
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(26.dp))
+            .background(Color(0xCC14161D))
+            .border(1.dp, Color.White.copy(alpha = 0.09f), RoundedCornerShape(26.dp))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {}
+            )
+            .padding(vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "RECENT APPS",
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.0.sp,
+                color = Color(0xFF94A3B8)
+            )
+            Text(
+                text = "Swipe ⟷",
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium,
+                color = Color.White.copy(alpha = 0.45f)
+            )
+        }
+
+        LazyRow(
+            state = listState,
+            contentPadding = PaddingValues(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            items(
+                items = recentApps,
+                key = { it.uniqueKey }
+            ) { app ->
+                RecentAppThumbnailCard(
+                    app = app,
+                    iconShapePreset = iconShapePreset,
+                    compact = compact,
+                    onClick = { onLaunchApp(app) },
+                    onLongClick = { onAppLongClick(app) }
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Individual Recent App mini-window thumbnail card (`RecentAppThumbnailCard`) inside `RecentAppsThumbnailStrip`.
+ */
+@Composable
+private fun RecentAppThumbnailCard(
+    app: AppEntry,
+    iconShapePreset: IconShapePreset,
+    compact: Boolean = false,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
+    val cardWidth = if (compact) 94.dp else 102.dp
+    val cardHeight = if (compact) 114.dp else 128.dp
+    val cardShape = RoundedCornerShape(20.dp)
+    val previewSurfaceShape = RoundedCornerShape(14.dp)
+
+    Column(
+        modifier = Modifier
+            .width(cardWidth)
+            .height(cardHeight)
+            .clip(cardShape)
+            .background(Color(0xE61B1D26))
+            .border(
+                1.dp,
+                if (app.isWorkProfile) Color(0xFF0381FE).copy(alpha = 0.40f)
+                else Color.White.copy(alpha = 0.10f),
+                cardShape
+            )
+            .padding(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        // Mini-window title bar (subtle multitasking window chrome + Work profile indicator)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 2.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(5.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF38BDF8).copy(alpha = 0.65f))
+                )
+                Box(
+                    modifier = Modifier
+                        .width(14.dp)
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(Color.White.copy(alpha = 0.18f))
+                )
+            }
+            if (app.isWorkProfile) {
+                Text(
+                    text = "WORK",
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Color(0xFF38BDF8)
+                )
+            }
+        }
+
+        // Mini-window preview surface with centered app icon + briefcase badge
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .padding(vertical = 4.dp)
+                .clip(previewSurfaceShape)
+                .background(Color.White.copy(alpha = 0.04f))
+                .border(0.5.dp, Color.White.copy(alpha = 0.06f), previewSurfaceShape)
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center
+        ) {
+            AppIconTile(
+                app = app,
+                iconShapePreset = iconShapePreset,
+                showLabel = false,
+                compact = compact,
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
+        }
+
+        // Bottom app title
+        Text(
+            text = app.label,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Color.White,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.clickable(onClick = onClick)
+        )
     }
 }
 

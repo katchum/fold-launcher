@@ -4,6 +4,8 @@ import com.xsun.foldlauncher.model.AppEntry
 import com.xsun.foldlauncher.posture.DevicePosture
 import com.xsun.foldlauncher.ui.animation.AnimationPhysicsMath
 import com.xsun.foldlauncher.ui.animation.RadialTriggerCorner
+import com.xsun.foldlauncher.ui.components.QuickNavMode
+import com.xsun.foldlauncher.ui.components.QuickNavigationLauncher
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -153,5 +155,40 @@ class SearchEngineTest {
         assertEquals("Tailscale", SearchEngine.rankApps(apps, "tailscle").first().label)
         assertEquals("Settings", SearchEngine.rankApps(apps, "sttings").first().label)
         assertEquals("Gmail", SearchEngine.rankApps(apps, "gmial").first().label)
+    }
+
+    @Test
+    fun quickNavDeepLinks_formatsGoogleMapsAndUberLyftRideEstimateUrls() {
+        val busUri = QuickNavigationLauncher.buildGoogleMapsPrimaryUri(QuickNavMode.BUS, "SFO Airport")
+        assertTrue(busUri.contains("travelmode=transit"))
+        assertTrue(busUri.contains("dir_action=navigate"))
+
+        val bikeUri = QuickNavigationLauncher.buildGoogleMapsPrimaryUri(QuickNavMode.BIKE, "Golden Gate Park")
+        assertEquals("google.navigation:q=Golden%20Gate%20Park&mode=b", bikeUri)
+
+        val walkUri = QuickNavigationLauncher.buildGoogleMapsPrimaryUri(QuickNavMode.WALK, "Ferry Building")
+        assertEquals("google.navigation:q=Ferry%20Building&mode=w", walkUri)
+
+        val driveUri = QuickNavigationLauncher.buildGoogleMapsPrimaryUri(QuickNavMode.DRIVE, "1600 Amphitheatre Pkwy")
+        assertEquals("google.navigation:q=1600%20Amphitheatre%20Pkwy&mode=d", driveUri)
+
+        val uberDeepLink = QuickNavigationLauncher.buildUberDeepLinkUri(
+            destinationName = "SFO Airport",
+            formattedAddress = "San Francisco International Airport, CA",
+            latitude = 37.6213,
+            longitude = -122.3790
+        )
+        assertTrue(uberDeepLink.startsWith("uber://?action=setPickup&pickup=my_location"))
+        assertTrue(uberDeepLink.contains("dropoff[latitude]=37.6213"))
+        assertTrue(uberDeepLink.contains("dropoff[longitude]=-122.379"))
+
+        val lyftDeepLink = QuickNavigationLauncher.buildLyftDeepLinkUri(
+            formattedAddress = "San Francisco International Airport, CA",
+            latitude = 37.6213,
+            longitude = -122.3790
+        )
+        assertTrue(lyftDeepLink.startsWith("lyft://ridetype?id=lyft"))
+        assertTrue(lyftDeepLink.contains("destination[latitude]=37.6213"))
+        assertTrue(lyftDeepLink.contains("destination[longitude]=-122.379"))
     }
 }

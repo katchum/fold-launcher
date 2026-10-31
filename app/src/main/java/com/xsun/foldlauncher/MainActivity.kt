@@ -432,12 +432,13 @@ private fun FoldLauncherRoot(
                 onToggleThumbArc = viewModel::toggleRadialThumbArc
             )
         } else {
-            // v0.8.0 Bottom-Keyboard Search Overlay (0 apps when empty, top 4-8 matches, swipe down to exit)
+            // v1.0.0 Bottom-Keyboard Search Overlay (Scrollable Recent App Thumbnails on top + 2-row Suggested Matches on bottom when typing)
             OneUiMinimalAppSearchOverlay(
                 visible = isSearchOpen,
                 hideSystemStatusBar = hideSystemStatusBar,
                 query = searchQuery,
                 onQueryChange = viewModel::onSearchQueryChange,
+                recentApps = recentApps,
                 rankedApps = rankedSearchApps,
                 iconShapePreset = iconShapePreset,
                 columns = if (postureState.posture == DevicePosture.COMPACT) 4 else 6,

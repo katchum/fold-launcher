@@ -1008,16 +1008,51 @@ object SystemTweaker {
     }
 
     /**
-     * Expands the system notification shade when swiping down anywhere on the home screen.
+     * v1.0.0 Expands the Samsung One UI Quick Settings / Control Center panel (Wi-Fi, Bluetooth,
+     * Quick Settings toggles, Brightness, Volume, Media, Modes) when swiping down on the home screen.
+     *
+     * Priority order:
+     * 1. `FoldAccessibilityService.openQuickSettings()` (`GLOBAL_ACTION_QUICK_SETTINGS`) if enabled.
+     * 2. `StatusBarManager.expandSettingsPanel()` reflection (uses `EXPAND_STATUS_BAR` permission,
+     *    which directly opens the One UI Quick Settings / Control Center pane without needing Accessibility).
+     * 3. Fallback to `openNotificationShade()` / `expandNotificationsPanel()`.
      */
     @SuppressLint("WrongConstant", "PrivateApi")
-    fun expandNotificationsPanel(context: Context): Boolean {
+    fun expandQuickSettingsPanel(context: Context): Boolean {
         val a11y = FoldAccessibilityService.instance
+        if (a11y != null && a11y.openQuickSettings()) {
+            return true
+        }
+        val statusBarService = try {
+            context.getSystemService("statusbar")
+        } catch (_: Exception) {
+            null
+        }
+        if (statusBarService != null) {
+            try {
+                val statusBarManager = Class.forName("android.app.StatusBarManager")
+                val expandSettingsNoArgs = runCatching {
+                    statusBarManager.getMethod("expandSettingsPanel")
+                }.getOrNull()
+                if (expandSettingsNoArgs != null) {
+                    expandSettingsNoArgs.invoke(statusBarService)
+                    return true
+                }
+                val expandSettingsWithSubPanel = runCatching {
+                    statusBarManager.getMethod("expandSettingsPanel", String::class.java)
+                }.getOrNull()
+                if (expandSettingsWithSubPanel != null) {
+                    expandSettingsWithSubPanel.invoke(statusBarService, null)
+                    return true
+                }
+            } catch (_: Exception) {
+            }
+        }
         if (a11y != null && a11y.openNotificationShade()) {
             return true
         }
         return try {
-            val statusBarService = context.getSystemService("statusbar") ?: return false
+            if (statusBarService == null) return false
             val statusBarManager = Class.forName("android.app.StatusBarManager")
             val expandMethod = statusBarManager.getMethod("expandNotificationsPanel")
             expandMethod.invoke(statusBarService)
@@ -1025,6 +1060,14 @@ object SystemTweaker {
         } catch (_: Exception) {
             false
         }
+    }
+
+    /**
+     * Expands the system Quick Settings / Control Center shade when swiping down anywhere on the home screen.
+     */
+    @SuppressLint("WrongConstant", "PrivateApi")
+    fun expandNotificationsPanel(context: Context): Boolean {
+        return expandQuickSettingsPanel(context)
     }
 
     /**

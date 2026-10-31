@@ -117,6 +117,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         private const val KEY_HINGE_HAPTICS = "hinge_haptics_enabled"
         private const val KEY_FOLD_CLOSE_MODE = "fold_close_action_mode"
         private const val KEY_UNFOLD_MODE = "unfold_action_mode"
+        private const val KEY_RECENT_UNIQUE_KEYS_ORDER = "recent_unique_keys_order"
 
         val DEFAULT_MAIN_PAGE_PACKAGES: Set<String> = linkedSetOf(
             "com.samsung.android.dialer",
@@ -329,18 +330,31 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         if (explicit.isNotEmpty()) explicit.take(7) else apps.take(5)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    private val _recentSessionPackages = MutableStateFlow<List<String>>(emptyList())
+    private val _recentSessionPackages = MutableStateFlow<List<String>>(
+        rawPrefs.getString(KEY_RECENT_UNIQUE_KEYS_ORDER, null)
+            ?.split("|")
+            ?.filter { it.isNotBlank() }
+            ?: emptyList()
+    )
 
     val recentApps: StateFlow<List<AppEntry>> = combine(
         allApps,
-        _recentSessionPackages
-    ) { apps, sessionOrder ->
+        _recentSessionPackages,
+        mainPageApps
+    ) { apps, sessionOrder, mainApps ->
+        val byUniqueKey = apps.associateBy { it.uniqueKey }
         val byPkg = apps.associateBy { it.packageName }
-        val fromSession = sessionOrder.mapNotNull { byPkg[it] }
+        val fromSession = sessionOrder.mapNotNull { key ->
+            byUniqueKey[key] ?: byPkg[key]
+        }
+        val sessionUniqueKeys = fromSession.map { it.uniqueKey }.toSet()
         val fromCounts = apps
-            .filter { it.launchCount > 0 && it.packageName !in sessionOrder }
+            .filter { it.launchCount > 0 && it.uniqueKey !in sessionUniqueKeys }
             .sortedByDescending { it.launchCount }
-        (fromSession + fromCounts).take(8)
+        val fallbackApps = mainApps + apps
+        (fromSession + fromCounts + fallbackApps)
+            .distinctBy { it.uniqueKey }
+            .take(10)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     private val _folders = MutableStateFlow(preferences.folders)
@@ -611,7 +625,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
-     * v0.9.0 Multi-page (`0 = Main`, `1 = Work`, `2 = Development`) app membership toggle.
+     * v1.0.0 Multi-page (`0 = Dev` on left, `1 = Main` in middle, `2 = Work` on right) app membership toggle.
      * Supports both `app.uniqueKey` (distinguishing Work Profile `pkg#work_10` from Personal `pkg`) and `app.packageName`.
      */
     fun togglePageApp(pageIndex: Int, packageName: String) {
@@ -619,6 +633,25 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val plainPkg = packageName.substringBefore("#work_")
         when (pageIndex) {
             0 -> {
+                // Page 0 (Left): Development View
+                val base = if (rawPrefs.contains(KEY_DEV_PAGE_PACKAGES)) {
+                    _devPagePackages.value.toMutableSet()
+                } else {
+                    devPageApps.value.map { it.uniqueKey }.toMutableSet()
+                }
+                if (packageName in base) {
+                    base.remove(packageName)
+                } else if (!packageName.contains("#work_") && plainPkg in base) {
+                    base.remove(plainPkg)
+                } else {
+                    base.add(packageName)
+                }
+                val updated = base.toSet()
+                _devPagePackages.value = updated
+                rawPrefs.edit().putStringSet(KEY_DEV_PAGE_PACKAGES, updated).apply()
+            }
+            1 -> {
+                // Page 1 (Middle — Default Home): Main View
                 val base = if (rawPrefs.contains(KEY_MAIN_PAGE_PACKAGES)) {
                     _mainPagePackages.value.toMutableSet()
                 } else {
@@ -635,7 +668,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 _mainPagePackages.value = updated
                 rawPrefs.edit().putStringSet(KEY_MAIN_PAGE_PACKAGES, updated).apply()
             }
-            1 -> {
+            else -> {
+                // Page 2 (Right): Work View
                 val isCustomizedV2 = rawPrefs.getBoolean("work_page_customized_v2", false)
                 val base = if (isCustomizedV2 && rawPrefs.contains(KEY_WORK_PAGE_PACKAGES)) {
                     _workPagePackages.value.toMutableSet()
@@ -656,23 +690,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     .putBoolean("work_page_customized_v2", true)
                     .apply()
             }
-            else -> {
-                val base = if (rawPrefs.contains(KEY_DEV_PAGE_PACKAGES)) {
-                    _devPagePackages.value.toMutableSet()
-                } else {
-                    devPageApps.value.map { it.uniqueKey }.toMutableSet()
-                }
-                if (packageName in base) {
-                    base.remove(packageName)
-                } else if (!packageName.contains("#work_") && plainPkg in base) {
-                    base.remove(plainPkg)
-                } else {
-                    base.add(packageName)
-                }
-                val updated = base.toSet()
-                _devPagePackages.value = updated
-                rawPrefs.edit().putStringSet(KEY_DEV_PAGE_PACKAGES, updated).apply()
-            }
         }
         syncUiStateSnapshot()
     }
@@ -681,19 +698,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val updated = packages.toSet()
         when (pageIndex) {
             0 -> {
+                _devPagePackages.value = updated
+                rawPrefs.edit().putStringSet(KEY_DEV_PAGE_PACKAGES, updated).apply()
+            }
+            1 -> {
                 _mainPagePackages.value = updated
                 rawPrefs.edit().putStringSet(KEY_MAIN_PAGE_PACKAGES, updated).apply()
             }
-            1 -> {
+            else -> {
                 _workPagePackages.value = updated
                 rawPrefs.edit()
                     .putStringSet(KEY_WORK_PAGE_PACKAGES, updated)
                     .putBoolean("work_page_customized_v2", true)
                     .apply()
-            }
-            else -> {
-                _devPagePackages.value = updated
-                rawPrefs.edit().putStringSet(KEY_DEV_PAGE_PACKAGES, updated).apply()
             }
         }
         syncUiStateSnapshot()
@@ -762,7 +779,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
         _allInstalledApps.value = _allInstalledApps.value.map { entry ->
             entry.copy(
-                launchCount = counts[entry.packageName] ?: entry.launchCount,
+                launchCount = counts[entry.uniqueKey] ?: counts[entry.packageName] ?: entry.launchCount,
                 isPinnedCover = entry.packageName in pinnedCover,
                 isPinnedInner = entry.packageName in pinnedInner,
                 isDockPinned = entry.packageName in pinnedDock
@@ -1385,8 +1402,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         if (app.uniqueKey != app.packageName) {
             preferences.incrementLaunchCount(app.packageName)
         }
-        _recentSessionPackages.value =
-            (listOf(app.packageName) + _recentSessionPackages.value.filter { it != app.packageName }).take(10)
+        val updatedRecents = (
+            listOf(app.uniqueKey) +
+                _recentSessionPackages.value.filter { it != app.uniqueKey && it != app.packageName }
+            ).take(12)
+        _recentSessionPackages.value = updatedRecents
+        rawPrefs.edit().putString(KEY_RECENT_UNIQUE_KEYS_ORDER, updatedRecents.joinToString("|")).apply()
         syncAppFlagsInMemory()
         if (_isSearchOpen.value) {
             closeSearch()
