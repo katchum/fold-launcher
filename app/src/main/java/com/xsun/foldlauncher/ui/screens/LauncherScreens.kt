@@ -913,11 +913,17 @@ fun OneUiMinimalAppSearchOverlay(
                     AnimatedVisibility(
                         visible = matchRows.isNotEmpty(),
                         enter = expandVertically(
-                            animationSpec = LauncherSpringSpecs.Snappy120HzIntOffset,
+                            animationSpec = spring(
+                                dampingRatio = 0.84f,
+                                stiffness = 500f
+                            ),
                             expandFrom = Alignment.Bottom
                         ) + fadeIn(animationSpec = LauncherSpringSpecs.SearchSheetSpring),
                         exit = shrinkVertically(
-                            animationSpec = LauncherSpringSpecs.Snappy120HzIntOffset,
+                            animationSpec = spring(
+                                dampingRatio = 0.84f,
+                                stiffness = 500f
+                            ),
                             shrinkTowards = Alignment.Bottom
                         ) + fadeOut(animationSpec = LauncherSpringSpecs.SearchSheetSpring)
                     ) {
