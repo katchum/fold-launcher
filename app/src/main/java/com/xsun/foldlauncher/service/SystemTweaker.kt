@@ -3,6 +3,7 @@ package com.xsun.foldlauncher.service
 import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.app.KeyguardManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -10,6 +11,8 @@ import android.content.pm.PackageManager
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.hardware.display.DisplayManager
+import android.location.LocationManager
+import android.media.AudioManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
@@ -17,10 +20,12 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.provider.Settings
 import android.view.Display
+import android.view.KeyEvent
 import android.view.Surface
 import android.view.inputmethod.InputMethodManager
 import androidx.core.content.ContextCompat
@@ -33,6 +38,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.util.Collections
+import kotlin.math.roundToInt
 
 typealias FoldCloseActionMode = PostureFoldCloseActionMode
 typealias HingeDetentTick = PostureHingeDetentTick
@@ -1263,6 +1269,289 @@ object SystemTweaker {
             }
             context.startActivity(intent)
         } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Reads current media (`STREAM_MUSIC`) volume as `0..100` percent.
+     */
+    fun getMediaVolumePercent(context: Context): Int {
+        return try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return 50
+            val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+            val cur = am.getStreamVolume(AudioManager.STREAM_MUSIC).coerceIn(0, max)
+            ((cur.toFloat() / max.toFloat()) * 100f).roundToInt().coerceIn(0, 100)
+        } catch (_: Exception) {
+            50
+        }
+    }
+
+    /**
+     * Sets media (`STREAM_MUSIC`) volume to `0..100` percent.
+     */
+    fun setMediaVolumePercent(context: Context, percent: Int) {
+        try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+            val clamped = percent.coerceIn(0, 100)
+            val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+            val targetVol = ((clamped / 100f) * max).roundToInt().coerceIn(0, max)
+            am.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, 0)
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Dispatches a hardware media key (`KEYCODE_MEDIA_PLAY_PAUSE`, `KEYCODE_MEDIA_PREVIOUS`,
+     * `KEYCODE_MEDIA_NEXT`) to the active media session via `AudioManager.dispatchMediaKeyEvent`.
+     */
+    fun dispatchMediaKey(context: Context, keyCode: Int) {
+        try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+            val now = SystemClock.uptimeMillis()
+            val downEvent = KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0)
+            val upEvent = KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0)
+            am.dispatchMediaKeyEvent(downEvent)
+            am.dispatchMediaKeyEvent(upEvent)
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Reads current screen brightness (`Settings.System.SCREEN_BRIGHTNESS`, `0..255`) as `0..100` percent.
+     */
+    fun getBrightnessPercent(context: Context): Int {
+        return try {
+            val raw = Settings.System.getInt(
+                context.contentResolver,
+                Settings.System.SCREEN_BRIGHTNESS,
+                128
+            ).coerceIn(0, 255)
+            ((raw / 255f) * 100f).roundToInt().coerceIn(0, 100)
+        } catch (_: Exception) {
+            50
+        }
+    }
+
+    /**
+     * Sets screen brightness (`0..100` percent -> `0..255`).
+     * Writes directly via `Settings.System.putInt` when permitted, or falls back to opening
+     * `ACTION_MANAGE_WRITE_SETTINGS` / `ACTION_DISPLAY_SETTINGS`.
+     */
+    fun setBrightnessPercent(context: Context, percent: Int): Boolean {
+        val clamped = percent.coerceIn(0, 100)
+        val raw = ((clamped / 100f) * 255f).roundToInt().coerceIn(1, 255)
+        val cr = context.contentResolver
+        if (Settings.System.canWrite(context) || hasWriteSecureSettings(context)) {
+            val written = try {
+                Settings.System.putInt(
+                    cr,
+                    Settings.System.SCREEN_BRIGHTNESS_MODE,
+                    Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL
+                )
+                Settings.System.putInt(cr, Settings.System.SCREEN_BRIGHTNESS, raw)
+                true
+            } catch (_: Exception) {
+                false
+            }
+            if (written) return true
+        }
+        val shellOk = try {
+            val proc = Runtime.getRuntime().exec(arrayOf("sh", "-c", "settings put system screen_brightness $raw"))
+            proc.waitFor() == 0
+        } catch (_: Exception) {
+            false
+        }
+        if (shellOk) return true
+
+        try {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_WRITE_SETTINGS,
+                Uri.parse("package:${context.packageName}")
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {
+            try {
+                context.startActivity(
+                    Intent(Settings.ACTION_DISPLAY_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                )
+            } catch (_: Exception) {
+            }
+        }
+        return false
+    }
+
+    /**
+     * Returns the current ringer mode label: `"SOUND"`, `"VIBRATE"`, or `"SILENT"`.
+     */
+    fun getRingerModeLabel(context: Context): String {
+        return try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            when (am?.ringerMode) {
+                AudioManager.RINGER_MODE_VIBRATE -> "VIBRATE"
+                AudioManager.RINGER_MODE_SILENT -> "SILENT"
+                else -> "SOUND"
+            }
+        } catch (_: Exception) {
+            "SOUND"
+        }
+    }
+
+    /**
+     * Cycles ringer mode (`SOUND` -> `VIBRATE` -> `SILENT` -> `SOUND`) and returns the new label.
+     */
+    fun cycleRingerMode(context: Context): String {
+        return try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return "SOUND"
+            val nextMode = when (am.ringerMode) {
+                AudioManager.RINGER_MODE_NORMAL -> AudioManager.RINGER_MODE_VIBRATE
+                AudioManager.RINGER_MODE_VIBRATE -> AudioManager.RINGER_MODE_SILENT
+                else -> AudioManager.RINGER_MODE_NORMAL
+            }
+            try {
+                am.ringerMode = nextMode
+            } catch (_: SecurityException) {
+                // If Do Not Disturb access isn't granted for SILENT, toggle between NORMAL and VIBRATE
+                am.ringerMode = if (am.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
+                    AudioManager.RINGER_MODE_VIBRATE
+                } else {
+                    AudioManager.RINGER_MODE_NORMAL
+                }
+            }
+            getRingerModeLabel(context)
+        } catch (_: Exception) {
+            getRingerModeLabel(context)
+        }
+    }
+
+    /**
+     * Returns `true` if device Location Services are currently enabled.
+     */
+    fun isLocationEnabled(context: Context): Boolean {
+        return try {
+            val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+            if (lm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                return lm.isLocationEnabled
+            }
+            Settings.Secure.getInt(
+                context.contentResolver,
+                Settings.Secure.LOCATION_MODE,
+                Settings.Secure.LOCATION_MODE_OFF
+            ) != Settings.Secure.LOCATION_MODE_OFF
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Toggles Location Services via `WRITE_SECURE_SETTINGS` when granted, or opens Location Settings.
+     */
+    fun openLocationSettings(context: Context) {
+        if (hasWriteSecureSettings(context)) {
+            val toggled = try {
+                val cur = isLocationEnabled(context)
+                Settings.Secure.putInt(
+                    context.contentResolver,
+                    Settings.Secure.LOCATION_MODE,
+                    if (cur) Settings.Secure.LOCATION_MODE_OFF else Settings.Secure.LOCATION_MODE_HIGH_ACCURACY
+                )
+                true
+            } catch (_: Exception) {
+                false
+            }
+            if (toggled) return
+        }
+        try {
+            context.startActivity(
+                Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            )
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Returns `true` if Airplane Mode is currently enabled.
+     */
+    fun isAirplaneModeEnabled(context: Context): Boolean {
+        return try {
+            Settings.Global.getInt(
+                context.contentResolver,
+                Settings.Global.AIRPLANE_MODE_ON,
+                0
+            ) == 1
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Opens Airplane Mode / Wireless Settings.
+     */
+    fun openAirplaneSettings(context: Context) {
+        try {
+            context.startActivity(
+                Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            )
+        } catch (_: Exception) {
+            try {
+                context.startActivity(
+                    Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                )
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /**
+     * Opens Bluetooth Settings.
+     */
+    fun openBluetoothSettings(context: Context) {
+        try {
+            context.startActivity(
+                Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            )
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Opens Mobile Hotspot & Tethering Settings on Samsung One UI / Android.
+     */
+    fun openHotspotSettings(context: Context) {
+        val candidates = listOf(
+            Intent().apply {
+                component = ComponentName(
+                    "com.android.settings",
+                    "com.android.settings.TetherSettings"
+                )
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            },
+            Intent("android.settings.TETHER_SETTINGS").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            },
+            Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        )
+        for (intent in candidates) {
+            val started = try {
+                context.startActivity(intent)
+                true
+            } catch (_: Exception) {
+                false
+            }
+            if (started) return
         }
     }
 

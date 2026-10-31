@@ -89,12 +89,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
@@ -115,6 +117,7 @@ import com.xsun.foldlauncher.model.FolderItem
 import com.xsun.foldlauncher.posture.DevicePostureState
 import com.xsun.foldlauncher.posture.PostureOverride
 import com.xsun.foldlauncher.service.FoldAccessibilityService
+import com.xsun.foldlauncher.service.FoldNotificationListenerService
 import com.xsun.foldlauncher.service.SystemTweaker
 import com.xsun.foldlauncher.spatial.FlexVirtualTrackpadCard
 import com.xsun.foldlauncher.spatial.RadialThumbArcOverlay
@@ -123,6 +126,7 @@ import com.xsun.foldlauncher.ui.animation.LauncherSpringSpecs
 import com.xsun.foldlauncher.ui.animation.RadialTriggerCorner
 import com.xsun.foldlauncher.ui.animation.launcherGestures
 import com.xsun.foldlauncher.ui.components.AppIconTile
+import com.xsun.foldlauncher.ui.components.MipControlCenterOverlay
 import com.xsun.foldlauncher.ui.components.OneUiConnectivityPillsRow
 import com.xsun.foldlauncher.ui.components.OneUiQuickNavigationBar
 import com.xsun.foldlauncher.ui.components.PersistentTaskbarDock
@@ -353,13 +357,16 @@ private fun MinimalOneUiHomeScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
     LaunchedEffect(context) {
         MipWallpaperState.ensureLoaded(context)
     }
     val mipWallpaperPreset by MipWallpaperState.presetFlow.collectAsState()
     val liveForegroundPkgs by FoldAccessibilityService.recentForegroundPackages.collectAsState()
+    val activeNotifications by FoldNotificationListenerService.activeNotificationsFlow.collectAsState()
     var dismissedRecentKeys by remember { mutableStateOf(emptySet<String>()) }
     var isRecentsOverlayOpen by remember { mutableStateOf(false) }
+    var showMipControlCenter by remember { mutableStateOf(false) }
 
     val mergedRecentApps = remember(liveForegroundPkgs, recentApps, allApps, dismissedRecentKeys) {
         val byUniqueKey = allApps.associateBy { it.uniqueKey }
@@ -385,11 +392,15 @@ private fun MinimalOneUiHomeScreen(
 
     var editingPageIndex by remember { mutableIntStateOf(-1) }
 
-    BackHandler(enabled = isRecentsOverlayOpen) {
+    BackHandler(enabled = showMipControlCenter) {
+        showMipControlCenter = false
+    }
+
+    BackHandler(enabled = !showMipControlCenter && isRecentsOverlayOpen) {
         isRecentsOverlayOpen = false
     }
 
-    BackHandler(enabled = !isRecentsOverlayOpen && pagerState.currentPage != 1 && editingPageIndex < 0) {
+    BackHandler(enabled = !showMipControlCenter && !isRecentsOverlayOpen && pagerState.currentPage != 1 && editingPageIndex < 0) {
         coroutineScope.launch {
             pagerState.animateScrollToPage(1)
         }
@@ -450,7 +461,8 @@ private fun MinimalOneUiHomeScreen(
                                     triggerInstantSearch()
                                 } else if (totalDy > triggerPx && abs(totalDy) > abs(totalDx) * 2.0f) {
                                     triggered = true
-                                    onExpandNotifications()
+                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    showMipControlCenter = true
                                 }
                             }
                         }
@@ -555,10 +567,14 @@ private fun MinimalOneUiHomeScreen(
                 }
             }
 
-            // Minimal MIP 3-Page Indicator ("[DEV] : [MAIN] : [WORK]") + "[REC]" recents + "[BG]" wallpaper + "[CFG]" editor
+            // Minimal MIP 3-Page Indicator ("[DEV] : [MAIN] : [WORK]") + "[SHADE]" + "[REC]" + "[BG]" + "[CFG]"
             OneUiMinimalPageIndicatorBar(
                 currentPage = pagerState.currentPage,
                 wallpaperPreset = mipWallpaperPreset,
+                notificationCount = activeNotifications.size,
+                onOpenControlCenter = {
+                    showMipControlCenter = true
+                },
                 onCycleWallpaperPreset = {
                     MipWallpaperState.cyclePreset(context)
                 },
@@ -576,6 +592,36 @@ private fun MinimalOneUiHomeScreen(
                 modifier = Modifier.padding(horizontal = horizontalPad)
             )
         }
+
+        MipControlCenterOverlay(
+            visible = showMipControlCenter,
+            isExpanded = columns >= 6,
+            installedApps = allApps,
+            isWirelessAdbEnabled = isWirelessAdbEnabled,
+            wirelessAdbPort = wirelessAdbPort,
+            tailscaleIp = tailscaleIp,
+            lanIp = lanIp,
+            wallpaperBadge = mipWallpaperPreset.badge,
+            onToggleWirelessAdb = onToggleWirelessAdb,
+            onToggleTailscale = onToggleTailscaleVpn,
+            onSplitTopTwoRecentApps = {
+                if (mergedRecentApps.size >= 2) {
+                    SystemTweaker.launchSplitScreenPair(
+                        context = context,
+                        primaryPackage = mergedRecentApps[0].packageName,
+                        secondaryPackage = mergedRecentApps[1].packageName
+                    )
+                }
+            },
+            onOpenRecents = {
+                showMipControlCenter = false
+                isRecentsOverlayOpen = true
+            },
+            onCycleWallpaperPreset = {
+                MipWallpaperState.cyclePreset(context)
+            },
+            onDismiss = { showMipControlCenter = false }
+        )
 
         MipLauncherRecentsOverlay(
             visible = isRecentsOverlayOpen,
@@ -702,6 +748,8 @@ private fun StaticNonScrollingAppGrid(
 private fun OneUiMinimalPageIndicatorBar(
     currentPage: Int,
     wallpaperPreset: MipWallpaperPreset = MipWallpaperPreset.TEAL_HORIZON,
+    notificationCount: Int = 0,
+    onOpenControlCenter: () -> Unit = {},
     onCycleWallpaperPreset: () -> Unit = {},
     onOpenRecents: () -> Unit = {},
     onSelectPage: (Int) -> Unit,
@@ -720,9 +768,9 @@ private fun OneUiMinimalPageIndicatorBar(
                 .clip(barShape)
                 .background(MIP_BG)
                 .border(2.dp, MIP_GRID, barShape)
-                .padding(horizontal = 6.dp, vertical = 4.dp),
+                .padding(horizontal = 5.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
         ) {
             HOME_PAGE_TITLES.forEachIndexed { index, title ->
                 val selected = index == currentPage
@@ -737,12 +785,12 @@ private fun OneUiMinimalPageIndicatorBar(
                             shape = itemShape
                         )
                         .clickable { onSelectPage(index) }
-                        .padding(horizontal = 7.dp, vertical = 3.dp),
+                        .padding(horizontal = 6.dp, vertical = 3.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = if (selected) "[$title]" else title,
-                        fontSize = 10.sp,
+                        fontSize = 9.5.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.ExtraBold,
                         color = if (selected) MIP_BG else MIP_MUTED
@@ -751,7 +799,7 @@ private fun OneUiMinimalPageIndicatorBar(
                 if (index < HOME_PAGE_TITLES.lastIndex) {
                     Text(
                         text = ":",
-                        fontSize = 10.sp,
+                        fontSize = 9.5.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.ExtraBold,
                         color = MIP_GRID
@@ -759,9 +807,27 @@ private fun OneUiMinimalPageIndicatorBar(
                 }
             }
 
-            Spacer(modifier = Modifier.width(3.dp))
+            Spacer(modifier = Modifier.width(2.dp))
 
             val editShape = CutCornerShape(2.dp)
+            Box(
+                modifier = Modifier
+                    .clip(editShape)
+                    .background(MIP_SURFACE)
+                    .border(1.dp, if (notificationCount > 0) MIP_CYAN else MIP_INK, editShape)
+                    .clickable(onClick = onOpenControlCenter)
+                    .padding(horizontal = 5.dp, vertical = 3.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = if (notificationCount > 0) "[NOTIF:$notificationCount]" else "[SHADE ▾]",
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = if (notificationCount > 0) MIP_CYAN else MIP_INK
+                )
+            }
+
             Box(
                 modifier = Modifier
                     .clip(editShape)
@@ -773,7 +839,7 @@ private fun OneUiMinimalPageIndicatorBar(
             ) {
                 Text(
                     text = "[REC]",
-                    fontSize = 9.5.sp,
+                    fontSize = 9.sp,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.ExtraBold,
                     color = MIP_CYAN
@@ -791,7 +857,7 @@ private fun OneUiMinimalPageIndicatorBar(
             ) {
                 Text(
                     text = "[BG:${wallpaperPreset.badge}]",
-                    fontSize = 9.5.sp,
+                    fontSize = 9.sp,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.ExtraBold,
                     color = MIP_INK
@@ -809,7 +875,7 @@ private fun OneUiMinimalPageIndicatorBar(
             ) {
                 Text(
                     text = "[CFG]",
-                    fontSize = 9.5.sp,
+                    fontSize = 9.sp,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.ExtraBold,
                     color = MIP_CYAN

@@ -74,7 +74,7 @@ private val mipQuantizedIconCache = ConcurrentHashMap<String, ImageBitmap>()
  * pixel matrix and quantizes every pixel to the hardware 6-bit `RGB222` (64-color) MIP palette
  * (`0x00`, `0x55`, `0xAA`, `0xFF` per channel) using 2x2 ordered Bayer dithering, cached as an `ImageBitmap`.
  */
-private fun getOrBuildMipRgb222Bitmap(cacheKey: String, imageBitmap: ImageBitmap): ImageBitmap {
+internal fun getOrBuildMipRgb222Bitmap(cacheKey: String, imageBitmap: ImageBitmap): ImageBitmap {
     mipQuantizedIconCache[cacheKey]?.let { return it }
     val out = IntArray(MIP_ICON_GRID_RES * MIP_ICON_GRID_RES)
     runCatching {
