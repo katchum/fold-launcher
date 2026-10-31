@@ -1118,6 +1118,13 @@ object SystemTweaker {
     }
 
     /**
+     * Returns `true` when two application windows or the split-screen divider are active on screen.
+     */
+    fun isSplitScreenActive(): Boolean {
+        return FoldAccessibilityService.instance?.isSplitScreenActive() ?: false
+    }
+
+    /**
      * Launches two apps side-by-side in multi-window / split-screen mode on Samsung One UI
      * (both slab phones like S23/S25 and Z Fold 8 inner/cover screens).
      *
@@ -1129,9 +1136,10 @@ object SystemTweaker {
      * Therefore we:
      * 1. Auto-enable [FoldAccessibilityService] if `WRITE_SECURE_SETTINGS` is granted,
      * 2. Launch [primaryPackage] at `0ms` as a standard task (`mActivityType=1`),
-     * 3. Launch [secondaryPackage] at `+460ms` as a standard task directly above [primaryPackage],
-     * 4. Trigger `GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN` at `+1100ms` so One UI atomically docks
-     *    [primaryPackage] into `MainStage` (top/left) and [secondaryPackage] into `SideStage` (bottom/right).
+     * 3. Launch [secondaryPackage] at `+950ms` (after [primaryPackage] finishes its cold-start splash)
+     *    as a standard task directly above [primaryPackage],
+     * 4. Call `ensureSplitScreenActive()` at `+2100ms` and retry at `+2850ms` if `isSplitScreenActive()`
+     *    is still false (e.g., if [secondaryPackage] had a splash-to-main redirect).
      */
     fun launchSplitScreenPair(
         context: Context,
@@ -1156,11 +1164,14 @@ object SystemTweaker {
                     val launchContext = FoldAccessibilityService.instance ?: context
                     launchContext.startActivity(secondaryIntent)
                     mainHandler.postDelayed({
-                        FoldAccessibilityService.instance?.toggleSplitScreen()
-                    }, 700L)
+                        FoldAccessibilityService.instance?.ensureSplitScreenActive()
+                    }, 1150L)
+                    mainHandler.postDelayed({
+                        FoldAccessibilityService.instance?.ensureSplitScreenActive()
+                    }, 1900L)
                 } catch (_: Exception) {
                 }
-            }, 520L)
+            }, 950L)
             true
         } catch (_: Exception) {
             false

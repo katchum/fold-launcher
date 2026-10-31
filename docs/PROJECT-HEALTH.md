@@ -1,8 +1,8 @@
-# Fold8 & Slab Launcher (`com.xsun.foldlauncher`) — Project & Repo Health (`v0.11.0`)
+# Fold8 & Slab Launcher (`com.xsun.foldlauncher`) — Project & Repo Health (`v0.12.0`)
 
 **Repository**: [`katchum/fold-launcher`](https://github.com/katchum/fold-launcher)
 **Workspace Path**: `/home/xsun/projects/android-launcher/fold-launcher`
-**Current Version**: `v0.11.0` (`versionCode = 12`, `versionName = "0.11.0"`, Whole-Launcher Low-PPI 64-Color MIP Shader & Atomic Split-Screen Edition)
+**Current Version**: `v0.12.0` (`versionCode = 14`, `versionName = "0.12.0"`, `16x` DPI MIP Shader, `80x80` RGB222 Icons, Built-In MIP Recents & Verified Lyft+Uber Split-Screen)
 **Deterministic Signing**: `app/fold8-signing.jks` (`signingConfigs.getByName("stable")` for seamless in-place APK upgrades across CI runs)
 **Maintainer**: Repo Health & Project Health Lead
 

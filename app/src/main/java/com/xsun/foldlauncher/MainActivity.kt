@@ -46,7 +46,6 @@ import com.xsun.foldlauncher.ui.screens.OneUiMinimalAppSearchOverlay
 import com.xsun.foldlauncher.ui.screens.UnfoldedInnerDashboardScreen
 import com.xsun.foldlauncher.ui.theme.FoldLauncherTheme
 import com.xsun.foldlauncher.viewmodel.LauncherViewModel
-import kotlin.math.floor
 
 class MainActivity : ComponentActivity() {
 
@@ -530,12 +529,12 @@ private const val MIP_DISPLAY_AGSL_SHADER = """
         else if (bIndex == 2) bayer = 0.375;
         else bayer = -0.125;
 
-        float dither = bayer * 0.14;
+        float dither = bayer * 0.08;
         float3 rgb = clamp(float3(c.rgb) + dither, 0.0, 1.0);
         float3 qRgb = floor(rgb * 3.0 + 0.5) / 3.0;
 
         float2 localPos = mod(fragCoord, cellPx);
-        float gridShade = (localPos.x >= cellPx - 1.0 || localPos.y >= cellPx - 1.0) ? 0.78 : 1.0;
+        float gridShade = (localPos.x >= cellPx - 0.5 || localPos.y >= cellPx - 0.5) ? 0.90 : 1.0;
 
         return half4(half3(qRgb * gridShade), c.a);
     }
@@ -543,15 +542,15 @@ private const val MIP_DISPLAY_AGSL_SHADER = """
 
 /**
  * Applies a whole-launcher GPU AGSL RuntimeShader (Android 13+) that renders the entire
- * launcher composition at a low-PPI discrete MIP pixel grid (~170 PPI) and quantizes all
- * colors with 2x2 ordered Bayer dithering into the strict 64-color (6-bit RGB222) MIP palette.
+ * launcher composition at 16x pixel density (~2px x 2px MIP cell = 4x finer linear X & Y)
+ * and quantizes all colors with 2x2 ordered Bayer dithering into the strict 64-color (6-bit RGB222) MIP palette.
  */
 @Composable
 private fun Modifier.mipWholeLauncherDisplayEffect(): Modifier {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return this
     val density = LocalDensity.current
     val cellPx = remember(density) {
-        with(density) { floor(2.6.dp.toPx()).coerceAtLeast(4f) }
+        with(density) { (0.65.dp.toPx()).coerceIn(1.5f, 2.25f) }
     }
     val composeEffect = remember(cellPx) {
         runCatching {

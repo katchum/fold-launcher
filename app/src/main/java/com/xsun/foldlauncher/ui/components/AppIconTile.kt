@@ -2,6 +2,7 @@ package com.xsun.foldlauncher.ui.components
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -35,8 +36,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -62,15 +66,15 @@ private val MIP_DARK_GRAY = Color(0xFF555555)
 private val MIP_WHITE = Color(0xFFFFFFFF)
 private val MIP_CYAN = Color(0xFF00FFFF)
 
-private const val MIP_ICON_GRID_RES = 20
-private val mipQuantizedIconCache = ConcurrentHashMap<String, IntArray>()
+private const val MIP_ICON_GRID_RES = 80
+private val mipQuantizedIconCache = ConcurrentHashMap<String, ImageBitmap>()
 
 /**
- * Downsamples a high-DPI truecolor Android app icon into a `20x20` low-resolution (~200 PPI)
+ * Downsamples a high-DPI truecolor Android app icon into an `80x80` (16x pixel density over 20x20)
  * pixel matrix and quantizes every pixel to the hardware 6-bit `RGB222` (64-color) MIP palette
- * (`0x00`, `0x55`, `0xAA`, `0xFF` per channel) using 2x2 ordered Bayer dithering.
+ * (`0x00`, `0x55`, `0xAA`, `0xFF` per channel) using 2x2 ordered Bayer dithering, cached as an `ImageBitmap`.
  */
-private fun getOrBuildMipRgb222Cells(cacheKey: String, imageBitmap: ImageBitmap): IntArray {
+private fun getOrBuildMipRgb222Bitmap(cacheKey: String, imageBitmap: ImageBitmap): ImageBitmap {
     mipQuantizedIconCache[cacheKey]?.let { return it }
     val out = IntArray(MIP_ICON_GRID_RES * MIP_ICON_GRID_RES)
     runCatching {
@@ -84,8 +88,8 @@ private fun getOrBuildMipRgb222Cells(cacheKey: String, imageBitmap: ImageBitmap)
         val rawPixels = IntArray(MIP_ICON_GRID_RES * MIP_ICON_GRID_RES)
         scaled.getPixels(rawPixels, 0, MIP_ICON_GRID_RES, 0, 0, MIP_ICON_GRID_RES, MIP_ICON_GRID_RES)
 
-        // 2x2 Bayer ordered dither thresholds (-24, +8, +24, -8) for 6-bit RGB222 quantization
-        val bayer2x2 = intArrayOf(-24, 8, 24, -8)
+        // 2x2 Bayer ordered dither thresholds (-18, +6, +18, -6) for crisp 80x80 6-bit RGB222 quantization
+        val bayer2x2 = intArrayOf(-18, 6, 18, -6)
 
         for (y in 0 until MIP_ICON_GRID_RES) {
             for (x in 0 until MIP_ICON_GRID_RES) {
@@ -114,8 +118,14 @@ private fun getOrBuildMipRgb222Cells(cacheKey: String, imageBitmap: ImageBitmap)
             out[i] = 0xFF005555.toInt()
         }
     }
-    mipQuantizedIconCache[cacheKey] = out
-    return out
+    val mipBitmap = Bitmap.createBitmap(
+        out,
+        MIP_ICON_GRID_RES,
+        MIP_ICON_GRID_RES,
+        Bitmap.Config.ARGB_8888
+    ).asImageBitmap()
+    mipQuantizedIconCache[cacheKey] = mipBitmap
+    return mipBitmap
 }
 
 @Composable
@@ -161,28 +171,16 @@ fun AppIconTile(
             ) {
                 val bitmap = app.icon
                 if (bitmap != null) {
-                    val mipCells = remember(app.uniqueKey, bitmap) {
-                        getOrBuildMipRgb222Cells(app.uniqueKey, bitmap)
+                    val mipBitmap = remember(app.uniqueKey, bitmap) {
+                        getOrBuildMipRgb222Bitmap(app.uniqueKey, bitmap)
                     }
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        val grid = MIP_ICON_GRID_RES
-                        val cellW = size.width / grid
-                        val cellH = size.height / grid
-                        val gap = 0.75f
-                        for (gy in 0 until grid) {
-                            for (gx in 0 until grid) {
-                                val c = Color(mipCells[gy * grid + gx])
-                                drawRect(
-                                    color = c,
-                                    topLeft = Offset(gx * cellW, gy * cellH),
-                                    size = Size(
-                                        (cellW - gap).coerceAtLeast(1f),
-                                        (cellH - gap).coerceAtLeast(1f)
-                                    )
-                                )
-                            }
-                        }
-                    }
+                    Image(
+                        bitmap = mipBitmap,
+                        contentDescription = app.label,
+                        contentScale = ContentScale.FillBounds,
+                        filterQuality = FilterQuality.None,
+                        modifier = Modifier.fillMaxSize()
+                    )
                 } else {
                     val baseColor = remember(app.packageName) {
                         mipPaletteColorForPackage(app.packageName)

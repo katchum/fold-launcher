@@ -27,6 +27,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.xsun.foldlauncher.display.DualScreenPresentationController
@@ -126,6 +127,9 @@ class FoldAccessibilityService : AccessibilityService() {
             // Ignore transient system overlays (status bar / volume / keyboard) when tracking foreground app
             if (!IGNORED_OVERLAY_PACKAGES.contains(pkg)) {
                 _foregroundPackage.value = pkg
+                if (pkg != packageName && !pkg.startsWith("com.xsun.foldlauncher")) {
+                    recordRecentForegroundPackage(pkg)
+                }
                 val vcActive = VcPackages.isVcPackage(pkg) || VC_PACKAGES.contains(pkg)
                 if (_isVcInForeground.value != vcActive) {
                     _isVcInForeground.value = vcActive
@@ -175,6 +179,30 @@ class FoldAccessibilityService : AccessibilityService() {
         } else {
             false
         }
+    }
+
+    /**
+     * Returns `true` when two or more application windows or the system split-screen divider
+     * (`TYPE_SPLIT_SCREEN_DIVIDER`) are currently visible on screen.
+     */
+    fun isSplitScreenActive(): Boolean {
+        return try {
+            val winList = windows ?: return false
+            val hasDivider = winList.any { it.type == AccessibilityWindowInfo.TYPE_SPLIT_SCREEN_DIVIDER }
+            val appWindows = winList.count { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+            hasDivider || appWindows >= 2
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Enters split-screen only if not already in split-screen mode, preventing a retry timer from
+     * accidentally toggling split-screen off after it has already succeeded.
+     */
+    fun ensureSplitScreenActive(): Boolean {
+        if (isSplitScreenActive()) return true
+        return toggleSplitScreen()
     }
 
     private fun registerSecondaryDisplayListener() {
@@ -495,6 +523,30 @@ class FoldAccessibilityService : AccessibilityService() {
 
         private val _foregroundPackage = MutableStateFlow("")
         val foregroundPackage: StateFlow<String> = _foregroundPackage.asStateFlow()
+
+        private val _recentForegroundPackages = MutableStateFlow<List<String>>(emptyList())
+        val recentForegroundPackages: StateFlow<List<String>> = _recentForegroundPackages.asStateFlow()
+        val recentForegroundPackagesFlow: StateFlow<List<String>> = recentForegroundPackages
+
+        fun recordRecentForegroundPackage(pkg: String) {
+            if (pkg.isBlank() || IGNORED_OVERLAY_PACKAGES.contains(pkg) || pkg.startsWith("com.xsun.foldlauncher")) {
+                return
+            }
+            val current = _recentForegroundPackages.value
+            if (current.firstOrNull() == pkg) return
+            _recentForegroundPackages.value = (listOf(pkg) + current.filterNot { it == pkg }).take(14)
+        }
+
+        fun removeRecentForegroundPackage(pkg: String) {
+            val plain = pkg.substringBefore("#work_")
+            _recentForegroundPackages.value = _recentForegroundPackages.value.filterNot {
+                it == pkg || it == plain
+            }
+        }
+
+        fun clearRecentForegroundPackages() {
+            _recentForegroundPackages.value = emptyList()
+        }
 
         private val _isVcInForeground = MutableStateFlow(false)
         val isVcInForeground: StateFlow<Boolean> = _isVcInForeground.asStateFlow()

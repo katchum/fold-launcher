@@ -678,8 +678,8 @@ fun OneUiConnectivityPillsRow(
 @Composable
 private fun MipDotMatrixBackdrop(modifier: Modifier = Modifier) {
     Canvas(modifier = modifier) {
-        val cellPx = kotlin.math.floor(3.dp.toPx()).coerceAtLeast(3f)
-        val gapPx = 1f
+        val cellPx = kotlin.math.floor(1.dp.toPx()).coerceAtLeast(2f)
+        val gapPx = 0.75f
         var x = cellPx - gapPx
         while (x < size.width) {
             drawRect(

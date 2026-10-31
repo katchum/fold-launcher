@@ -339,12 +339,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     val recentApps: StateFlow<List<AppEntry>> = combine(
         allApps,
+        FoldAccessibilityService.recentForegroundPackages,
         _recentSessionPackages,
         mainPageApps
-    ) { apps, sessionOrder, mainApps ->
+    ) { apps, liveForegroundOrder, sessionOrder, mainApps ->
         val byUniqueKey = apps.associateBy { it.uniqueKey }
         val byPkg = apps.associateBy { it.packageName }
-        val fromSession = sessionOrder.mapNotNull { key ->
+        val mergedOrder = (liveForegroundOrder + sessionOrder).distinct()
+        val fromSession = mergedOrder.mapNotNull { key ->
             byUniqueKey[key] ?: byPkg[key]
         }
         val sessionUniqueKeys = fromSession.map { it.uniqueKey }.toSet()
@@ -354,7 +356,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val fallbackApps = mainApps + apps
         (fromSession + fromCounts + fallbackApps)
             .distinctBy { it.uniqueKey }
-            .take(10)
+            .take(12)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     private val _folders = MutableStateFlow(preferences.folders)
@@ -560,11 +562,24 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun observeForegroundAndVcTelemetry() {
-        // Bridge FoldAccessibilityService foreground package detection to VcBackgroundMonitor
+        // Bridge FoldAccessibilityService foreground package detection to VcBackgroundMonitor & live Recent Apps
         viewModelScope.launch {
             FoldAccessibilityService.foregroundPackage.collect { pkg ->
                 if (pkg.isNotBlank()) {
                     vcMonitor.onForegroundPackageChanged(pkg)
+                }
+            }
+        }
+        viewModelScope.launch {
+            FoldAccessibilityService.recentForegroundPackages.collect { liveList ->
+                val latestPkg = liveList.firstOrNull() ?: return@collect
+                if (latestPkg != appContext.packageName && !latestPkg.startsWith("com.xsun.foldlauncher")) {
+                    val current = _recentSessionPackages.value
+                    if (current.firstOrNull() != latestPkg) {
+                        val updated = (listOf(latestPkg) + current.filter { it != latestPkg }).take(12)
+                        _recentSessionPackages.value = updated
+                        rawPrefs.edit().putString(KEY_RECENT_UNIQUE_KEYS_ORDER, updated.joinToString("|")).apply()
+                    }
                 }
             }
         }

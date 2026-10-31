@@ -107,16 +107,16 @@ private val MipAmber = Color(0xFFFFAA00)      // (3, 2, 0)
 private val MipRed = Color(0xFFFF5555)        // (3, 1, 1)
 
 /**
- * Simulates a ~200 PPI reflective Memory-In-Pixel (MIP) LCD panel on a ~480 PPI AMOLED screen:
- * - Coarse `3.dp` x `3.dp` discrete pixel cell matrix with `1px` dark inter-pixel cell gaps
- * - Optional 2x2 ordered Bayer checkerboard dithering (zero smooth alpha gradients)
+ * Simulates a high-density (16x DPI, 4x linear pitch) reflective Memory-In-Pixel (MIP) LCD panel:
+ * - Fine `1.dp` (`>= 2px`) discrete pixel cell matrix with subtle inter-pixel grid lines
+ * - Optional 2x2 ordered Bayer checkerboard dithering
  */
 private fun Modifier.mip200PpiMatrix(
     ditherColor: Color = MipDarkTeal,
     enableCheckerboardDither: Boolean = false
 ): Modifier = this.drawBehind {
-    val cellPx = floor(3.dp.toPx()).coerceAtLeast(3f)
-    val gapPx = 1f
+    val cellPx = floor(1.dp.toPx()).coerceAtLeast(2f)
+    val gapPx = 0.5f
     val cols = (size.width / cellPx).toInt()
     val rows = (size.height / cellPx).toInt()
 
@@ -125,20 +125,21 @@ private fun Modifier.mip200PpiMatrix(
             for (cx in 0 until cols) {
                 if ((cx + ry) % 2 == 0) {
                     drawRect(
-                        color = ditherColor,
+                        color = ditherColor.copy(alpha = 0.65f),
                         topLeft = Offset(cx * cellPx, ry * cellPx),
-                        size = Size(cellPx - gapPx, cellPx - gapPx)
+                        size = Size(cellPx, cellPx)
                     )
                 }
             }
         }
     }
 
-    // Draw crisp 200-PPI MIP pixel cell grid lines
+    // Draw subtle 16x-DPI MIP pixel cell grid lines
+    val gridColor = MipBlack.copy(alpha = 0.28f)
     var x = cellPx - gapPx
     while (x < size.width) {
         drawRect(
-            color = MipBlack,
+            color = gridColor,
             topLeft = Offset(x, 0f),
             size = Size(gapPx, size.height)
         )
@@ -147,7 +148,7 @@ private fun Modifier.mip200PpiMatrix(
     var y = cellPx - gapPx
     while (y < size.height) {
         drawRect(
-            color = MipBlack,
+            color = gridColor,
             topLeft = Offset(0f, y),
             size = Size(size.width, gapPx)
         )
@@ -436,8 +437,8 @@ object QuickNavigationLauncher {
     }
 
     /**
-     * Builds the Uber deep link that pre-fills pickup = `my_location`, sets dropoff address/nickname
-     * and coordinates, and opens directly to the ride options & price estimate sheet.
+     * Builds the Uber deep link that pre-fills pickup = `my_location`, sets dropoff coordinates,
+     * nickname, and formatted address, and opens directly to the ride options & price estimate sheet.
      */
     fun buildUberDeepLinkUri(
         destinationName: String,
@@ -452,7 +453,7 @@ object QuickNavigationLauncher {
         } else {
             ""
         }
-        return "uber://?action=setPickup&pickup=my_location&dropoff[nickname]=$encName&dropoff[formatted_address]=$encAddr$coordPart"
+        return "uber://?client_id=fold8_launcher&action=setPickup&pickup=my_location$coordPart&dropoff[nickname]=$encName&dropoff[formatted_address]=$encAddr"
     }
 
     /**
@@ -471,7 +472,7 @@ object QuickNavigationLauncher {
         } else {
             ""
         }
-        return "https://m.uber.com/ul/?action=setPickup&pickup=my_location&dropoff[nickname]=$encName&dropoff[formatted_address]=$encAddr$coordPart"
+        return "https://m.uber.com/ul/?client_id=fold8_launcher&action=setPickup&pickup=my_location$coordPart&dropoff[nickname]=$encName&dropoff[formatted_address]=$encAddr"
     }
 
     /**
@@ -1205,32 +1206,27 @@ object QuickNavigationLauncher {
     }
 
     /**
-     * Launches Uber (`com.ubercab`) and Lyft (`me.lyft.android`) side-by-side on Samsung One UI
+     * Launches Lyft (`me.lyft.android`) and Uber (`com.ubercab`) side-by-side on Samsung One UI
      * with full Work Profile (`UserHandle{10}`) + Personal Profile (`UserHandle{0}`) support.
      *
-     * Verified against Samsung One UI `WindowManagerShell` / `StageCoordinator` (`ShellSplitScreen`)
-     * and `WindowOrganizerController`:
-     * 1. `FLAG_ACTIVITY_LAUNCH_ADJACENT` from a Home launcher or Service context is ignored by
-     *    `WindowManager` (`W/WindowManager: Launch adjacent ignored due to missing source activity`).
-     * 2. Passing `setLaunchBounds(Rect)` or `windowingMode = 5/6` puts a task into non-fullscreen
-     *    mode, which causes `WindowOrganizerController.reparentChildrenTasksHierarchyOp`
-     *    (`mWindowingMode=[1, 0] mActivityType=[1]`) to skip it when entering split-screen!
-     * 3. When `GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN` (`StageCoordinator.moveToStage`) is invoked, One UI
-     *    executes an atomic `WindowContainerTransaction` (`CHANGE_TRANSIT_REQUEST_FULLSCREEN_TO_SPLIT`):
-     *    - `{reparent: <focused top task> to top of Task{name=side}}` (docks the focused top task into `SideStage`),
-     *    - `{childrenTasksReparent: from=null to=Task{name=main} mToTop=true mReparentTopOnly=true mWindowingMode=[1, 0] mActivityType=[1] mClearWindowingMode=true}`
-     *      (automatically reparents the top remaining `mWindowingMode=[1, 0] mActivityType=[1]` task in
-     *      `DefaultTaskDisplayArea` into `MainStage`).
-     * 4. Therefore, we:
-     *    - Launch **Uber** at `0ms` as a pure fullscreen standard task (`tiledBounds = null`, `adjacentFlag = false`,
-     *      `windowingMode = 1`, `activityType = 1`),
-     *    - Launch **Lyft** at `+550ms` via `FoldAccessibilityService.instance ?: context` (`BAL_ALLOW_ACCESSIBILITY`)
-     *      as a pure fullscreen standard task (`tiledBounds = null`, `adjacentFlag = false`) directly above Uber
-     *      so the top two `mWindowingMode=1, mActivityType=1` tasks in `DefaultTaskDisplayArea` are
-     *      `[0: Lyft (top), 1: Uber (second)]`,
-     *    - Trigger `FoldAccessibilityService.instance?.toggleSplitScreen()` once at `+1250ms` after Lyft's
-     *      `OPEN` transition completes, atomically docking **Uber into `MainStage` (top/left)** and
-     *      **Lyft into `SideStage` (bottom/right)**!
+     * Why **Lyft launches FIRST (`0ms`)** and **Uber launches SECOND (`+1050ms`)**:
+     * 1. Lyft's `lyft://ridetype?id=lyft&destination[latitude]=...` deep link loads its destination
+     *    route and price estimates cleanly even when backgrounded ~1s after launch.
+     * 2. Uber's `uber://?client_id=fold8_launcher&action=setPickup...` deep link uses an internal
+     *    splash/trampoline activity (~1000–1200ms on cold start) that drops its destination if paused
+     *    (`onPause`) mid-splash and jumps back to the foreground when its splash finishes.
+     * 3. By launching **Lyft FIRST (`0ms`)** and **Uber SECOND (`+1050ms`)** via
+     *    `FoldAccessibilityService.instance ?: context` (`BAL_ALLOW_ACCESSIBILITY`), Uber remains
+     *    in the foreground (`onResume`) uninterrupted while its deep link initializes and opens the
+     *    destination price estimate sheet!
+     * 4. Then at `+2250ms`, `+2950ms`, and `+3650ms` (`1200ms`, `1900ms`, and `2600ms` after Uber starts),
+     *    we call `FoldAccessibilityService.instance?.ensureSplitScreenActive()`:
+     *    - `ensureSplitScreenActive()` inspects `AccessibilityService.getWindows()`
+     *      (`TYPE_SPLIT_SCREEN_DIVIDER` or `>= 2` `TYPE_APPLICATION` windows).
+     *    - If not yet in split-screen, it invokes `GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN` (`StageCoordinator.moveToStage`),
+     *      which atomically docks **Uber into `SideStage`** and **Lyft into `MainStage`**.
+     *    - Once `isSplitScreenActive()` is `true`, subsequent retry checkpoints are no-ops so split-screen
+     *      is never toggled off!
      */
     fun launchUberAndLyftSplitScreen(
         context: Context,
@@ -1242,42 +1238,46 @@ object QuickNavigationLauncher {
         val mainHandler = Handler(Looper.getMainLooper())
         val launcherPkg = context.packageName
 
-        // Step 1 (0ms): Launch Uber as a pure fullscreen standard task (mWindowingMode=1, mActivityType=1)
+        // Step 1 (0ms): Launch Lyft FIRST as a pure fullscreen standard task (mWindowingMode=1, mActivityType=1)
+        // so Lyft receives its lyft://ridetype deep link and loads route/prices immediately.
         launchSingleRideApp(
             context = context,
-            isUber = true,
+            isUber = false,
             destination = destination,
             tiledBounds = null,
             adjacentFlag = false
         )
 
-        // Step 2 (+550ms): Launch Lyft as a pure fullscreen standard task directly above Uber
+        // Step 2 (+1050ms): Launch Uber SECOND as a pure fullscreen standard task directly above Lyft
         // using FoldAccessibilityService context (when bound) for BAL_ALLOW_ACCESSIBILITY exemption.
+        // Uber stays in the foreground uninterrupted so its deep-link splash router keeps the destination!
         mainHandler.postDelayed({
             val launchContext = FoldAccessibilityService.instance ?: context
             launchSingleRideApp(
                 context = launchContext,
-                isUber = false,
+                isUber = true,
                 destination = destination,
                 tiledBounds = null,
                 adjacentFlag = false
             )
 
-            // Step 3 (+1250ms total): Once Lyft's OPEN transition has settled in the foreground,
-            // invoke GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN once. StageCoordinator moves Lyft -> SideStage
-            // and WindowOrganizerController.reparentChildrenTasksHierarchyOp moves Uber -> MainStage!
-            fun attemptAtomicSplitDock(attempt: Int) {
-                val fgPkg = FoldAccessibilityService.foregroundPackage.value
-                val rideInForeground = fgPkg.isNotBlank() && fgPkg != launcherPkg
-                if (!rideInForeground && attempt < 4) {
-                    mainHandler.postDelayed({ attemptAtomicSplitDock(attempt + 1) }, 160L)
-                    return
-                }
-                FoldAccessibilityService.instance?.toggleSplitScreen()
+            // Step 3 (+2250ms, +2950ms, +3650ms total): Once Uber's splash-to-main activity transition
+            // has settled in the foreground, invoke ensureSplitScreenActive(). StageCoordinator moves
+            // Uber -> SideStage and WindowOrganizerController.reparentChildrenTasksHierarchyOp moves
+            // Lyft -> MainStage! If Uber was still finishing a cold-start redirect on the first attempt,
+            // the +2950ms / +3650ms checkpoints automatically retry until isSplitScreenActive() is true.
+            val checkDelaysMs = longArrayOf(1200L, 1900L, 2600L)
+            for (delayMs in checkDelaysMs) {
+                mainHandler.postDelayed({
+                    val svc = FoldAccessibilityService.instance ?: return@postDelayed
+                    if (svc.isSplitScreenActive()) return@postDelayed
+                    val fgPkg = FoldAccessibilityService.foregroundPackage.value
+                    if (fgPkg != launcherPkg) {
+                        svc.ensureSplitScreenActive()
+                    }
+                }, delayMs)
             }
-
-            mainHandler.postDelayed({ attemptAtomicSplitDock(0) }, 700L)
-        }, 550L)
+        }, 1050L)
     }
 }
 
@@ -1373,10 +1373,16 @@ fun OneUiQuickNavigationBar(
         isInputFocused = false
         keyboardController?.hide()
         focusManager.clearFocus()
-        statusBannerText = if (mode == QuickNavMode.RIDE) {
-            "TILED UBER+LYFT >> ${dest.title.uppercase(Locale.US)}"
+        if (mode == QuickNavMode.RIDE) {
+            val a11yReady = SystemTweaker.ensureAccessibilityServiceEnabled(context) ||
+                FoldAccessibilityService.instance != null
+            statusBannerText = if (a11yReady) {
+                "SPLIT LYFT+UBER >> ${dest.title.uppercase(Locale.US)}"
+            } else {
+                "ENABLE 'FOLD8 COMPANION' IN ACCESSIBILITY FOR AUTO-SPLIT (TAP HERE)"
+            }
         } else {
-            "NAV [${mode.icon}] >> ${dest.title.uppercase(Locale.US)}"
+            statusBannerText = "NAV [${mode.icon}] >> ${dest.title.uppercase(Locale.US)}"
         }
         coroutineScope.launch {
             QuickNavigationLauncher.executeNavigation(context, mode, dest)
@@ -1710,6 +1716,46 @@ fun OneUiQuickNavigationBar(
                 }
             }
 
+            // If RIDE mode is selected and FoldAccessibilityService is not yet enabled, show a 1-tap enable bar
+            val a11yActive = FoldAccessibilityService.instance != null ||
+                SystemTweaker.isAccessibilityServiceEnabled(context)
+            if (selectedMode == QuickNavMode.RIDE && !a11yActive) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(mipShape)
+                        .background(MipDarkBlue)
+                        .border(1.dp, MipAmber, mipShape)
+                        .clickable {
+                            if (!SystemTweaker.ensureAccessibilityServiceEnabled(context)) {
+                                SystemTweaker.openAccessibilitySettings(context)
+                            }
+                        }
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "[!] ENABLE 'FOLD8 COMPANION' IN ACCESSIBILITY FOR AUTO-SPLIT",
+                        color = MipAmber,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "[OPEN]",
+                        color = MipCyan,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+            }
+
             // Optional Status Banner when launching
             if (statusBannerText != null) {
                 Row(
@@ -1717,6 +1763,13 @@ fun OneUiQuickNavigationBar(
                         .fillMaxWidth()
                         .background(MipDarkTeal)
                         .border(1.dp, activeAccent, mipShape)
+                        .clickable {
+                            if (statusBannerText?.contains("ACCESSIBILITY", ignoreCase = true) == true) {
+                                if (!SystemTweaker.ensureAccessibilityServiceEnabled(context)) {
+                                    SystemTweaker.openAccessibilitySettings(context)
+                                }
+                            }
+                        }
                         .padding(horizontal = 6.dp, vertical = 3.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {

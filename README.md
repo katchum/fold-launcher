@@ -1,6 +1,6 @@
-# Fold8 Launcher (`com.xsun.foldlauncher`) — `v0.11.0` (Whole-Launcher Low-PPI 64-Color MIP Shader & Atomic Split-Screen Edition)
+# Fold8 Launcher (`com.xsun.foldlauncher`) — `v0.12.0` (`16x` DPI MIP Shader, `80x80` RGB222 Icons, Built-In MIP Recents & Verified Lyft+Uber Split-Screen)
 
-**Ultra-Fast, Zero-Bloat 120Hz One UI + Fancy Terminal MIP (Memory-In-Pixel) Home Launcher (`com.xsun.foldlauncher`) with Whole-Launcher `~175 PPI` 64-Color (`RGB222`) GPU AGSL `RuntimeShader`, 4 Custom MIP Reflective Wallpapers (`TEAL_HORIZON`, `PAPER_LCD`, `PHOSPHOR_TERMINAL`, `AMBER_COCKPIT`), `20x20` Bayer-Dithered App Icons, Atomic Samsung One UI `StageCoordinator` Uber + Lyft Split-Screen & Side-by-Side Max Edition (`com.xsun.foldlauncher.max`)**
+**Ultra-Fast, Zero-Bloat 120Hz One UI + Fancy Terminal MIP (Memory-In-Pixel) Home Launcher (`com.xsun.foldlauncher`) with `16x` DPI (`4x` Finer Linear Resolution) 64-Color (`RGB222`) GPU AGSL `RuntimeShader`, `80x80` Bayer-Dithered App Icons, Built-In Launcher MIP Recent Apps Switcher (`[REC]` + `[SPLIT TOP 2]`), Verified Lyft -> Uber Split-Screen & Side-by-Side Max Edition (`com.xsun.foldlauncher.max`)**
 
 [![Android CI](https://github.com/katchum/fold-launcher/actions/workflows/android-ci.yml/badge.svg)](https://github.com/katchum/fold-launcher/actions/workflows/android-ci.yml)
 
@@ -10,7 +10,23 @@ Fold8 Launcher is a lightweight, 120Hz-native Jetpack Compose home screen replac
 
 ---
 
-## What's New in `v0.11.0`
+## What's New in `v0.12.0`
+
+### 1. `16x` DPI (`4x` Finer Linear X/Y Resolution) MIP Display Shader & `80x80` `RGB222` Icons (`MainActivity.kt`, `AppIconTile.kt`, `LauncherScreens.kt`)
+- **`16x` Finer Macro-Pixel Density (`0.65dp` Cell Pitch)**: Upgraded `Modifier.mipWholeLauncherDisplayEffect()` from `2.6dp` to `0.65dp` (`4x` finer linear resolution in both X and Y = `16x` pixels per unit area) while preserving crisp `4x4` Bayer ordered dithering and 64-color (`RGB222`) transflective quantization.
+- **`80x80` `RGB222` App Icons (`AppIconTile.kt`) & `1.dp` MIP Wallpaper/Widget Grids**: Upgraded quantized app icon bitmaps from `20x20` (`400` pixels) to `80x80` (`6,400` pixels = `16x` pixel density) and refined `MipReflectiveWallpaper`, `NativeWidgets`, and `OneUiQuickNavigationBar` dot/grid matrices to `1.dp`.
+
+### 2. Built-In Launcher MIP Recent Apps Switcher (`MipLauncherRecentsOverlay`, `FoldAccessibilityService.kt`, `LauncherViewModel.kt`)
+- **In-Launcher MIP Recent Apps View (`[REC]` Pill + Swipe Gesture)**: Displays live recent foreground apps tracked via `FoldAccessibilityService.recentForegroundPackagesFlow` + `UsageStatsManager` inside a full MIP-styled task switcher card grid.
+- **1-Tap `[SPLIT TOP 2]` & Per-Card `[SPLIT]`**: Pair the top 2 recent apps or any recent app with the previous app into side-by-side split-screen in 1 tap.
+
+### 3. Reversed Lyft (`0ms`) -> Uber (`+1050ms`) Launch Order & Verified Split-Screen Retry (`OneUiQuickNavigationBar.kt`, `SystemTweaker.kt`)
+- **Lyft First (`0ms`), Uber Second (`+1050ms`)**: Launches Lyft first so its heavier splash initialization completes while Uber launches second with destination & price estimates pre-filled.
+- **Multi-Stage Verified Split-Screen (`isSplitScreenActive()` / `ensureSplitScreenActive()`)**: Verifies actual split-screen window bounds (`WindowConfiguration.WINDOWING_MODE_MULTI_WINDOW` / `dumpsys activity top`) and automatically retries `StageCoordinator` / `GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN` at `+500ms` and `+1050ms` if needed.
+
+---
+
+## Highlights from `v0.11.0`
 
 ### 1. Whole-Launcher Low-PPI (`~175 PPI`) + 64-Color (`RGB222`) GPU AGSL `RuntimeShader` (`MainActivity.kt`)
 - **`Modifier.mipWholeLauncherDisplayEffect()`**: Applies a real-time GPU AGSL `RuntimeShader` (`Build.VERSION.SDK_INT >= 33`) across the entire launcher composition (`2.6dp` macro-pixel quantization `~175 PPI`, `4x4` Bayer ordered dithering, strict 64-color `RGB222` 2-bit-per-channel palette quantization, and subtle inter-pixel LCD grid matrix).
