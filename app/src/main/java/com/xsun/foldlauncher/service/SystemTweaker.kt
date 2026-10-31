@@ -1144,17 +1144,8 @@ object SystemTweaker {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         } ?: return false
 
-        val a11yAvailable = FoldAccessibilityService.instance != null || isAccessibilityServiceEnabled(context)
         val secondaryIntent = pm.getLaunchIntentForPackage(secondaryPackage)?.apply {
-            addFlags(
-                Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                    if (!a11yAvailable) {
-                        Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or Intent.FLAG_ACTIVITY_MULTIPLE_TASK
-                    } else {
-                        0
-                    }
-            )
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         } ?: return false
 
         val mainHandler = Handler(Looper.getMainLooper())
@@ -1162,13 +1153,14 @@ object SystemTweaker {
             context.startActivity(primaryIntent)
             mainHandler.postDelayed({
                 try {
-                    context.startActivity(secondaryIntent)
+                    val launchContext = FoldAccessibilityService.instance ?: context
+                    launchContext.startActivity(secondaryIntent)
                     mainHandler.postDelayed({
                         FoldAccessibilityService.instance?.toggleSplitScreen()
-                    }, 640L)
+                    }, 700L)
                 } catch (_: Exception) {
                 }
-            }, 460L)
+            }, 520L)
             true
         } catch (_: Exception) {
             false

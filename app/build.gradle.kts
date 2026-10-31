@@ -12,7 +12,7 @@ android {
         applicationId = "com.xsun.foldlauncher"
         minSdk = 29
         targetSdk = 35
-        versionCode = 12
+        versionCode = 13
         versionName = "0.11.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

@@ -1208,18 +1208,29 @@ object QuickNavigationLauncher {
      * Launches Uber (`com.ubercab`) and Lyft (`me.lyft.android`) side-by-side on Samsung One UI
      * with full Work Profile (`UserHandle{10}`) + Personal Profile (`UserHandle{0}`) support.
      *
-     * Why Samsung One UI `StageCoordinator` (`ShellSplitScreen`) requires launching BOTH standard
-     * tasks (`[1: Uber, 2: Lyft]`) BEFORE calling `GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN`:
-     * - When `toggleSplitScreen()` is invoked on One UI, `StageCoordinator.prepareEnterSplitScreen`
-     *   executes a single `WindowContainerTransaction` (`CHANGE_TRANSIT_REQUEST_FULLSCREEN_TO_SPLIT`):
-     *   1. `{reparent: <focused top task> to top of Task{name=side}}` (docks the focused app into `SideStage`),
-     *   2. `{childrenTasksReparent: from=null to=Task{name=main} mToTop=true mReparentTopOnly=true mWindowingMode=[1, 0] mActivityType=[1]}`
-     *      (automatically reparents the next highest `ACTIVITY_TYPE_STANDARD` task immediately underneath it into `MainStage`!).
-     * - Calling `toggleSplitScreen()` between App 1 and App 2 pulled an older background app into `MainStage`
-     *   and caused App 2 to dismiss split-screen (`SPLIT_DISMISS`), leaving only Lyft on screen.
-     * - By launching Uber at `0ms` (standard task), launching Lyft at `+480ms` (standard task right on top of Uber),
-     *   and calling `toggleSplitScreen()` at `+1150ms` once Lyft is focused, One UI atomically docks
-     *   **Uber into `MainStage` (top/left)** and **Lyft into `SideStage` (bottom/right)**!
+     * Verified against Samsung One UI `WindowManagerShell` / `StageCoordinator` (`ShellSplitScreen`)
+     * and `WindowOrganizerController`:
+     * 1. `FLAG_ACTIVITY_LAUNCH_ADJACENT` from a Home launcher or Service context is ignored by
+     *    `WindowManager` (`W/WindowManager: Launch adjacent ignored due to missing source activity`).
+     * 2. Passing `setLaunchBounds(Rect)` or `windowingMode = 5/6` puts a task into non-fullscreen
+     *    mode, which causes `WindowOrganizerController.reparentChildrenTasksHierarchyOp`
+     *    (`mWindowingMode=[1, 0] mActivityType=[1]`) to skip it when entering split-screen!
+     * 3. When `GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN` (`StageCoordinator.moveToStage`) is invoked, One UI
+     *    executes an atomic `WindowContainerTransaction` (`CHANGE_TRANSIT_REQUEST_FULLSCREEN_TO_SPLIT`):
+     *    - `{reparent: <focused top task> to top of Task{name=side}}` (docks the focused top task into `SideStage`),
+     *    - `{childrenTasksReparent: from=null to=Task{name=main} mToTop=true mReparentTopOnly=true mWindowingMode=[1, 0] mActivityType=[1] mClearWindowingMode=true}`
+     *      (automatically reparents the top remaining `mWindowingMode=[1, 0] mActivityType=[1]` task in
+     *      `DefaultTaskDisplayArea` into `MainStage`).
+     * 4. Therefore, we:
+     *    - Launch **Uber** at `0ms` as a pure fullscreen standard task (`tiledBounds = null`, `adjacentFlag = false`,
+     *      `windowingMode = 1`, `activityType = 1`),
+     *    - Launch **Lyft** at `+550ms` via `FoldAccessibilityService.instance ?: context` (`BAL_ALLOW_ACCESSIBILITY`)
+     *      as a pure fullscreen standard task (`tiledBounds = null`, `adjacentFlag = false`) directly above Uber
+     *      so the top two `mWindowingMode=1, mActivityType=1` tasks in `DefaultTaskDisplayArea` are
+     *      `[0: Lyft (top), 1: Uber (second)]`,
+     *    - Trigger `FoldAccessibilityService.instance?.toggleSplitScreen()` once at `+1250ms` after Lyft's
+     *      `OPEN` transition completes, atomically docking **Uber into `MainStage` (top/left)** and
+     *      **Lyft into `SideStage` (bottom/right)**!
      */
     fun launchUberAndLyftSplitScreen(
         context: Context,
@@ -1228,12 +1239,10 @@ object QuickNavigationLauncher {
         SystemTweaker.ensureAccessibilityServiceEnabled(context)
         copyDestinationToClipboard(context, destination)
 
-        val (_, paneB) = computeTiledSplitBounds(context)
         val mainHandler = Handler(Looper.getMainLooper())
         val launcherPkg = context.packageName
 
-        // Step 1 (0ms): Launch Uber as a standard task (mWindowingMode=1, mActivityType=1)
-        // so it sits at the top of DefaultTaskDisplayArea.
+        // Step 1 (0ms): Launch Uber as a pure fullscreen standard task (mWindowingMode=1, mActivityType=1)
         launchSingleRideApp(
             context = context,
             isUber = true,
@@ -1242,23 +1251,21 @@ object QuickNavigationLauncher {
             adjacentFlag = false
         )
 
-        // Step 2 (+480ms): Launch Lyft as a standard task right above Uber in DefaultTaskDisplayArea
-        // so the top two ACTIVITY_TYPE_STANDARD tasks are [1: Lyft (top), 2: Uber (second)].
+        // Step 2 (+550ms): Launch Lyft as a pure fullscreen standard task directly above Uber
+        // using FoldAccessibilityService context (when bound) for BAL_ALLOW_ACCESSIBILITY exemption.
         mainHandler.postDelayed({
-            val a11yAvailable = FoldAccessibilityService.instance != null ||
-                SystemTweaker.isAccessibilityServiceEnabled(context)
-
+            val launchContext = FoldAccessibilityService.instance ?: context
             launchSingleRideApp(
-                context = context,
+                context = launchContext,
                 isUber = false,
                 destination = destination,
-                tiledBounds = if (a11yAvailable) null else paneB,
-                adjacentFlag = !a11yAvailable
+                tiledBounds = null,
+                adjacentFlag = false
             )
 
-            // Step 3 (+1130ms total): Once Lyft's window is in the foreground, invoke
-            // GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN once. StageCoordinator moves Lyft -> SideStage
-            // and automatically reparents Uber (the top remaining standard task) -> MainStage!
+            // Step 3 (+1250ms total): Once Lyft's OPEN transition has settled in the foreground,
+            // invoke GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN once. StageCoordinator moves Lyft -> SideStage
+            // and WindowOrganizerController.reparentChildrenTasksHierarchyOp moves Uber -> MainStage!
             fun attemptAtomicSplitDock(attempt: Int) {
                 val fgPkg = FoldAccessibilityService.foregroundPackage.value
                 val rideInForeground = fgPkg.isNotBlank() && fgPkg != launcherPkg
@@ -1269,8 +1276,8 @@ object QuickNavigationLauncher {
                 FoldAccessibilityService.instance?.toggleSplitScreen()
             }
 
-            mainHandler.postDelayed({ attemptAtomicSplitDock(0) }, 650L)
-        }, 480L)
+            mainHandler.postDelayed({ attemptAtomicSplitDock(0) }, 700L)
+        }, 550L)
     }
 }
 
