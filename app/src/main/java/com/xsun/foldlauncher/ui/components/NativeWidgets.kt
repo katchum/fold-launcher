@@ -377,7 +377,7 @@ fun SmartLauncherUltraClockHeader(
     val isTailscaleConnected = !resolvedTsIp.isNullOrBlank()
     val tempInt = hwTelemetry.batteryTempCelsius.roundToInt()
 
-    val openClockAppAction = {
+    val openClockAppAction: () -> Unit = {
         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         if (onClockClick != null) {
             onClockClick()
@@ -388,7 +388,20 @@ fun SmartLauncherUltraClockHeader(
                 }
                 context.startActivity(alarmIntent)
             }.onFailure {
-                SystemTweaker.openClockApp(context)
+                val clockPkg = listOf(
+                    "com.sec.android.app.clockpackage",
+                    "com.google.android.deskclock",
+                    "com.android.deskclock"
+                ).firstOrNull { pkg ->
+                    context.packageManager.getLaunchIntentForPackage(pkg) != null
+                }
+                if (clockPkg != null) {
+                    runCatching {
+                        context.packageManager.getLaunchIntentForPackage(clockPkg)?.apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }?.let { context.startActivity(it) }
+                    }
+                }
             }
         }
     }
