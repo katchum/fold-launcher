@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -32,14 +31,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -54,6 +53,13 @@ import com.xsun.foldlauncher.ui.theme.FoldLauncherColors
 import com.xsun.foldlauncher.ui.theme.IconShapePreset
 import com.xsun.foldlauncher.ui.theme.iconShapeForPreset
 import kotlin.math.abs
+import kotlin.math.floor
+
+private val MIP_BG = Color(0xFF0A0D10)
+private val MIP_SURFACE = Color(0xFF11161B)
+private val MIP_GRID = Color(0xFF1E293B)
+private val MIP_INK = Color(0xFFE2E8F0)
+private val MIP_CYAN = Color(0xFF38BDF8)
 
 @Composable
 fun AppIconTile(
@@ -66,7 +72,7 @@ fun AppIconTile(
     modifier: Modifier = Modifier
 ) {
     val shape = remember(iconShapePreset) { iconShapeForPreset(iconShapePreset) }
-    val iconSize = if (compact) 46.dp else 56.dp
+    val iconSize = if (compact) 46.dp else 54.dp
 
     Column(
         modifier = modifier
@@ -74,7 +80,7 @@ fun AppIconTile(
                 onClick = onClick,
                 onLongClick = onLongClick
             )
-            .padding(vertical = if (compact) 3.dp else 6.dp, horizontal = 4.dp),
+            .padding(vertical = if (compact) 3.dp else 5.dp, horizontal = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -86,8 +92,12 @@ fun AppIconTile(
                 modifier = Modifier
                     .fillMaxSize()
                     .clip(shape)
-                    .background(FoldLauncherColors.GlassSurfaceElevated)
-                    .border(0.75.dp, FoldLauncherColors.GlassBorder, shape),
+                    .background(MIP_SURFACE)
+                    .border(
+                        1.dp,
+                        if (app.isWorkProfile) MIP_CYAN.copy(alpha = 0.55f) else MIP_GRID,
+                        shape
+                    ),
                 contentAlignment = Alignment.Center
             ) {
                 val bitmap = app.icon
@@ -96,6 +106,7 @@ fun AppIconTile(
                         bitmap = bitmap,
                         contentDescription = app.label,
                         contentScale = ContentScale.Crop,
+                        filterQuality = FilterQuality.None,
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
@@ -115,9 +126,10 @@ fun AppIconTile(
                     ) {
                         Text(
                             text = monogramText,
-                            fontSize = if (compact) 16.sp else 20.sp,
+                            fontSize = if (compact) 15.sp else 18.sp,
+                            fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.ExtraBold,
-                            color = FoldLauncherColors.TextPrimary
+                            color = MIP_INK
                         )
                     }
                 }
@@ -134,12 +146,14 @@ fun AppIconTile(
         }
 
         if (showLabel) {
-            Spacer(modifier = Modifier.height(if (compact) 4.dp else 6.dp))
+            Spacer(modifier = Modifier.height(if (compact) 4.dp else 5.dp))
             Text(
                 text = app.label,
-                fontSize = if (compact) 11.sp else 12.sp,
+                fontSize = if (compact) 10.sp else 11.sp,
+                fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Medium,
-                color = FoldLauncherColors.TextPrimary,
+                letterSpacing = (-0.2).sp,
+                color = MIP_INK,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center,
@@ -150,67 +164,55 @@ fun AppIconTile(
 }
 
 /**
- * Samsung One UI Work Profile Briefcase Badge (`profile 10` / managed profile):
- * Crisp white circular badge at the bottom-right corner containing a vivid One UI blue (`#0381FE`)
- * briefcase icon with top handle and center clasp.
+ * Minimal 9x9 MIP Pixel-Matrix Briefcase Badge (`profile 10` / managed work profile):
+ * Dark `#0A0D10` (`MIP_BG`) rounded-rect (`RoundedCornerShape(4.dp)`) with a crisp `1.dp` `#38BDF8` (`MIP_CYAN`)
+ * border and integer-snapped `drawRect` pixel blocks forming a tiny 9x9 pixel-art briefcase.
  */
 @Composable
 fun OneUiWorkBriefcaseBadge(
     compact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    val badgeSize = if (compact) 17.dp else 21.dp
-    val oneUiBlue = Color(0xFF0381FE)
+    val badgeSize = if (compact) 14.dp else 16.dp
+    val badgeShape = RoundedCornerShape(4.dp)
 
     Box(
         modifier = modifier
             .size(badgeSize)
-            .clip(CircleShape)
-            .background(Color.White)
-            .border(1.dp, Color(0x29000000), CircleShape),
+            .clip(badgeShape)
+            .background(MIP_BG)
+            .border(1.dp, MIP_CYAN, badgeShape),
         contentAlignment = Alignment.Center
     ) {
-        Canvas(modifier = Modifier.fillMaxSize(0.58f)) {
-            val w = size.width
-            val h = size.height
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val grid = 9
+            val cell = floor(size.width / grid).coerceAtLeast(1f)
+            val total = cell * grid
+            val startX = floor((size.width - total) / 2f)
+            val startY = floor((size.height - total) / 2f)
 
-            // Briefcase top handle arch
-            val handleWidth = w * 0.42f
-            val handleHeight = h * 0.24f
-            val handleLeft = (w - handleWidth) / 2f
-            val handleTop = h * 0.08f
-            drawRoundRect(
-                color = oneUiBlue,
-                topLeft = Offset(handleLeft, handleTop),
-                size = Size(handleWidth, handleHeight * 1.4f),
-                cornerRadius = CornerRadius(w * 0.08f, w * 0.08f),
-                style = Stroke(width = w * 0.13f)
-            )
+            fun px(gx: Int, gy: Int) {
+                drawRect(
+                    color = MIP_CYAN,
+                    topLeft = Offset(startX + gx * cell, startY + gy * cell),
+                    size = Size(cell, cell)
+                )
+            }
 
-            // Briefcase main body
-            val bodyTop = h * 0.28f
-            val bodyHeight = h * 0.64f
-            drawRoundRect(
-                color = oneUiBlue,
-                topLeft = Offset(0f, bodyTop),
-                size = Size(w, bodyHeight),
-                cornerRadius = CornerRadius(w * 0.16f, w * 0.16f)
-            )
+            // 3x1 top handle bar (y = 1, x = 3..5) + handle posts (y = 2, x = 3, 5)
+            px(3, 1)
+            px(4, 1)
+            px(5, 1)
+            px(3, 2)
+            px(5, 2)
 
-            // White horizontal seam + center clasp cutout for crisp One UI briefcase silhouette
-            val seamY = bodyTop + bodyHeight * 0.44f
-            drawRect(
-                color = Color.White,
-                topLeft = Offset(0f, seamY),
-                size = Size(w, h * 0.08f)
-            )
-            val claspSize = w * 0.20f
-            drawRoundRect(
-                color = Color.White,
-                topLeft = Offset((w - claspSize) / 2f, seamY - claspSize * 0.35f),
-                size = Size(claspSize, claspSize * 0.85f),
-                cornerRadius = CornerRadius(w * 0.04f, w * 0.04f)
-            )
+            // 7x4 pixel-matrix briefcase body (x = 1..7, y = 3..6) with 1x1 center clasp cutout at (4, 4)
+            for (gy in 3..6) {
+                for (gx in 1..7) {
+                    if (gx == 4 && gy == 4) continue
+                    px(gx, gy)
+                }
+            }
         }
     }
 }

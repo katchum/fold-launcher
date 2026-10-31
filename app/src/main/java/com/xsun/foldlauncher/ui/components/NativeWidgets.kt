@@ -16,6 +16,9 @@ import android.os.Handler
 import android.os.Looper
 import java.net.Inet4Address
 import java.net.NetworkInterface
+import java.text.SimpleDateFormat
+import java.util.Date
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -36,7 +39,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -54,6 +56,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -323,13 +327,20 @@ fun TailscaleMeshTelemetryPill(
     }
 }
 
+private val MIP_BG = Color(0xFF0A0D10)
+private val MIP_SURFACE = Color(0xFF11161B)
+private val MIP_GRID = Color(0xFF1E293B)
+private val MIP_INK = Color(0xFFE2E8F0)
+private val MIP_MUTED = Color(0xFF64748B)
+private val MIP_CYAN = Color(0xFF38BDF8)
+private val MIP_GREEN = Color(0xFF22C55E)
+
 /**
- * Minimal, Ultra-Legible One UI 9.0 Connectivity Card (`v0.7.0`).
- * Renders a sleek One UI 9.0 frosted dark-glass container (`RoundedCornerShape(26.dp)`, `Color(0xD917181E)`,
- * subtle `1.dp` border `Color.White.copy(alpha = 0.10f)`) containing two clean, legible rows separated by a
- * subtle hairline divider (`HorizontalDivider(color = Color.White.copy(alpha = 0.07f))`):
- * 1. Row 1 — Tailscale (emerald `#34D399` dot, `"Tailscale"`, monospace IP with 1-tap copy `"Copied IP"`, Material3 `Switch`)
- * 2. Row 2 — Wireless Debugging (sky-blue `#38BDF8` dot, `"Wireless Debugging"`, monospace `<ip>:<port>` with 1-tap copy `"Copied ADB address"`, Material3 `Switch`)
+ * Fancy Terminal & Low-Resolution MIP Display Header (`OneUiConnectivityPillsRow`):
+ * - Top MIP Terminal Clock & Date header (`HH:MM` + `EEE MMM dd // DEV.TTY`)
+ * - Compact single-row `[TS]` (Tailscale) & `[ADB]` (Wireless Debugging) MIP status bar with
+ *   subtle dot-matrix Canvas texture, `FontFamily.Monospace`, `1.dp` `MIP_GRID`/`MIP_GREEN`/`MIP_CYAN`
+ *   borders, 1-tap IP/endpoint copy, and switches.
  */
 @Composable
 fun OneUiConnectivityPillsRow(
@@ -348,6 +359,14 @@ fun OneUiConnectivityPillsRow(
     val haptics = LocalHapticFeedback.current
     var tailscaleCopied by remember { mutableStateOf(false) }
     var adbCopied by remember { mutableStateOf(false) }
+    var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            nowMillis = System.currentTimeMillis()
+            delay(15_000L)
+        }
+    }
 
     LaunchedEffect(tailscaleCopied) {
         if (tailscaleCopied) {
@@ -362,205 +381,316 @@ fun OneUiConnectivityPillsRow(
         }
     }
 
+    val timeStr = remember(nowMillis) {
+        SimpleDateFormat("HH:mm", Locale.US).format(Date(nowMillis))
+    }
+    val dateStr = remember(nowMillis) {
+        SimpleDateFormat("EEE MMM dd", Locale.US).format(Date(nowMillis)).uppercase(Locale.US)
+    }
+
     val resolvedTailscaleIp = tailscaleIp?.takeIf { it.isNotBlank() }
     val resolvedLanIp = lanIp?.takeIf { it.isNotBlank() }
 
-    val tailscaleAddressText = resolvedTailscaleIp ?: if (isTailscaleConnected) "Connected" else "Off"
-    val tailscaleDisplaySubtitle = if (tailscaleCopied) "Copied IP" else tailscaleAddressText
+    val tailscaleAddressText = resolvedTailscaleIp ?: if (isTailscaleConnected) "ONLINE" else "OFF"
+    val tailscaleDisplaySubtitle = if (tailscaleCopied) "COPIED_IP" else tailscaleAddressText
 
-    val rawAdbEndpoint = "${resolvedTailscaleIp ?: resolvedLanIp ?: "On"}${
+    val rawAdbEndpoint = "${resolvedTailscaleIp ?: resolvedLanIp ?: "ON"}${
         if (wirelessAdbPort != null && wirelessAdbPort > 0) ":$wirelessAdbPort" else ""
     }"
-    val adbAddressText = if (isWirelessAdbEnabled) rawAdbEndpoint else "Off"
-    val adbDisplaySubtitle = if (adbCopied) "Copied ADB" else adbAddressText
+    val adbAddressText = if (isWirelessAdbEnabled) rawAdbEndpoint else "OFF"
+    val adbDisplaySubtitle = if (adbCopied) "COPIED_ADB" else adbAddressText
 
-    val pillShape = RoundedCornerShape(18.dp)
-    val pillBackground = Color(0xD917181E)
-    val pillBorder = Color.White.copy(alpha = 0.10f)
-    val mutedDotColor = Color(0xFF6B7280)
-    val tailscaleConnectedDot = Color(0xFF34D399)
-    val wirelessAdbEnabledDot = Color(0xFF38BDF8)
+    val pillShape = RoundedCornerShape(10.dp)
 
-    Row(
+    Column(
         modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // Left Compact Pill — Tailscale
-        Row(
+        // MIP Terminal Clock & Status Banner
+        Box(
             modifier = Modifier
-                .weight(1f)
+                .fillMaxWidth()
                 .clip(pillShape)
-                .background(pillBackground)
-                .border(1.dp, pillBorder, pillShape)
-                .padding(start = 11.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+                .background(MIP_BG)
+                .border(1.dp, MIP_GRID, pillShape)
         ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(1.dp)
+            MipDotMatrixBackdrop(modifier = Modifier.matchParentSize())
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.clickable {
-                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        onOpenTailscaleApp()
-                    }
+                    verticalAlignment = Alignment.Bottom,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(7.dp)
-                            .clip(CircleShape)
-                            .background(if (isTailscaleConnected) tailscaleConnectedDot else mutedDotColor)
+                    Text(
+                        text = timeStr,
+                        fontSize = 20.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MIP_INK
                     )
                     Text(
-                        text = "Tailscale",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color.White,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        text = dateStr,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = MIP_MUTED,
+                        modifier = Modifier.padding(bottom = 2.dp)
                     )
                 }
-
                 Text(
-                    text = tailscaleDisplaySubtitle,
+                    text = "[DEV//MIP]",
                     fontSize = 10.sp,
                     fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Medium,
-                    color = when {
-                        tailscaleCopied -> tailscaleConnectedDot
-                        isTailscaleConnected -> Color(0xFF93C5FD)
-                        else -> Color(0xFF9CA3AF)
-                    },
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .padding(start = 13.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .clickable {
-                            val ipToCopy = resolvedTailscaleIp ?: resolvedLanIp
-                            if (!ipToCopy.isNullOrBlank()) {
-                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                try {
-                                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                                    cm?.setPrimaryClip(ClipData.newPlainText("Tailscale IP", ipToCopy))
-                                } catch (_: Exception) {
-                                }
-                                tailscaleCopied = true
-                            } else {
-                                onOpenTailscaleApp()
-                            }
-                        }
+                    fontWeight = FontWeight.Bold,
+                    color = MIP_CYAN
                 )
             }
-
-            Switch(
-                checked = isTailscaleConnected,
-                onCheckedChange = {
-                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    onToggleTailscale()
-                },
-                modifier = Modifier.scale(0.76f),
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.White,
-                    checkedTrackColor = tailscaleConnectedDot,
-                    uncheckedThumbColor = Color(0xFFD1D5DB),
-                    uncheckedTrackColor = Color(0xFF2A2D37)
-                )
-            )
         }
 
-        // Right Compact Pill — Wireless ADB
+        // Single-Row Compact [TS] & [ADB] MIP Status Bar
         Row(
-            modifier = Modifier
-                .weight(1f)
-                .clip(pillShape)
-                .background(pillBackground)
-                .border(1.dp, pillBorder, pillShape)
-                .padding(start = 11.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(1.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.clickable {
-                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        onOpenWirelessAdbSettings()
-                    }
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(7.dp)
-                            .clip(CircleShape)
-                            .background(if (isWirelessAdbEnabled) wirelessAdbEnabledDot else mutedDotColor)
+            // Left Compact Pill — [TS] Tailscale
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(pillShape)
+                    .background(MIP_SURFACE)
+                    .border(
+                        1.dp,
+                        if (isTailscaleConnected) MIP_GREEN.copy(alpha = 0.65f) else MIP_GRID,
+                        pillShape
                     )
-                    Text(
-                        text = "Wireless ADB",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color.White,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+            ) {
+                MipDotMatrixBackdrop(modifier = Modifier.matchParentSize())
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 10.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(1.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            modifier = Modifier.clickable {
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onOpenTailscaleApp()
+                            }
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .background(if (isTailscaleConnected) MIP_GREEN else MIP_MUTED)
+                            )
+                            Text(
+                                text = "[TS]",
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = if (isTailscaleConnected) MIP_GREEN else MIP_INK,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = "TAILSCALE",
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MIP_INK,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        Text(
+                            text = tailscaleDisplaySubtitle,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Medium,
+                            color = when {
+                                tailscaleCopied -> MIP_GREEN
+                                isTailscaleConnected -> MIP_CYAN
+                                else -> MIP_MUTED
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .padding(start = 11.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                                .clickable {
+                                    val ipToCopy = resolvedTailscaleIp ?: resolvedLanIp
+                                    if (!ipToCopy.isNullOrBlank()) {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        try {
+                                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                            cm?.setPrimaryClip(ClipData.newPlainText("Tailscale IP", ipToCopy))
+                                        } catch (_: Exception) {
+                                        }
+                                        tailscaleCopied = true
+                                    } else {
+                                        onOpenTailscaleApp()
+                                    }
+                                }
+                        )
+                    }
+
+                    Switch(
+                        checked = isTailscaleConnected,
+                        onCheckedChange = {
+                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onToggleTailscale()
+                        },
+                        modifier = Modifier.scale(0.72f),
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = MIP_BG,
+                            checkedTrackColor = MIP_GREEN,
+                            uncheckedThumbColor = MIP_INK,
+                            uncheckedTrackColor = MIP_GRID
+                        )
                     )
                 }
-
-                Text(
-                    text = adbDisplaySubtitle,
-                    fontSize = 10.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Medium,
-                    color = when {
-                        adbCopied -> tailscaleConnectedDot
-                        isWirelessAdbEnabled -> Color(0xFF7DD3FC)
-                        else -> Color(0xFF9CA3AF)
-                    },
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .padding(start = 13.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .clickable {
-                            val host = resolvedTailscaleIp ?: resolvedLanIp
-                            if (host != null || (wirelessAdbPort != null && wirelessAdbPort > 0)) {
-                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                val copyTarget = "${host ?: "127.0.0.1"}${
-                                    if (wirelessAdbPort != null && wirelessAdbPort > 0) ":$wirelessAdbPort" else ""
-                                }"
-                                try {
-                                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                                    cm?.setPrimaryClip(ClipData.newPlainText("Wireless ADB", copyTarget))
-                                } catch (_: Exception) {
-                                }
-                                adbCopied = true
-                            } else {
-                                onOpenWirelessAdbSettings()
-                            }
-                        }
-                )
             }
 
-            Switch(
-                checked = isWirelessAdbEnabled,
-                onCheckedChange = {
-                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    onToggleWirelessAdb()
-                },
-                modifier = Modifier.scale(0.76f),
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.White,
-                    checkedTrackColor = wirelessAdbEnabledDot,
-                    uncheckedThumbColor = Color(0xFFD1D5DB),
-                    uncheckedTrackColor = Color(0xFF2A2D37)
+            // Right Compact Pill — [ADB] Wireless Debugging
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(pillShape)
+                    .background(MIP_SURFACE)
+                    .border(
+                        1.dp,
+                        if (isWirelessAdbEnabled) MIP_CYAN.copy(alpha = 0.65f) else MIP_GRID,
+                        pillShape
+                    )
+            ) {
+                MipDotMatrixBackdrop(modifier = Modifier.matchParentSize())
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 10.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(1.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            modifier = Modifier.clickable {
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onOpenWirelessAdbSettings()
+                            }
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .background(if (isWirelessAdbEnabled) MIP_CYAN else MIP_MUTED)
+                            )
+                            Text(
+                                text = "[ADB]",
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = if (isWirelessAdbEnabled) MIP_CYAN else MIP_INK,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = "WIFI_DBG",
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MIP_INK,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        Text(
+                            text = adbDisplaySubtitle,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Medium,
+                            color = when {
+                                adbCopied -> MIP_GREEN
+                                isWirelessAdbEnabled -> MIP_CYAN
+                                else -> MIP_MUTED
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .padding(start = 11.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                                .clickable {
+                                    val host = resolvedTailscaleIp ?: resolvedLanIp
+                                    if (host != null || (wirelessAdbPort != null && wirelessAdbPort > 0)) {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        val copyTarget = "${host ?: "127.0.0.1"}${
+                                            if (wirelessAdbPort != null && wirelessAdbPort > 0) ":$wirelessAdbPort" else ""
+                                        }"
+                                        try {
+                                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                            cm?.setPrimaryClip(ClipData.newPlainText("Wireless ADB", copyTarget))
+                                        } catch (_: Exception) {
+                                        }
+                                        adbCopied = true
+                                    } else {
+                                        onOpenWirelessAdbSettings()
+                                    }
+                                }
+                        )
+                    }
+
+                    Switch(
+                        checked = isWirelessAdbEnabled,
+                        onCheckedChange = {
+                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onToggleWirelessAdb()
+                        },
+                        modifier = Modifier.scale(0.72f),
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = MIP_BG,
+                            checkedTrackColor = MIP_CYAN,
+                            uncheckedThumbColor = MIP_INK,
+                            uncheckedTrackColor = MIP_GRID
+                        )
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MipDotMatrixBackdrop(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val step = 6.dp.toPx().coerceAtLeast(4f)
+        val dotSize = 1.dp.toPx().coerceAtLeast(1f)
+        var y = step / 2f
+        while (y < size.height) {
+            var x = step / 2f
+            while (x < size.width) {
+                drawRect(
+                    color = MIP_GRID.copy(alpha = 0.35f),
+                    topLeft = Offset(x, y),
+                    size = Size(dotSize, dotSize)
                 )
-            )
+                x += step
+            }
+            y += step
         }
     }
 }

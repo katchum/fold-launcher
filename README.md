@@ -1,6 +1,6 @@
-# Fold8 Launcher (`com.xsun.foldlauncher`) — `v0.10.0` (Minimal One UI + Side-by-Side Max Edition)
+# Fold8 Launcher (`com.xsun.foldlauncher`) — `v0.10.0` (One UI + Fancy Terminal MIP Display Edition + Side-by-Side Max Edition)
 
-**Ultra-Fast, Zero-Bloat 120Hz One UI Home Launcher (`com.xsun.foldlauncher`) with `Dev` • `Main` • `Work` 3-Page Layout, Top Quick-Navigation & Ride-Compare Bar (Google Maps + Uber/Lyft Split-Screen), Recent Apps Thumbnail Strip + Smooth Bottom-Keyboard Search, Compact Single-Row Dev Switches & Side-by-Side Max Edition (`com.xsun.foldlauncher.max`)**
+**Ultra-Fast, Zero-Bloat 120Hz One UI + Fancy Terminal MIP (Memory-In-Pixel) Home Launcher (`com.xsun.foldlauncher`) with `Dev` • `Main` • `Work` 3-Page Layout, MIP Quick-Navigation & Ride-Compare Bar (Google Maps + Uber/Lyft Split-Screen), `9x9` MIP Pixel-Matrix Work Profile Badge, Recent Apps Thumbnail Strip + Smooth Bottom-Keyboard Search, MIP Compact Dev Switches & Side-by-Side Max Edition (`com.xsun.foldlauncher.max`)**
 
 [![Android CI](https://github.com/katchum/fold-launcher/actions/workflows/android-ci.yml/badge.svg)](https://github.com/katchum/fold-launcher/actions/workflows/android-ci.yml)
 

@@ -26,7 +26,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -43,13 +42,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -66,6 +69,32 @@ import java.net.URL
 import java.net.URLEncoder
 import java.util.Locale
 
+private val MipBg = Color(0xFF0A0D10)
+private val MipSurface = Color(0xFF11161B)
+private val MipGrid = Color(0xFF1E293B)
+private val MipInk = Color(0xFFE2E8F0)
+private val MipMuted = Color(0xFF64748B)
+private val MipCyan = Color(0xFF38BDF8)
+private val MipAmber = Color(0xFFF59E0B)
+
+private fun Modifier.mipPixelMatrix(): Modifier = this.drawBehind {
+    val stepPx = 6.dp.toPx()
+    val dotColor = MipInk.copy(alpha = 0.06f)
+    var y = 3.dp.toPx()
+    while (y < size.height) {
+        var x = 3.dp.toPx()
+        while (x < size.width) {
+            drawRect(
+                color = dotColor,
+                topLeft = Offset(x, y),
+                size = Size(1.dp.toPx(), 1.dp.toPx())
+            )
+            x += stepPx
+        }
+        y += stepPx
+    }
+}
+
 /**
  * Five quick-navigation travel modes selectable from the left expandable button in [OneUiQuickNavigationBar]:
  * - [BUS], [BIKE], [WALK], [DRIVE]: launch Google Maps directly with the route/navigation started.
@@ -80,11 +109,11 @@ enum class QuickNavMode(
     val mapsModeCode: String?,
     val mapsTravelMode: String?
 ) {
-    BUS("bus", "Bus", "🚌", "🚌 Bus", "r", "transit"),
-    BIKE("bike", "Bike", "🚲", "🚲 Bike", "b", "bicycling"),
-    WALK("walk", "Walk", "🚶", "🚶 Walk", "w", "walking"),
-    DRIVE("drive", "Drive", "🚗", "🚗 Drive", "d", "driving"),
-    RIDE("ride", "Ride (Uber + Lyft)", "🚕", "🚕 Ride", null, null);
+    BUS("bus", "Bus", "BUS", "[BUS]", "r", "transit"),
+    BIKE("bike", "Bike", "BIK", "[BIK]", "b", "bicycling"),
+    WALK("walk", "Walk", "WLK", "[WLK]", "w", "walking"),
+    DRIVE("drive", "Drive", "DRV", "[DRV]", "d", "driving"),
+    RIDE("ride", "Ride (Uber + Lyft)", "RDE", "[RDE]", null, null);
 
     companion object {
         fun fromKey(key: String?): QuickNavMode {
@@ -665,10 +694,12 @@ object QuickNavigationLauncher {
 }
 
 /**
- * Top-of-Home-Screen Quick Navigation & Ride Compare Bar (`v1.0.0`):
- * - Left button expands the 5 travel options (`🚌 Bus`, `🚲 Bike`, `🚶 Walk`, `🚗 Drive`, `🚕 Ride`).
+ * Top-of-Home-Screen Quick Navigation & Ride Compare Bar (`v1.0.0` MIP Terminal Edition):
+ * - Rendered like a low-resolution Memory-In-Pixel (MIP) terminal command bar with a strict
+ *   limited color palette (`MipBg`, `MipSurface`, `MipGrid`, `MipInk`, `MipMuted`, `MipCyan`, `MipAmber`).
+ * - Left button expands the 5 travel options (`[BUS]`, `[BIK]`, `[WLK]`, `[DRV]`, `[RDE]`).
  * - Center target location textbox shows live suggested locations in a dropdown below.
- * - Picking a suggestion or pressing `Go` starts Google Maps navigation for `Bus`/`Bike`/`Walk`/`Drive`,
+ * - Picking a suggestion or pressing `[GO]` starts Google Maps navigation for `Bus`/`Bike`/`Walk`/`Drive`,
  *   or opens **Uber + Lyft side-by-side** with the destination set and price estimate open for `Ride`.
  */
 @Composable
@@ -686,6 +717,8 @@ fun OneUiQuickNavigationBar(
     var isInputFocused by remember { mutableStateOf(false) }
     var suggestions by remember { mutableStateOf<List<NavLocationSuggestion>>(emptyList()) }
     var selectedSuggestion by remember { mutableStateOf<NavLocationSuggestion?>(null) }
+
+    val activeAccent = if (selectedMode == QuickNavMode.RIDE) MipAmber else MipCyan
 
     // Debounced live location autocomplete
     LaunchedEffect(destinationText, isInputFocused) {
@@ -725,73 +758,70 @@ fun OneUiQuickNavigationBar(
     Column(
         modifier = modifier.fillMaxWidth()
     ) {
-        // Primary Pill Bar: Left Expandable Mode Selector + Target Location Textbox + Go Action
+        // Primary MIP Terminal Command Bar: Left Expandable Mode Selector + Target Prompt + Launch Tag
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(22.dp))
-                .background(Color(0xD917181E))
-                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(22.dp))
-                .padding(horizontal = 8.dp, vertical = 6.dp),
+                .clip(RoundedCornerShape(10.dp))
+                .background(MipBg)
+                .mipPixelMatrix()
+                .border(1.dp, if (isInputFocused) activeAccent else MipGrid, RoundedCornerShape(10.dp))
+                .padding(horizontal = 6.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Left button: expands the 5 travel options (Bus, Bike, Walk, Drive, Ride)
+            // Left button: expands the 5 travel options (BUS, BIK, WLK, DRV, RDE)
             Row(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(
-                        if (selectedMode == QuickNavMode.RIDE) {
-                            Color(0xFF8B5CF6).copy(alpha = 0.26f)
-                        } else {
-                            Color(0xFF0381FE).copy(alpha = 0.22f)
-                        }
-                    )
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(MipSurface)
                     .border(
                         width = 1.dp,
-                        color = if (selectedMode == QuickNavMode.RIDE) {
-                            Color(0xFFC084FC).copy(alpha = 0.55f)
-                        } else {
-                            Color(0xFF38BDF8).copy(alpha = 0.45f)
-                        },
-                        shape = RoundedCornerShape(16.dp)
+                        color = activeAccent,
+                        shape = RoundedCornerShape(6.dp)
                     )
                     .clickable { modeMenuExpanded = !modeMenuExpanded }
-                    .padding(horizontal = 11.dp, vertical = 8.dp),
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = selectedMode.shortBadge,
-                    color = Color.White,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    text = "[${selectedMode.icon} ${if (modeMenuExpanded) "^" else "v"}]",
+                    color = activeAccent,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Bold,
                     maxLines = 1
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    text = if (modeMenuExpanded) "▴" else "▾",
-                    color = Color.White.copy(alpha = 0.78f),
-                    fontSize = 11.sp
                 )
             }
 
-            Spacer(modifier = Modifier.width(10.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+
+            Text(
+                text = ">",
+                color = activeAccent,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(modifier = Modifier.width(6.dp))
 
             // Center Target Location Textbox
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .padding(vertical = 4.dp),
+                    .padding(vertical = 3.dp),
                 contentAlignment = Alignment.CenterStart
             ) {
                 if (destinationText.isEmpty()) {
                     Text(
                         text = if (selectedMode == QuickNavMode.RIDE) {
-                            "Uber + Lyft destination..."
+                            "ride://uber+lyft..."
                         } else {
-                            "Navigate to destination..."
+                            "nav://destination..."
                         },
-                        color = Color.White.copy(alpha = 0.46f),
-                        fontSize = 14.sp,
+                        color = MipMuted,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.5.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -804,11 +834,12 @@ fun OneUiQuickNavigationBar(
                     },
                     singleLine = true,
                     textStyle = TextStyle(
-                        color = Color.White,
-                        fontSize = 14.sp,
+                        color = MipInk,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 13.sp,
                         fontWeight = FontWeight.Medium
                     ),
-                    cursorBrush = SolidColor(Color(0xFF38BDF8)),
+                    cursorBrush = SolidColor(activeAccent),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                     keyboardActions = KeyboardActions(
                         onGo = { triggerLaunch(selectedMode) }
@@ -825,8 +856,8 @@ fun OneUiQuickNavigationBar(
             if (destinationText.isNotEmpty()) {
                 Box(
                     modifier = Modifier
-                        .size(26.dp)
-                        .clip(CircleShape)
+                        .size(24.dp)
+                        .clip(RoundedCornerShape(4.dp))
                         .clickable {
                             destinationText = ""
                             selectedSuggestion = null
@@ -834,41 +865,43 @@ fun OneUiQuickNavigationBar(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "✕",
-                        color = Color.White.copy(alpha = 0.6f),
-                        fontSize = 12.sp
+                        text = "[x]",
+                        color = MipMuted,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.5.sp
                     )
                 }
                 Spacer(modifier = Modifier.width(4.dp))
             }
 
-            // Right Go / Launch button
+            // Right Launch button ([GO] or [U+L])
+            val canLaunch = destinationText.isNotBlank()
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(15.dp))
-                    .background(
-                        if (destinationText.isNotBlank()) {
-                            if (selectedMode == QuickNavMode.RIDE) Color(0xFF8B5CF6) else Color(0xFF0381FE)
-                        } else {
-                            Color.White.copy(alpha = 0.08f)
-                        }
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (canLaunch) MipSurface else MipBg)
+                    .border(
+                        width = 1.dp,
+                        color = if (canLaunch) activeAccent else MipGrid,
+                        shape = RoundedCornerShape(6.dp)
                     )
-                    .clickable(enabled = destinationText.isNotBlank()) {
+                    .clickable(enabled = canLaunch) {
                         triggerLaunch(selectedMode)
                     }
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(horizontal = 9.dp, vertical = 6.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = if (selectedMode == QuickNavMode.RIDE) "Compare ↗" else "Go ↗",
-                    color = if (destinationText.isNotBlank()) Color.White else Color.White.copy(alpha = 0.4f),
-                    fontSize = 12.5.sp,
+                    text = if (selectedMode == QuickNavMode.RIDE) "[U+L]" else "[GO]",
+                    color = if (canLaunch) activeAccent else MipMuted,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.5.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
         }
 
-        // Expandable 5-Mode Selector Strip (Bus, Bike, Walk, Drive, Ride)
+        // Expandable 5-Mode Selector Strip ([BUS], [BIKE], [WALK], [DRIVE], [RIDE])
         AnimatedVisibility(
             visible = modeMenuExpanded,
             enter = fadeIn() + expandVertically(),
@@ -877,32 +910,28 @@ fun OneUiQuickNavigationBar(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 6.dp)
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(Color(0xF017181E))
-                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(18.dp))
+                    .padding(top = 4.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MipBg)
+                    .mipPixelMatrix()
+                    .border(1.dp, MipGrid, RoundedCornerShape(8.dp))
                     .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    .padding(horizontal = 6.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 for (mode in QuickNavMode.values()) {
                     val isSelected = mode == selectedMode
-                    val chipBg = when {
-                        isSelected && mode == QuickNavMode.RIDE -> Color(0xFF8B5CF6).copy(alpha = 0.32f)
-                        isSelected -> Color(0xFF0381FE).copy(alpha = 0.30f)
-                        else -> Color.White.copy(alpha = 0.06f)
-                    }
-                    val chipBorder = when {
-                        isSelected && mode == QuickNavMode.RIDE -> Color(0xFFC084FC)
-                        isSelected -> Color(0xFF38BDF8)
-                        else -> Color.White.copy(alpha = 0.10f)
-                    }
+                    val modeAccent = if (mode == QuickNavMode.RIDE) MipAmber else MipCyan
                     Row(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(chipBg)
-                            .border(1.dp, chipBorder, RoundedCornerShape(14.dp))
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (isSelected) MipSurface else MipBg)
+                            .border(
+                                width = 1.dp,
+                                color = if (isSelected) modeAccent else MipGrid,
+                                shape = RoundedCornerShape(6.dp)
+                            )
                             .clickable {
                                 selectedMode = mode
                                 QuickNavigationLauncher.saveSelectedMode(context, mode)
@@ -911,18 +940,14 @@ fun OneUiQuickNavigationBar(
                                     triggerLaunch(mode)
                                 }
                             }
-                            .padding(horizontal = 11.dp, vertical = 7.dp),
+                            .padding(horizontal = 9.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = mode.icon,
-                            fontSize = 13.sp
-                        )
-                        Spacer(modifier = Modifier.width(5.dp))
-                        Text(
-                            text = mode.label,
-                            color = Color.White,
-                            fontSize = 12.5.sp,
+                            text = "[${mode.key.uppercase(Locale.US)}]",
+                            color = if (isSelected) modeAccent else MipInk,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.5.sp,
                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                         )
                     }
@@ -930,7 +955,7 @@ fun OneUiQuickNavigationBar(
             }
         }
 
-        // Suggested Locations Dropdown
+        // Suggested Locations Dropdown (MIP Terminal Matrix)
         AnimatedVisibility(
             visible = isInputFocused && suggestions.isNotEmpty(),
             enter = fadeIn() + expandVertically(),
@@ -939,11 +964,12 @@ fun OneUiQuickNavigationBar(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 6.dp)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(Color(0xF217181E))
-                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(20.dp))
-                    .padding(vertical = 4.dp)
+                    .padding(top = 4.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MipBg)
+                    .mipPixelMatrix()
+                    .border(1.dp, MipGrid, RoundedCornerShape(8.dp))
+                    .padding(vertical = 2.dp)
             ) {
                 suggestions.forEachIndexed { index, suggestion ->
                     Row(
@@ -954,19 +980,23 @@ fun OneUiQuickNavigationBar(
                                 selectedSuggestion = suggestion
                                 triggerLaunch(selectedMode, suggestion)
                             }
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = if (suggestion.isRecent) "🕘" else "📍",
-                            fontSize = 15.sp
+                            text = if (suggestion.isRecent) "[HST]" else "[LOC]",
+                            color = if (suggestion.isRecent) MipAmber else MipCyan,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
                         )
-                        Spacer(modifier = Modifier.width(10.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = suggestion.title,
-                                color = Color.White,
-                                fontSize = 13.5.sp,
+                                color = MipInk,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
@@ -975,30 +1005,28 @@ fun OneUiQuickNavigationBar(
                                 Spacer(modifier = Modifier.height(1.dp))
                                 Text(
                                     text = suggestion.subtitle,
-                                    color = Color.White.copy(alpha = 0.58f),
-                                    fontSize = 11.5.sp,
+                                    color = MipMuted,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.5.sp,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (selectedMode == QuickNavMode.RIDE) "Uber+Lyft ↗" else "${selectedMode.icon} Go",
-                            color = if (selectedMode == QuickNavMode.RIDE) {
-                                Color(0xFFC084FC)
-                            } else {
-                                Color(0xFF38BDF8)
-                            },
-                            fontSize = 11.5.sp,
-                            fontWeight = FontWeight.SemiBold
+                            text = if (selectedMode == QuickNavMode.RIDE) "[U+L]" else "[->]",
+                            color = activeAccent,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                     if (index < suggestions.lastIndex) {
                         HorizontalDivider(
-                            modifier = Modifier.padding(horizontal = 14.dp),
-                            thickness = 0.5.dp,
-                            color = Color.White.copy(alpha = 0.07f)
+                            modifier = Modifier.padding(horizontal = 10.dp),
+                            thickness = 1.dp,
+                            color = MipGrid
                         )
                     }
                 }

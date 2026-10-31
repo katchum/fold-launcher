@@ -11,6 +11,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -76,6 +77,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -123,7 +126,14 @@ import kotlin.math.abs
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private val HOME_PAGE_TITLES = listOf("Dev", "Main", "Work")
+private val HOME_PAGE_TITLES = listOf("DEV", "MAIN", "WORK")
+
+private val MIP_BG = Color(0xFF0A0D10)
+private val MIP_SURFACE = Color(0xFF11161B)
+private val MIP_GRID = Color(0xFF1E293B)
+private val MIP_INK = Color(0xFFE2E8F0)
+private val MIP_MUTED = Color(0xFF64748B)
+private val MIP_CYAN = Color(0xFF38BDF8)
 
 /**
  * v1.0.0 Three-Page (`Dev` on left | `Main` in middle | `Work` on right) Minimal One UI Home Screen (`minimal` edition).
@@ -323,44 +333,13 @@ private fun MinimalOneUiHomeScreen(
                     }
 
                     else -> {
-                        // Page 2 (Right) — Work View: Exclusively the user's Work Profile / Work Apps + understated Edit pill
+                        // Page 2 (Right) — Work View: Clean, bottom-weighted One UI Work Profile / Work Apps grid
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .padding(horizontal = horizontalPad),
                             verticalArrangement = Arrangement.Bottom
                         ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 4.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "WORK",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 1.1.sp,
-                                    color = Color.White.copy(alpha = 0.55f)
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .background(Color(0x9917181E))
-                                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
-                                        .clickable { editingPageIndex = 2 }
-                                        .padding(horizontal = 11.dp, vertical = 5.dp)
-                                ) {
-                                    Text(
-                                        text = "+ Edit Work Apps",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = Color(0xFFCBD5E1)
-                                    )
-                                }
-                            }
-
                             Spacer(modifier = Modifier.weight(1f))
 
                             StaticNonScrollingAppGrid(
@@ -377,7 +356,7 @@ private fun MinimalOneUiHomeScreen(
                 }
             }
 
-            // Minimal 3-Page Indicator ("Dev  •  Main  •  Work") + subtle "✎" page apps editor button
+            // Minimal MIP 3-Page Indicator ("[DEV]  •  MAIN  •  WORK") + "[✎]" page apps editor button
             OneUiMinimalPageIndicatorBar(
                 currentPage = pagerState.currentPage,
                 onSelectPage = { targetPage ->
@@ -469,8 +448,8 @@ private fun StaticNonScrollingAppGrid(
 }
 
 /**
- * Minimal 3-page indicator (`Main  •  Work  •  Dev`) with a subtle active pill and a small `✎` button
- * to edit the current page's apps.
+ * Minimal MIP 3-page indicator (`[DEV]  •  MAIN  •  WORK`) with `FontFamily.Monospace`,
+ * crisp `1.dp` `MIP_GRID` border, and `[✎]` button to edit the current page's apps.
  */
 @Composable
 private fun OneUiMinimalPageIndicatorBar(
@@ -479,6 +458,7 @@ private fun OneUiMinimalPageIndicatorBar(
     onEditCurrentPageApps: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val barShape = RoundedCornerShape(10.dp)
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -487,59 +467,101 @@ private fun OneUiMinimalPageIndicatorBar(
     ) {
         Row(
             modifier = Modifier
-                .clip(RoundedCornerShape(20.dp))
-                .background(Color(0x9914151B))
-                .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(20.dp))
-                .padding(horizontal = 10.dp, vertical = 5.dp),
+                .clip(barShape)
+                .background(MIP_BG.copy(alpha = 0.90f))
+                .border(1.dp, MIP_GRID, barShape)
+                .padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             HOME_PAGE_TITLES.forEachIndexed { index, title ->
                 val selected = index == currentPage
+                val itemShape = RoundedCornerShape(6.dp)
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(
-                            if (selected) Color.White.copy(alpha = 0.14f)
-                            else Color.Transparent
+                        .clip(itemShape)
+                        .background(if (selected) MIP_SURFACE else Color.Transparent)
+                        .border(
+                            width = 1.dp,
+                            color = if (selected) MIP_CYAN.copy(alpha = 0.65f) else Color.Transparent,
+                            shape = itemShape
                         )
                         .clickable { onSelectPage(index) }
-                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = title,
-                        fontSize = 11.sp,
+                        text = if (selected) "[$title]" else title,
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
                         fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                        color = if (selected) Color.White else Color(0xFF94A3B8)
+                        color = if (selected) MIP_CYAN else MIP_MUTED
                     )
                 }
                 if (index < HOME_PAGE_TITLES.lastIndex) {
                     Text(
                         text = "•",
                         fontSize = 10.sp,
-                        color = Color.White.copy(alpha = 0.25f)
+                        fontFamily = FontFamily.Monospace,
+                        color = MIP_MUTED.copy(alpha = 0.55f)
                     )
                 }
             }
 
             Spacer(modifier = Modifier.width(4.dp))
 
+            val editShape = RoundedCornerShape(6.dp)
             Box(
                 modifier = Modifier
-                    .size(22.dp)
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.08f))
-                    .clickable(onClick = onEditCurrentPageApps),
+                    .clip(editShape)
+                    .background(MIP_SURFACE)
+                    .border(1.dp, MIP_GRID, editShape)
+                    .clickable(onClick = onEditCurrentPageApps)
+                    .padding(horizontal = 6.dp, vertical = 3.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "✎",
-                    fontSize = 11.sp,
-                    color = Color(0xFFCBD5E1)
+                    text = "[✎]",
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = MIP_INK
                 )
             }
         }
+    }
+}
+
+@Composable
+fun OneUiBottomSearchTriggerPill(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val pillShape = RoundedCornerShape(10.dp)
+    Row(
+        modifier = modifier
+            .clip(pillShape)
+            .background(MIP_BG.copy(alpha = 0.90f))
+            .border(1.dp, MIP_GRID, pillShape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = ">",
+            fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.ExtraBold,
+            color = MIP_CYAN
+        )
+        Text(
+            text = "search_apps...",
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Medium,
+            color = MIP_MUTED
+        )
     }
 }
 
@@ -565,9 +587,9 @@ private fun EditPageAppsSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = Color(0xFF17181E),
-        contentColor = Color.White,
-        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+        containerColor = MIP_BG,
+        contentColor = MIP_INK,
+        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
     ) {
         val sheetView = LocalView.current
         LaunchedEffect(hideSystemStatusBar) {
@@ -589,30 +611,34 @@ private fun EditPageAppsSheet(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Edit $pageTitle Apps",
-                        fontSize = 18.sp,
+                        text = "[EDIT // $pageTitle]",
+                        fontSize = 15.sp,
+                        fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = MIP_INK
                     )
                     Text(
-                        text = "${selectedPackages.size} apps selected for $pageTitle page",
-                        fontSize = 12.sp,
-                        color = Color(0xFF94A3B8)
+                        text = "${selectedPackages.size} APPS SELECTED",
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = MIP_MUTED
                     )
                 }
 
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color.White.copy(alpha = 0.08f))
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MIP_SURFACE)
+                        .border(1.dp, MIP_GRID, RoundedCornerShape(8.dp))
                         .clickable(onClick = onOpenLauncherSettings)
                         .padding(horizontal = 10.dp, vertical = 6.dp)
                 ) {
                     Text(
-                        text = "⚙ Settings",
+                        text = "[CFG]",
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFFCBD5E1)
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = MIP_CYAN
                     )
                 }
             }
@@ -626,31 +652,29 @@ private fun EditPageAppsSheet(
                     Box(
                         modifier = Modifier
                             .weight(1f)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(
-                                if (active) Color(0xFF0381FE).copy(alpha = 0.24f)
-                                else Color.White.copy(alpha = 0.06f)
-                            )
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (active) MIP_SURFACE else MIP_BG)
                             .border(
                                 1.dp,
-                                if (active) Color(0xFF38BDF8) else Color.White.copy(alpha = 0.10f),
-                                RoundedCornerShape(14.dp)
+                                if (active) MIP_CYAN else MIP_GRID,
+                                RoundedCornerShape(8.dp)
                             )
                             .clickable { onSelectPageIndex(idx) }
                             .padding(vertical = 8.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = label,
-                            fontSize = 12.sp,
+                            text = if (active) "[$label]" else label,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold,
-                            color = if (active) Color.White else Color(0xFF94A3B8)
+                            color = if (active) MIP_CYAN else MIP_MUTED
                         )
                     }
                 }
             }
 
-            HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+            HorizontalDivider(color = MIP_GRID)
 
             val sortedApps = remember(allApps, pageIndex) {
                 if (pageIndex == 2) {
@@ -927,13 +951,14 @@ fun OneUiMinimalAppSearchOverlay(
                             shrinkTowards = Alignment.Bottom
                         ) + fadeOut(animationSpec = LauncherSpringSpecs.SearchSheetSpring)
                     ) {
+                        val matchCardShape = RoundedCornerShape(14.dp)
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(bottom = 10.dp)
-                                .clip(RoundedCornerShape(26.dp))
-                                .background(Color(0xD917181E))
-                                .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(26.dp))
+                                .clip(matchCardShape)
+                                .background(MIP_BG)
+                                .border(1.dp, MIP_GRID, matchCardShape)
                                 .clickable(
                                     interactionSource = remember { MutableInteractionSource() },
                                     indication = null,
@@ -956,17 +981,18 @@ fun OneUiMinimalAppSearchOverlay(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = "SUGGESTED MATCHES",
+                                    text = "[SUGGESTED]",
                                     fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
                                     fontWeight = FontWeight.Bold,
-                                    letterSpacing = 1.0.sp,
-                                    color = Color(0xFF94A3B8)
+                                    color = MIP_MUTED
                                 )
                                 Text(
-                                    text = "${topMatches.size} ${if (topMatches.size == 1) "app" else "apps"}",
+                                    text = "[${topMatches.size} MATCHES]",
                                     fontSize = 10.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = Color(0xFF38BDF8)
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MIP_CYAN
                                 )
                             }
 
@@ -1000,34 +1026,37 @@ fun OneUiMinimalAppSearchOverlay(
                     }
                 }
 
-                // Search Text Box Docked Right on Top of the Keyboard (no close '✕' button)
+                // MIP Terminal Search Text Box Docked Right on Top of the Keyboard (no close '✕' button)
+                val mipSearchShape = RoundedCornerShape(12.dp)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(searchBarShape)
-                        .background(Color(0xFF1C1E26))
-                        .border(1.dp, Color.White.copy(alpha = 0.16f), searchBarShape)
+                        .clip(mipSearchShape)
+                        .background(MIP_SURFACE)
+                        .border(1.dp, MIP_CYAN.copy(alpha = 0.65f), mipSearchShape)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
                             onClick = {}
                         )
-                        .padding(horizontal = 18.dp, vertical = 14.dp),
+                        .padding(horizontal = 16.dp, vertical = 13.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "⌕",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF38BDF8)
+                        text = ">",
+                        fontSize = 16.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MIP_CYAN
                     )
-                    Spacer(modifier = Modifier.width(12.dp))
+                    Spacer(modifier = Modifier.width(10.dp))
                     Box(modifier = Modifier.weight(1f)) {
                         if (query.isEmpty()) {
                             Text(
-                                text = "Search apps",
-                                fontSize = 16.sp,
-                                color = Color(0xFF94A3B8)
+                                text = "search_apps...",
+                                fontSize = 14.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = MIP_MUTED
                             )
                         }
                         BasicTextField(
@@ -1035,11 +1064,12 @@ fun OneUiMinimalAppSearchOverlay(
                             onValueChange = onQueryChange,
                             singleLine = true,
                             textStyle = TextStyle(
-                                fontSize = 16.sp,
+                                fontSize = 14.sp,
+                                fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Medium,
-                                color = Color.White
+                                color = MIP_INK
                             ),
-                            cursorBrush = SolidColor(Color(0xFF38BDF8)),
+                            cursorBrush = SolidColor(MIP_CYAN),
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                             keyboardActions = KeyboardActions(
                                 onSearch = {
@@ -1060,8 +1090,8 @@ fun OneUiMinimalAppSearchOverlay(
 }
 
 /**
- * Horizontally scrollable Recent Apps thumbnail strip (`RecentAppsThumbnailStrip`) displayed at the top
- * of `OneUiMinimalAppSearchOverlay` both when the search box is empty and while typing.
+ * Horizontally scrollable Recent Apps MIP terminal thumbnail strip (`RecentAppsThumbnailStrip`) displayed
+ * at the top of `OneUiMinimalAppSearchOverlay` both when the search box is empty and while typing.
  */
 @Composable
 private fun RecentAppsThumbnailStrip(
@@ -1073,12 +1103,13 @@ private fun RecentAppsThumbnailStrip(
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
+    val stripShape = RoundedCornerShape(14.dp)
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(26.dp))
-            .background(Color(0xCC14161D))
-            .border(1.dp, Color.White.copy(alpha = 0.09f), RoundedCornerShape(26.dp))
+            .clip(stripShape)
+            .background(MIP_BG)
+            .border(1.dp, MIP_GRID, stripShape)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -1090,22 +1121,23 @@ private fun RecentAppsThumbnailStrip(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = 14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "RECENT APPS",
+                text = "[RECENT]",
                 fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
-                letterSpacing = 1.0.sp,
-                color = Color(0xFF94A3B8)
+                color = MIP_MUTED
             )
             Text(
-                text = "Swipe ⟷",
+                text = "[<->]",
                 fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Medium,
-                color = Color.White.copy(alpha = 0.45f)
+                color = MIP_MUTED
             )
         }
 
@@ -1132,7 +1164,9 @@ private fun RecentAppsThumbnailStrip(
 }
 
 /**
- * Individual Recent App mini-window thumbnail card (`RecentAppThumbnailCard`) inside `RecentAppsThumbnailStrip`.
+ * Minimal MIP Terminal Recent App thumbnail card (`RecentAppThumbnailCard`) inside `RecentAppsThumbnailStrip`.
+ * Uses crisp `MIP_SURFACE` (`#11161B`), `1.dp` border (`MIP_CYAN` if work profile, `MIP_GRID` otherwise),
+ * subtle pixel-grid dither background in the preview box, centered `AppIconTile`, and `10.sp` `FontFamily.Monospace` label.
  */
 @Composable
 private fun RecentAppThumbnailCard(
@@ -1142,91 +1176,75 @@ private fun RecentAppThumbnailCard(
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
-    val cardWidth = if (compact) 94.dp else 102.dp
-    val cardHeight = if (compact) 114.dp else 128.dp
-    val cardShape = RoundedCornerShape(20.dp)
-    val previewSurfaceShape = RoundedCornerShape(14.dp)
+    val cardWidth = if (compact) 86.dp else 94.dp
+    val cardHeight = if (compact) 100.dp else 112.dp
+    val cardShape = RoundedCornerShape(10.dp)
+    val previewSurfaceShape = RoundedCornerShape(7.dp)
 
     Column(
         modifier = Modifier
             .width(cardWidth)
             .height(cardHeight)
             .clip(cardShape)
-            .background(Color(0xE61B1D26))
+            .background(MIP_SURFACE)
             .border(
                 1.dp,
-                if (app.isWorkProfile) Color(0xFF0381FE).copy(alpha = 0.40f)
-                else Color.White.copy(alpha = 0.10f),
+                if (app.isWorkProfile) MIP_CYAN else MIP_GRID,
                 cardShape
             )
-            .padding(8.dp),
+            .padding(6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        // Mini-window title bar (subtle multitasking window chrome + Work profile indicator)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 2.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(3.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(5.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFF38BDF8).copy(alpha = 0.65f))
-                )
-                Box(
-                    modifier = Modifier
-                        .width(14.dp)
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(Color.White.copy(alpha = 0.18f))
-                )
-            }
-            if (app.isWorkProfile) {
-                Text(
-                    text = "WORK",
-                    fontSize = 8.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = Color(0xFF38BDF8)
-                )
-            }
-        }
-
-        // Mini-window preview surface with centered app icon + briefcase badge
+        // MIP pixel-grid dither preview surface with centered app icon + 9x9 MIP work badge
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .padding(vertical = 4.dp)
                 .clip(previewSurfaceShape)
-                .background(Color.White.copy(alpha = 0.04f))
-                .border(0.5.dp, Color.White.copy(alpha = 0.06f), previewSurfaceShape)
+                .background(MIP_BG)
+                .border(1.dp, MIP_GRID, previewSurfaceShape)
                 .clickable(onClick = onClick),
             contentAlignment = Alignment.Center
         ) {
+            Canvas(modifier = Modifier.matchParentSize()) {
+                val step = 5.dp.toPx().coerceAtLeast(3f)
+                val dot = 1.dp.toPx().coerceAtLeast(1f)
+                var y = step / 2f
+                while (y < size.height) {
+                    var x = step / 2f
+                    while (x < size.width) {
+                        drawRect(
+                            color = MIP_GRID.copy(alpha = 0.45f),
+                            topLeft = Offset(x, y),
+                            size = Size(dot, dot)
+                        )
+                        x += step
+                    }
+                    y += step
+                }
+            }
+
             AppIconTile(
                 app = app,
                 iconShapePreset = iconShapePreset,
                 showLabel = false,
-                compact = compact,
+                compact = true,
                 onClick = onClick,
                 onLongClick = onLongClick
             )
         }
 
-        // Bottom app title
+        Spacer(modifier = Modifier.height(4.dp))
+
+        // Bottom MIP monospace app label
         Text(
             text = app.label,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = Color.White,
+            fontSize = 10.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Medium,
+            letterSpacing = (-0.2).sp,
+            color = MIP_INK,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.clickable(onClick = onClick)
