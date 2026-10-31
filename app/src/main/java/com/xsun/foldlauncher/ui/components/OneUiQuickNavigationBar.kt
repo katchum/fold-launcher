@@ -29,6 +29,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,8 +38,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CutCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -54,17 +58,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -86,80 +86,14 @@ import java.util.Locale
 import java.util.TimeZone
 import kotlin.math.atan2
 import kotlin.math.cos
-import kotlin.math.floor
 import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * Hardware 6-bit `RGB222` (64-color) Memory-In-Pixel (MIP) palette (`~200 PPI` transflective LCD spec:
- * each R, G, B channel is strictly quantized to 2 bits: `0x00`, `0x55`, `0xAA`, `0xFF`).
- */
-private val MipBlack = Color(0xFF000000)      // (0, 0, 0)
-private val MipDarkTeal = Color(0xFF005555)   // (0, 1, 1)
-private val MipDarkBlue = Color(0xFF000055)   // (0, 0, 1)
-private val MipDarkGray = Color(0xFF555555)   // (1, 1, 1)
-private val MipSilver = Color(0xFFAAAAAA)     // (2, 2, 2)
-private val MipWhite = Color(0xFFFFFFFF)      // (3, 3, 3)
-private val MipCyan = Color(0xFF00FFFF)       // (0, 3, 3)
-private val MipGreen = Color(0xFF00FF55)      // (0, 3, 1)
-private val MipAmber = Color(0xFFFFAA00)      // (3, 2, 0)
-private val MipRed = Color(0xFFFF5555)        // (3, 1, 1)
-
-/**
- * Simulates a high-density (16x DPI, 4x linear pitch) reflective Memory-In-Pixel (MIP) LCD panel:
- * - Fine `1.dp` (`>= 2px`) discrete pixel cell matrix with subtle inter-pixel grid lines
- * - Optional 2x2 ordered Bayer checkerboard dithering
- */
-private fun Modifier.mip200PpiMatrix(
-    ditherColor: Color = MipDarkTeal,
-    enableCheckerboardDither: Boolean = false
-): Modifier = this.drawBehind {
-    val cellPx = floor(1.dp.toPx()).coerceAtLeast(2f)
-    val gapPx = 0.5f
-    val cols = (size.width / cellPx).toInt()
-    val rows = (size.height / cellPx).toInt()
-
-    if (enableCheckerboardDither) {
-        for (ry in 0 until rows) {
-            for (cx in 0 until cols) {
-                if ((cx + ry) % 2 == 0) {
-                    drawRect(
-                        color = ditherColor.copy(alpha = 0.65f),
-                        topLeft = Offset(cx * cellPx, ry * cellPx),
-                        size = Size(cellPx, cellPx)
-                    )
-                }
-            }
-        }
-    }
-
-    // Draw subtle 16x-DPI MIP pixel cell grid lines
-    val gridColor = MipBlack.copy(alpha = 0.28f)
-    var x = cellPx - gapPx
-    while (x < size.width) {
-        drawRect(
-            color = gridColor,
-            topLeft = Offset(x, 0f),
-            size = Size(gapPx, size.height)
-        )
-        x += cellPx
-    }
-    var y = cellPx - gapPx
-    while (y < size.height) {
-        drawRect(
-            color = gridColor,
-            topLeft = Offset(0f, y),
-            size = Size(size.width, gapPx)
-        )
-        y += cellPx
-    }
-}
-
-/**
- * Five quick-navigation travel modes selectable in [OneUiQuickNavigationBar]:
+ * Five quick-navigation travel modes selectable from [OneUiQuickNavigationBar]:
  * - [BUS], [BIKE], [WALK], [DRIVE]: launch Google Maps directly with the route/navigation started.
- * - [RIDE]: launches Uber (`com.ubercab`) and Lyft (`me.lyft.android`) side-by-side in split-screen
+ * - [RIDE]: launches Lyft (`me.lyft.android`) and Uber (`com.ubercab`) side-by-side in split-screen
  *   with the destination pre-filled and the price estimate screen open.
  */
 enum class QuickNavMode(
@@ -170,11 +104,11 @@ enum class QuickNavMode(
     val mapsModeCode: String?,
     val mapsTravelMode: String?
 ) {
-    BUS("bus", "Bus", "BUS", "[BUS]", "r", "transit"),
-    BIKE("bike", "Bike", "BIK", "[BIK]", "b", "bicycling"),
-    WALK("walk", "Walk", "WLK", "[WLK]", "w", "walking"),
-    DRIVE("drive", "Drive", "DRV", "[DRV]", "d", "driving"),
-    RIDE("ride", "Ride (Uber + Lyft)", "RDE", "[RDE]", null, null);
+    BUS("bus", "Bus", "🚌", "🚌 Bus", "r", "transit"),
+    BIKE("bike", "Bike", "🚲", "🚲 Bike", "b", "bicycling"),
+    WALK("walk", "Walk", "🚶", "🚶 Walk", "w", "walking"),
+    DRIVE("drive", "Drive", "🚗", "🚗 Drive", "d", "driving"),
+    RIDE("ride", "Ride (Uber + Lyft)", "🚕", "🚕 Ride", null, null);
 
     fun next(): QuickNavMode {
         val all = values()
@@ -213,9 +147,9 @@ data class NavLocationSuggestion(
             val d = distanceMiles ?: return null
             if (d.isNaN() || d.isInfinite() || d < 0.0) return null
             return if (d < 10.0) {
-                String.format(Locale.US, "%.1fMI", d)
+                String.format(Locale.US, "%.1f mi", d)
             } else {
-                String.format(Locale.US, "%.0fMI", d)
+                String.format(Locale.US, "%.0f mi", d)
             }
         }
 }
@@ -232,7 +166,6 @@ object QuickNavigationLauncher {
     private const val KEY_CACHED_USER_LON = "quick_nav_cached_user_lon"
     private const val KEY_CACHED_USER_TS = "quick_nav_cached_user_ts"
 
-    // Default SF Bay Area coordinates when running in America/Los_Angeles before GPS/IP resolves
     private const val DEFAULT_SF_LAT = 37.7965
     private const val DEFAULT_SF_LON = -122.3979
 
@@ -270,14 +203,10 @@ object QuickNavigationLauncher {
 
     /**
      * Resolves the user's current `(latitude, longitude)` so location search (`"best buy"`, `"target"`, etc.)
-     * always biases and sorts by proximity to the user's real location instead of East Coast / global matches:
-     * 1. Android `LocationManager` (`gps`, `fused`, `network`, `passive`) if location permission is granted.
-     * 2. Cached or live IP geolocation (`http://ip-api.com/json/?fields=status,lat,lon`) on `Dispatchers.IO`.
-     * 3. TimeZone-aware fallback (`37.7965, -122.3979` San Francisco for `America/Los_Angeles`).
+     * always biases and sorts by proximity to the user's real location instead of East Coast / global matches.
      */
     @SuppressLint("MissingPermission")
     fun resolveUserCoordinates(context: Context): Pair<Double, Double> {
-        // 1. Check Android LocationManager if coarse/fine location permission is granted
         runCatching {
             val hasCoarse = ContextCompat.checkSelfPermission(
                 context,
@@ -308,14 +237,12 @@ object QuickNavigationLauncher {
             }
         }
 
-        // 2. Check fresh in-memory cache (< 30 minutes)
         val now = System.currentTimeMillis()
         val mem = memoryCachedCoords
         if (mem != null && (now - memoryCachedCoordsTimeMs) < 30 * 60 * 1000L) {
             return mem
         }
 
-        // 3. Check SharedPreferences cache (< 6 hours)
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val savedTs = prefs.getLong(KEY_CACHED_USER_TS, 0L)
         if (prefs.contains(KEY_CACHED_USER_LAT) && prefs.contains(KEY_CACHED_USER_LON) && (now - savedTs) < 6 * 3600 * 1000L) {
@@ -327,7 +254,6 @@ object QuickNavigationLauncher {
             return pair
         }
 
-        // 4. Lightweight IP Geolocation lookup (only runs on background thread during fetchSuggestions)
         if (Looper.myLooper() != Looper.getMainLooper()) {
             runCatching {
                 val url = URL("http://ip-api.com/json/?fields=status,lat,lon")
@@ -335,7 +261,7 @@ object QuickNavigationLauncher {
                     requestMethod = "GET"
                     connectTimeout = 900
                     readTimeout = 900
-                    setRequestProperty("User-Agent", "Fold8Launcher/0.10.1")
+                    setRequestProperty("User-Agent", "Fold8Launcher/0.14.0")
                 }
                 if (conn.responseCode == HttpURLConnection.HTTP_OK) {
                     val body = conn.inputStream.bufferedReader().use { it.readText() }
@@ -352,7 +278,6 @@ object QuickNavigationLauncher {
             }
         }
 
-        // 5. Fallback to stored coordinates or SF Bay Area
         if (prefs.contains(KEY_CACHED_USER_LAT) && prefs.contains(KEY_CACHED_USER_LON)) {
             val lat = prefs.getFloat(KEY_CACHED_USER_LAT, DEFAULT_SF_LAT.toFloat()).toDouble()
             val lon = prefs.getFloat(KEY_CACHED_USER_LON, DEFAULT_SF_LON.toFloat()).toDouble()
@@ -384,11 +309,6 @@ object QuickNavigationLauncher {
 
     /**
      * Builds the primary Google Maps URI to start navigation/route immediately for [mode].
-     * - When [latitude] and [longitude] are provided (from a resolved [NavLocationSuggestion]), navigates
-     *   directly to `$latitude,$longitude` so Google Maps starts turn-by-turn routing to the exact local place
-     *   without failing on multi-part address strings.
-     * - For `DRIVE` (`d`), `BIKE` (`b`), and `WALK` (`w`): uses `google.navigation:q=<target>&mode=<d|b|w>`.
-     * - For `BUS` (`transit`): uses `https://www.google.com/maps/dir/?api=1&destination=<target>&travelmode=transit&dir_action=navigate`.
      */
     fun buildGoogleMapsPrimaryUri(
         mode: QuickNavMode,
@@ -577,12 +497,7 @@ object QuickNavigationLauncher {
     }
 
     /**
-     * Queries live nearby location suggestions for [query] biased to the user's current coordinates:
-     * 1. Matching recent destinations from SharedPreferences,
-     * 2. Location-biased Photon OSM GeoJSON autocomplete (`&lat=<userLat>&lon=<userLon>`),
-     * 3. Bounded `android.location.Geocoder` (`userLat ± 0.55°, userLon ± 0.55°`),
-     * 4. Sorted by Haversine distance (`distanceMiles`) from `(userLat, userLon)` so local places
-     *    (e.g. San Francisco Best Buy `1.8MI`) always rank above distant East Coast / global matches!
+     * Queries live nearby location suggestions for [query] biased to the user's current coordinates.
      */
     suspend fun fetchSuggestions(
         context: Context,
@@ -611,7 +526,6 @@ object QuickNavigationLauncher {
 
         val candidates = mutableListOf<NavLocationSuggestion>()
 
-        // 1. Query Photon with explicit userLat/userLon bias
         val photonItems = queryPhotonAutocomplete(
             query = trimmed,
             maxResults = (maxResults * 2).coerceAtLeast(8),
@@ -620,7 +534,6 @@ object QuickNavigationLauncher {
         )
         candidates.addAll(photonItems)
 
-        // 2. Query Android Geocoder bounded to nearby region
         val geocoderItems = queryAndroidGeocoder(
             context = context,
             query = trimmed,
@@ -634,7 +547,6 @@ object QuickNavigationLauncher {
             }
         }
 
-        // Sort candidates by proximity to user (nearest first!)
         val sortedNearby = candidates.sortedBy { it.distanceMiles ?: Double.MAX_VALUE }
 
         val finalResults = mutableListOf<NavLocationSuggestion>()
@@ -675,7 +587,6 @@ object QuickNavigationLauncher {
         return runCatching {
             if (!Geocoder.isPresent()) return emptyList()
             val geocoder = Geocoder(context, Locale.getDefault())
-            // First search within a ~45-mile bounding box around userLat/userLon
             val delta = 0.65
             val bounded = runCatching {
                 geocoder.getFromLocationName(
@@ -756,7 +667,7 @@ object QuickNavigationLauncher {
                 requestMethod = "GET"
                 connectTimeout = 1600
                 readTimeout = 1600
-                setRequestProperty("User-Agent", "Fold8Launcher/0.10.1")
+                setRequestProperty("User-Agent", "Fold8Launcher/0.14.0")
             }
             if (conn.responseCode != HttpURLConnection.HTTP_OK) return emptyList()
             val body = conn.inputStream.bufferedReader().use { it.readText() }
@@ -815,8 +726,7 @@ object QuickNavigationLauncher {
      * Executes the selected [mode] for [destination]:
      * - Resolves nearby coordinates first if `latitude`/`longitude` are missing,
      * - `BUS`, `BIKE`, `WALK`, `DRIVE`: opens Google Maps with navigation / transit route started to the exact coordinates,
-     * - `RIDE`: launches **Uber and Lyft side-by-side in split-screen** (`StageCoordinator` top + bottom stages)
-     *   with the destination set and price estimate open!
+     * - `RIDE`: launches **Lyft and Uber side-by-side in split-screen** with the destination set and price estimate open!
      */
     suspend fun executeNavigation(
         context: Context,
@@ -950,11 +860,6 @@ object QuickNavigationLauncher {
         }
     }
 
-    /**
-     * Computes non-overlapping tiled multi-window [Rect] bounds (`firstPane` + `secondPane`):
-     * - Unfolded Z Fold 8 / landscape (`width >= height`): Left half + Right half.
-     * - Portrait slab / cover screen (`width < height`): Top half + Bottom half.
-     */
     fun computeTiledSplitBounds(context: Context): Pair<Rect, Rect> {
         val dm = context.resources.displayMetrics
         val width = dm.widthPixels.coerceAtLeast(720)
@@ -979,24 +884,12 @@ object QuickNavigationLauncher {
         }
     }
 
-    /**
-     * Builds a safe [ActivityOptions] bundle with explicit screen [bounds] using ONLY the public
-     * `ActivityOptions.makeBasic().setLaunchBounds(bounds)` API.
-     *
-     * IMPORTANT: Never set `android.activity.windowingMode` (`setLaunchWindowingMode(5)`) from a
-     * non-system app, because AOSP `SafeActivityOptions.checkPermissions()` throws `SecurityException`
-     * if `launchWindowingMode != WINDOWING_MODE_UNDEFINED`.
-     */
     private fun buildTiledFreeformOptionsBundle(bounds: Rect): Bundle? {
         return runCatching {
             ActivityOptions.makeBasic().setLaunchBounds(bounds).toBundle()
         }.getOrNull()
     }
 
-    /**
-     * Searches both Personal Profile (`UserHandle{0}`) and Managed Work Profiles (`UserHandle{10}`)
-     * via [LauncherApps] + [UserManager] to locate [packageName] even when installed only in Work Profile.
-     */
     private fun findPackageAcrossProfiles(
         context: Context,
         packageName: String
@@ -1006,7 +899,6 @@ object QuickNavigationLauncher {
             val userManager = context.getSystemService(UserManager::class.java)
             val myUser = Process.myUserHandle()
             val profiles = userManager?.userProfiles ?: listOf(myUser)
-            // Check personal profile first, then work profiles
             val orderedProfiles = profiles.sortedBy { if (it == myUser) 0 else 1 }
             for (profile in orderedProfiles) {
                 val activities = runCatching {
@@ -1021,15 +913,6 @@ object QuickNavigationLauncher {
         }.getOrNull()
     }
 
-    /**
-     * Resolves the best deep-link [Intent] for [pkg] (`com.ubercab` or `me.lyft.android`) across
-     * Personal Profile and Work Profile (`CrossProfileIntentForwarderActivity`):
-     * 1. Direct scheme (`uber://` / `lyft://`) with `.setPackage(pkg)` in Personal Profile,
-     * 2. Universal HTTPS link (`https://m.uber.com/ul/...` / `https://ride.lyft.com/...`) with `.setPackage(pkg)`,
-     * 3. Work Profile `IntentForwarderActivity` / `CrossProfileIntentForwarderActivity` that forwards
-     *    the deep link URI directly into Work Profile Uber/Lyft (`UserHandle{10}`),
-     * 4. Standard Personal Profile launch intent (`pm.getLaunchIntentForPackage(pkg)`).
-     */
     private fun resolveBestRideIntent(
         context: Context,
         pkg: String,
@@ -1038,7 +921,6 @@ object QuickNavigationLauncher {
     ): Intent? {
         val pm = context.packageManager
 
-        // 1. Native scheme in Personal Profile
         val directSchemeIntent = Intent(Intent.ACTION_VIEW, deepLinkUri).apply {
             setPackage(pkg)
         }
@@ -1046,7 +928,6 @@ object QuickNavigationLauncher {
             return directSchemeIntent
         }
 
-        // 2. Universal HTTPS link in Personal Profile
         val directWebIntent = Intent(Intent.ACTION_VIEW, universalWebUri).apply {
             setPackage(pkg)
         }
@@ -1054,7 +935,6 @@ object QuickNavigationLauncher {
             return directWebIntent
         }
 
-        // 3. Check for Cross-Profile Intent Forwarder (forwards uber:// or https://m.uber.com/ul/ to Work Profile User 10)
         for (candidateUri in listOf(deepLinkUri, universalWebUri)) {
             val probe = Intent(Intent.ACTION_VIEW, candidateUri).apply {
                 addCategory(Intent.CATEGORY_BROWSABLE)
@@ -1081,7 +961,6 @@ object QuickNavigationLauncher {
             }
         }
 
-        // 4. Personal Profile main launch intent
         return runCatching { pm.getLaunchIntentForPackage(pkg) }.getOrNull()
     }
 
@@ -1092,11 +971,6 @@ object QuickNavigationLauncher {
         }
     }
 
-    /**
-     * Launches a single ride-share app (Uber or Lyft) with destination deep link, supporting both
-     * Personal Profile (`UserHandle{0}`) and Work Profile (`UserHandle{10}`), optionally inside
-     * [tiledBounds] (`WINDOWING_MODE_FREEFORM = 5`).
-     */
     fun launchSingleRideApp(
         context: Context,
         isUber: Boolean,
@@ -1147,7 +1021,6 @@ object QuickNavigationLauncher {
                 0
             }
 
-        // 1. Try resolved deep-link / CrossProfileIntentForwarder Intent first
         val resolvedIntent = resolveBestRideIntent(context, pkg, deepLinkUri, universalWebUri)
         if (resolvedIntent != null) {
             resolvedIntent.addFlags(baseFlags)
@@ -1167,7 +1040,6 @@ object QuickNavigationLauncher {
             if (started) return true
         }
 
-        // 2. Check if installed in Work Profile (UserHandle{10}) or Personal Profile via LauncherApps
         val profileMatch = findPackageAcrossProfiles(context, pkg)
         if (profileMatch != null) {
             val (component, userHandle) = profileMatch
@@ -1186,7 +1058,6 @@ object QuickNavigationLauncher {
             }
         }
 
-        // 3. Fallback to Universal Web URL
         val webFallbackIntent = Intent(Intent.ACTION_VIEW, universalWebUri).apply {
             addFlags(baseFlags)
         }
@@ -1208,25 +1079,6 @@ object QuickNavigationLauncher {
     /**
      * Launches Lyft (`me.lyft.android`) and Uber (`com.ubercab`) side-by-side on Samsung One UI
      * with full Work Profile (`UserHandle{10}`) + Personal Profile (`UserHandle{0}`) support.
-     *
-     * Why **Lyft launches FIRST (`0ms`)** and **Uber launches SECOND (`+1050ms`)**:
-     * 1. Lyft's `lyft://ridetype?id=lyft&destination[latitude]=...` deep link loads its destination
-     *    route and price estimates cleanly even when backgrounded ~1s after launch.
-     * 2. Uber's `uber://?client_id=fold8_launcher&action=setPickup...` deep link uses an internal
-     *    splash/trampoline activity (~1000–1200ms on cold start) that drops its destination if paused
-     *    (`onPause`) mid-splash and jumps back to the foreground when its splash finishes.
-     * 3. By launching **Lyft FIRST (`0ms`)** and **Uber SECOND (`+1050ms`)** via
-     *    `FoldAccessibilityService.instance ?: context` (`BAL_ALLOW_ACCESSIBILITY`), Uber remains
-     *    in the foreground (`onResume`) uninterrupted while its deep link initializes and opens the
-     *    destination price estimate sheet!
-     * 4. Then at `+2250ms`, `+2950ms`, and `+3650ms` (`1200ms`, `1900ms`, and `2600ms` after Uber starts),
-     *    we call `FoldAccessibilityService.instance?.ensureSplitScreenActive()`:
-     *    - `ensureSplitScreenActive()` inspects `AccessibilityService.getWindows()`
-     *      (`TYPE_SPLIT_SCREEN_DIVIDER` or `>= 2` `TYPE_APPLICATION` windows).
-     *    - If not yet in split-screen, it invokes `GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN` (`StageCoordinator.moveToStage`),
-     *      which atomically docks **Uber into `SideStage`** and **Lyft into `MainStage`**.
-     *    - Once `isSplitScreenActive()` is `true`, subsequent retry checkpoints are no-ops so split-screen
-     *      is never toggled off!
      */
     fun launchUberAndLyftSplitScreen(
         context: Context,
@@ -1239,7 +1091,6 @@ object QuickNavigationLauncher {
         val launcherPkg = context.packageName
 
         // Step 1 (0ms): Launch Lyft FIRST as a pure fullscreen standard task (mWindowingMode=1, mActivityType=1)
-        // so Lyft receives its lyft://ridetype deep link and loads route/prices immediately.
         launchSingleRideApp(
             context = context,
             isUber = false,
@@ -1248,9 +1099,8 @@ object QuickNavigationLauncher {
             adjacentFlag = false
         )
 
-        // Step 2 (+1050ms): Launch Uber SECOND as a pure fullscreen standard task directly above Lyft
-        // using FoldAccessibilityService context (when bound) for BAL_ALLOW_ACCESSIBILITY exemption.
-        // Uber stays in the foreground uninterrupted so its deep-link splash router keeps the destination!
+        // Step 2 (+1050ms): Launch Uber SECOND directly above Lyft so Uber stays in the foreground
+        // while its deep link initializes and opens the destination price estimate sheet.
         mainHandler.postDelayed({
             val launchContext = FoldAccessibilityService.instance ?: context
             launchSingleRideApp(
@@ -1261,11 +1111,8 @@ object QuickNavigationLauncher {
                 adjacentFlag = false
             )
 
-            // Step 3 (+2250ms, +2950ms, +3650ms total): Once Uber's splash-to-main activity transition
-            // has settled in the foreground, invoke ensureSplitScreenActive(). StageCoordinator moves
-            // Uber -> SideStage and WindowOrganizerController.reparentChildrenTasksHierarchyOp moves
-            // Lyft -> MainStage! If Uber was still finishing a cold-start redirect on the first attempt,
-            // the +2950ms / +3650ms checkpoints automatically retry until isSplitScreenActive() is true.
+            // Step 3 (+2250ms, +2950ms, +3650ms total): Dock Uber -> SideStage and Lyft -> MainStage
+            // via FoldAccessibilityService.ensureSplitScreenActive().
             val checkDelaysMs = longArrayOf(1200L, 1900L, 2600L)
             for (delayMs in checkDelaysMs) {
                 mainHandler.postDelayed({
@@ -1282,16 +1129,10 @@ object QuickNavigationLauncher {
 }
 
 /**
- * Top-of-Home-Screen Quick Navigation & Ride Compare Bar (`v0.10.1` 200-PPI 64-Color `RGB222` MIP Edition):
- * - Authentic `~200 PPI` Memory-In-Pixel (MIP) hardware rendering:
- *   - Strict 6-bit `RGB222` 64-color palette (`#000000`, `#005555`, `#555555`, `#AAAAAA`, `#FFFFFF`, `#00FFFF`, `#00FF55`, `#FFAA00`),
- *   - Coarse `3.dp` MIP LCD pixel cell matrix + 2x2 Bayer checkerboard dither header,
- *   - Stepped pixel-art chamfered corners (`CutCornerShape(2.dp)`), zero smooth gradients.
- * - Upgraded 1-Tap Interaction:
- *   - Always-accessible 5-mode hardware selector bar (`BUS`, `BIK`, `WLK`, `DRV`, `RDE:U+L`) + left mode button,
- *   - Nearby-biased live autocomplete sorted by distance in miles (`1.8MI`),
- *   - Dropdown remains open until explicitly dismissed or launched (no focus-loss race condition),
- *   - 1-tap launch into Google Maps turn-by-turn or Uber + Lyft side-by-side split-screen!
+ * Top-of-Home-Screen Quick Navigation & Ride Compare Bar (Clean Samsung One UI Edition):
+ * - Frosted One UI rounded search pill with left mode selector (`🚌 Bus`, `🚲 Bike`, `🚶 Walk`, `🚗 Drive`, `🚕 Ride`),
+ * - Nearby-biased live autocomplete sorted by distance in miles (`1.8 mi`),
+ * - 1-tap launch into Google Maps turn-by-turn navigation or Lyft + Uber side-by-side split-screen.
  */
 @Composable
 fun OneUiQuickNavigationBar(
@@ -1309,32 +1150,15 @@ fun OneUiQuickNavigationBar(
     var dropdownOpen by remember { mutableStateOf(false) }
     var suggestions by remember { mutableStateOf<List<NavLocationSuggestion>>(emptyList()) }
     var selectedSuggestion by remember { mutableStateOf<NavLocationSuggestion?>(null) }
-    var statusBannerText by remember { mutableStateOf<String?>(null) }
 
-    val activeAccent = when (selectedMode) {
-        QuickNavMode.RIDE -> MipAmber
-        QuickNavMode.BUS, QuickNavMode.BIKE, QuickNavMode.WALK -> MipGreen
-        QuickNavMode.DRIVE -> MipCyan
-    }
-    val mipShape = CutCornerShape(2.dp)
-
-    // Pre-warm user coordinates on launch so first search is instant
     LaunchedEffect(context) {
         withContext(Dispatchers.IO) {
             QuickNavigationLauncher.resolveUserCoordinates(context)
         }
     }
 
-    LaunchedEffect(statusBannerText) {
-        if (statusBannerText != null) {
-            delay(2800L)
-            statusBannerText = null
-        }
-    }
-
-    // Debounced nearby-biased location autocomplete
-    LaunchedEffect(destinationText, dropdownOpen) {
-        if (!dropdownOpen && destinationText.isBlank()) {
+    LaunchedEffect(destinationText, dropdownOpen, isInputFocused) {
+        if (!dropdownOpen && !isInputFocused && destinationText.isBlank()) {
             suggestions = emptyList()
             return@LaunchedEffect
         }
@@ -1373,17 +1197,6 @@ fun OneUiQuickNavigationBar(
         isInputFocused = false
         keyboardController?.hide()
         focusManager.clearFocus()
-        if (mode == QuickNavMode.RIDE) {
-            val a11yReady = SystemTweaker.ensureAccessibilityServiceEnabled(context) ||
-                FoldAccessibilityService.instance != null
-            statusBannerText = if (a11yReady) {
-                "SPLIT LYFT+UBER >> ${dest.title.uppercase(Locale.US)}"
-            } else {
-                "ENABLE 'FOLD8 COMPANION' IN ACCESSIBILITY FOR AUTO-SPLIT (TAP HERE)"
-            }
-        } else {
-            statusBannerText = "NAV [${mode.icon}] >> ${dest.title.uppercase(Locale.US)}"
-        }
         coroutineScope.launch {
             QuickNavigationLauncher.executeNavigation(context, mode, dest)
         }
@@ -1398,7 +1211,6 @@ fun OneUiQuickNavigationBar(
         isInputFocused = false
         keyboardController?.hide()
         focusManager.clearFocus()
-        statusBannerText = "${if (isUber) "UBER" else "LYFT"} >> ${dest.title.uppercase(Locale.US)}"
         coroutineScope.launch {
             QuickNavigationLauncher.executeSingleRide(context, isUber, dest)
         }
@@ -1407,386 +1219,172 @@ fun OneUiQuickNavigationBar(
     Column(
         modifier = modifier.fillMaxWidth()
     ) {
-        // Outer 200-PPI 64-Color RGB222 MIP Terminal Frame
-        Column(
+        // Main One UI Rounded Navigation Pill
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(mipShape)
-                .background(MipBlack)
-                .mip200PpiMatrix(ditherColor = MipDarkBlue, enableCheckerboardDither = false)
-                .border(2.dp, if (isInputFocused || dropdownOpen) activeAccent else MipDarkGray, mipShape)
-                .padding(4.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+                .clip(RoundedCornerShape(22.dp))
+                .background(Color(0xD91A1B20))
+                .border(
+                    width = 1.dp,
+                    color = if (isInputFocused || dropdownOpen) {
+                        Color(0xFF38BDF8).copy(alpha = 0.65f)
+                    } else {
+                        Color.White.copy(alpha = 0.14f)
+                    },
+                    shape = RoundedCornerShape(22.dp)
+                )
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            // Row 1: 2x2 Bayer-Dithered MIP Header Bar + Always-Visible 1-Tap 5-Mode Hardware Key Strip
+            // Left expandable Mode Selector Button
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MipBlack)
-                    .mip200PpiMatrix(ditherColor = MipDarkTeal, enableCheckerboardDither = true)
-                    .border(1.dp, MipDarkGray, mipShape)
-                    .padding(horizontal = 4.dp, vertical = 3.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
-                for (mode in QuickNavMode.values()) {
-                    val isSelected = mode == selectedMode
-                    val modeColor = when (mode) {
-                        QuickNavMode.RIDE -> MipAmber
-                        QuickNavMode.DRIVE -> MipCyan
-                        else -> MipGreen
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(
+                        if (selectedMode == QuickNavMode.RIDE) {
+                            Color(0xFF7C3AED).copy(alpha = 0.28f)
+                        } else {
+                            Color(0xFF0381FE).copy(alpha = 0.24f)
+                        }
+                    )
+                    .border(
+                        width = 1.dp,
+                        color = if (selectedMode == QuickNavMode.RIDE) {
+                            Color(0xFFC084FC).copy(alpha = 0.55f)
+                        } else {
+                            Color(0xFF38BDF8).copy(alpha = 0.45f)
+                        },
+                        shape = RoundedCornerShape(16.dp)
+                    )
+                    .clickable {
+                        modeMenuExpanded = !modeMenuExpanded
+                        dropdownOpen = true
                     }
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(mipShape)
-                            .background(if (isSelected) modeColor else MipBlack)
-                            .border(
-                                width = 1.dp,
-                                color = if (isSelected) MipWhite else MipDarkGray,
-                                shape = mipShape
-                            )
-                            .clickable {
-                                val wasSelected = selectedMode == mode
-                                selectedMode = mode
-                                QuickNavigationLauncher.saveSelectedMode(context, mode)
-                                if (destinationText.isNotBlank() && (wasSelected || selectedSuggestion != null)) {
-                                    triggerLaunch(mode, selectedSuggestion)
-                                }
-                            }
-                            .padding(vertical = 4.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = if (mode == QuickNavMode.RIDE) "RDE:U+L" else mode.icon,
-                            color = if (isSelected) MipBlack else MipSilver,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            maxLines = 1
-                        )
-                    }
-                }
-            }
-
-            // Row 2: Left Expand/Cycle Button + MIP Command Input Field + [CLR] + [GO / U+L]
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 2.dp, vertical = 2.dp),
+                    .padding(horizontal = 11.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Left button: expands mode details or cycles mode
-                Box(
-                    modifier = Modifier
-                        .clip(mipShape)
-                        .background(MipDarkBlue)
-                        .border(1.dp, activeAccent, mipShape)
-                        .clickable {
-                            modeMenuExpanded = !modeMenuExpanded
-                            dropdownOpen = true
-                        }
-                        .padding(horizontal = 6.dp, vertical = 6.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "${selectedMode.icon}${if (modeMenuExpanded) "^" else "v"}",
-                        color = activeAccent,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        maxLines = 1
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(6.dp))
-
                 Text(
-                    text = ">",
-                    color = activeAccent,
-                    fontFamily = FontFamily.Monospace,
+                    text = selectedMode.shortBadge,
+                    color = Color.White,
                     fontSize = 13.sp,
-                    fontWeight = FontWeight.ExtraBold
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
                 )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = if (modeMenuExpanded) "▴" else "▾",
+                    color = Color.White.copy(alpha = 0.78f),
+                    fontSize = 11.sp
+                )
+            }
 
-                Spacer(modifier = Modifier.width(5.dp))
+            Spacer(modifier = Modifier.width(10.dp))
 
-                // Center Target Location Textbox
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(vertical = 4.dp),
-                    contentAlignment = Alignment.CenterStart
-                ) {
-                    if (destinationText.isEmpty()) {
-                        Text(
-                            text = if (selectedMode == QuickNavMode.RIDE) {
-                                "DEST FOR UBER+LYFT..."
-                            } else {
-                                "SEARCH NEARBY DEST..."
-                            },
-                            color = MipSilver,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    BasicTextField(
-                        value = destinationText,
-                        onValueChange = { updated ->
-                            destinationText = updated
-                            selectedSuggestion = null
-                            dropdownOpen = true
+            // Center Target Location Textbox
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(vertical = 4.dp),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                if (destinationText.isEmpty()) {
+                    Text(
+                        text = if (selectedMode == QuickNavMode.RIDE) {
+                            "Uber + Lyft destination..."
+                        } else {
+                            "Navigate to destination..."
                         },
-                        singleLine = true,
-                        textStyle = TextStyle(
-                            color = MipWhite,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
-                        ),
-                        cursorBrush = SolidColor(activeAccent),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                        keyboardActions = KeyboardActions(
-                            onGo = { triggerLaunch(selectedMode) }
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .onFocusChanged { state ->
-                                isInputFocused = state.isFocused
-                                if (state.isFocused) {
-                                    dropdownOpen = true
-                                }
-                            }
-                    )
-                }
-
-                // Clear / Close button when text or dropdown is active
-                if (destinationText.isNotEmpty() || dropdownOpen) {
-                    Box(
-                        modifier = Modifier
-                            .clip(mipShape)
-                            .background(MipBlack)
-                            .border(1.dp, MipDarkGray, mipShape)
-                            .clickable {
-                                if (destinationText.isNotEmpty()) {
-                                    destinationText = ""
-                                    selectedSuggestion = null
-                                } else {
-                                    dropdownOpen = false
-                                    modeMenuExpanded = false
-                                    focusManager.clearFocus()
-                                    keyboardController?.hide()
-                                }
-                            }
-                            .padding(horizontal = 6.dp, vertical = 5.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "CLR",
-                            color = MipRed,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.ExtraBold
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(4.dp))
-                }
-
-                // Right Launch Button ([GO] or [U+L])
-                val canLaunch = destinationText.isNotBlank()
-                Box(
-                    modifier = Modifier
-                        .clip(mipShape)
-                        .background(if (canLaunch) activeAccent else MipBlack)
-                        .border(
-                            width = 1.dp,
-                            color = if (canLaunch) MipWhite else MipDarkGray,
-                            shape = mipShape
-                        )
-                        .clickable(enabled = canLaunch) {
-                            triggerLaunch(selectedMode)
-                        }
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = if (selectedMode == QuickNavMode.RIDE) "U+L" else "GO>",
-                        color = if (canLaunch) MipBlack else MipDarkGray,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.ExtraBold
-                    )
-                }
-            }
-
-            // Persistent In-Bar Ride Quick-Switch Strip ([UBER: <dest>] [LYFT: <dest>] [TILE BOTH])
-            // Visible whenever RIDE mode is selected or a destination is active so the user can 1-tap
-            // jump directly to Uber, Lyft, or Tiled Multi-Window Both at any time!
-            val activeDestTitle = (selectedSuggestion?.title ?: destinationText.trim()).uppercase(Locale.US)
-            if (activeDestTitle.isNotBlank() || selectedMode == QuickNavMode.RIDE) {
-                val shortDest = if (activeDestTitle.length > 9) {
-                    activeDestTitle.take(8) + ".."
-                } else if (activeDestTitle.isNotEmpty()) {
-                    activeDestTitle
-                } else {
-                    "DEST"
-                }
-                val rideReady = destinationText.isNotBlank() || selectedSuggestion != null
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 1.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // 1-Tap Direct Uber Button (supports Work Profile User 10 + Personal Profile)
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(mipShape)
-                            .background(if (rideReady) MipDarkBlue else MipBlack)
-                            .border(1.dp, if (rideReady) MipCyan else MipDarkGray, mipShape)
-                            .clickable(enabled = rideReady) {
-                                triggerSingleRideLaunch(isUber = true)
-                            }
-                            .padding(horizontal = 4.dp, vertical = 4.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "[UBER:$shortDest]",
-                            color = if (rideReady) MipCyan else MipDarkGray,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 9.5.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-
-                    // 1-Tap Direct Lyft Button
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(mipShape)
-                            .background(if (rideReady) MipDarkBlue else MipBlack)
-                            .border(1.dp, if (rideReady) MipGreen else MipDarkGray, mipShape)
-                            .clickable(enabled = rideReady) {
-                                triggerSingleRideLaunch(isUber = false)
-                            }
-                            .padding(horizontal = 4.dp, vertical = 4.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "[LYFT:$shortDest]",
-                            color = if (rideReady) MipGreen else MipDarkGray,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 9.5.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-
-                    // 1-Tap Tiled Multi-Window Both Button (Top/Bottom or Left/Right Freeform)
-                    Box(
-                        modifier = Modifier
-                            .clip(mipShape)
-                            .background(if (rideReady) MipAmber else MipBlack)
-                            .border(1.dp, if (rideReady) MipWhite else MipDarkGray, mipShape)
-                            .clickable(enabled = rideReady) {
-                                selectedMode = QuickNavMode.RIDE
-                                QuickNavigationLauncher.saveSelectedMode(context, QuickNavMode.RIDE)
-                                triggerLaunch(QuickNavMode.RIDE)
-                            }
-                            .padding(horizontal = 6.dp, vertical = 4.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "[TILE BOTH]",
-                            color = if (rideReady) MipBlack else MipDarkGray,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 9.5.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            maxLines = 1
-                        )
-                    }
-                }
-            }
-
-            // If RIDE mode is selected and FoldAccessibilityService is not yet enabled, show a 1-tap enable bar
-            val a11yActive = FoldAccessibilityService.instance != null ||
-                SystemTweaker.isAccessibilityServiceEnabled(context)
-            if (selectedMode == QuickNavMode.RIDE && !a11yActive) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(mipShape)
-                        .background(MipDarkBlue)
-                        .border(1.dp, MipAmber, mipShape)
-                        .clickable {
-                            if (!SystemTweaker.ensureAccessibilityServiceEnabled(context)) {
-                                SystemTweaker.openAccessibilitySettings(context)
-                            }
-                        }
-                        .padding(horizontal = 6.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "[!] ENABLE 'FOLD8 COMPANION' IN ACCESSIBILITY FOR AUTO-SPLIT",
-                        color = MipAmber,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "[OPEN]",
-                        color = MipCyan,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 9.5.sp,
-                        fontWeight = FontWeight.ExtraBold
-                    )
-                }
-            }
-
-            // Optional Status Banner when launching
-            if (statusBannerText != null) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MipDarkTeal)
-                        .border(1.dp, activeAccent, mipShape)
-                        .clickable {
-                            if (statusBannerText?.contains("ACCESSIBILITY", ignoreCase = true) == true) {
-                                if (!SystemTweaker.ensureAccessibilityServiceEnabled(context)) {
-                                    SystemTweaker.openAccessibilitySettings(context)
-                                }
-                            }
-                        }
-                        .padding(horizontal = 6.dp, vertical = 3.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = statusBannerText ?: "",
-                        color = MipWhite,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.ExtraBold,
+                        color = Color.White.copy(alpha = 0.46f),
+                        fontSize = 14.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
+                BasicTextField(
+                    value = destinationText,
+                    onValueChange = { updated ->
+                        destinationText = updated
+                        selectedSuggestion = null
+                        dropdownOpen = true
+                    },
+                    singleLine = true,
+                    textStyle = TextStyle(
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium
+                    ),
+                    cursorBrush = SolidColor(Color(0xFF38BDF8)),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                    keyboardActions = KeyboardActions(
+                        onGo = { triggerLaunch(selectedMode) }
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onFocusChanged { state ->
+                            isInputFocused = state.isFocused
+                            if (state.isFocused) {
+                                dropdownOpen = true
+                            }
+                        }
+                )
+            }
+
+            // Clear button when text is present
+            if (destinationText.isNotEmpty() || dropdownOpen) {
+                Box(
+                    modifier = Modifier
+                        .size(26.dp)
+                        .clip(CircleShape)
+                        .clickable {
+                            if (destinationText.isNotEmpty()) {
+                                destinationText = ""
+                                selectedSuggestion = null
+                            } else {
+                                dropdownOpen = false
+                                modeMenuExpanded = false
+                                focusManager.clearFocus()
+                                keyboardController?.hide()
+                            }
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "✕",
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 12.sp
+                    )
+                }
+                Spacer(modifier = Modifier.width(4.dp))
+            }
+
+            // Right Go / Launch button
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(15.dp))
+                    .background(
+                        if (destinationText.isNotBlank()) {
+                            if (selectedMode == QuickNavMode.RIDE) Color(0xFF8B5CF6) else Color(0xFF0381FE)
+                        } else {
+                            Color.White.copy(alpha = 0.08f)
+                        }
+                    )
+                    .clickable(enabled = destinationText.isNotBlank()) {
+                        triggerLaunch(selectedMode)
+                    }
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = if (selectedMode == QuickNavMode.RIDE) "Compare ↗" else "Go ↗",
+                    color = if (destinationText.isNotBlank()) Color.White else Color.White.copy(alpha = 0.4f),
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
 
-        // Expandable Mode Description / Quick-Action Strip when left button is tapped
+        // Expandable 5-Mode Selector Strip (Bus, Bike, Walk, Drive, Ride)
         AnimatedVisibility(
             visible = modeMenuExpanded,
             enter = fadeIn() + expandVertically(),
@@ -1795,54 +1393,148 @@ fun OneUiQuickNavigationBar(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 3.dp)
-                    .clip(mipShape)
-                    .background(MipBlack)
-                    .mip200PpiMatrix()
-                    .border(2.dp, activeAccent, mipShape)
-                    .padding(4.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+                    .padding(top = 6.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(Color(0xF017181E))
+                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(18.dp))
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                for (mode in QuickNavMode.values()) {
-                    val isSelected = mode == selectedMode
-                    val modeColor = if (mode == QuickNavMode.RIDE) MipAmber else MipCyan
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(if (isSelected) MipDarkTeal else MipBlack)
-                            .border(1.dp, if (isSelected) modeColor else MipDarkGray, mipShape)
-                            .clickable {
-                                selectedMode = mode
-                                QuickNavigationLauncher.saveSelectedMode(context, mode)
-                                modeMenuExpanded = false
-                                if (destinationText.isNotBlank()) {
-                                    triggerLaunch(mode)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    for (mode in QuickNavMode.values()) {
+                        val isSelected = mode == selectedMode
+                        val chipBg = when {
+                            isSelected && mode == QuickNavMode.RIDE -> Color(0xFF8B5CF6).copy(alpha = 0.32f)
+                            isSelected -> Color(0xFF0381FE).copy(alpha = 0.30f)
+                            else -> Color.White.copy(alpha = 0.06f)
+                        }
+                        val chipBorder = when {
+                            isSelected && mode == QuickNavMode.RIDE -> Color(0xFFC084FC)
+                            isSelected -> Color(0xFF38BDF8)
+                            else -> Color.White.copy(alpha = 0.10f)
+                        }
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(chipBg)
+                                .border(1.dp, chipBorder, RoundedCornerShape(14.dp))
+                                .clickable {
+                                    selectedMode = mode
+                                    QuickNavigationLauncher.saveSelectedMode(context, mode)
+                                    modeMenuExpanded = false
+                                    if (destinationText.isNotBlank()) {
+                                        triggerLaunch(mode)
+                                    }
                                 }
-                            }
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                                .padding(horizontal = 11.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = mode.icon,
+                                fontSize = 13.sp
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = mode.label,
+                                color = Color.White,
+                                fontSize = 12.5.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+
+                // Direct Uber / Lyft / Both split buttons when Ride mode is active or a destination is typed
+                val rideReady = destinationText.isNotBlank() || selectedSuggestion != null
+                if (selectedMode == QuickNavMode.RIDE || rideReady) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "[${mode.icon}] ${mode.label.uppercase(Locale.US)}",
-                            color = if (isSelected) modeColor else MipWhite,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.ExtraBold
-                        )
-                        Text(
-                            text = if (mode == QuickNavMode.RIDE) "SPLIT TOP+BOT" else "GMAPS ROUTE",
-                            color = MipSilver,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 9.5.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color.White.copy(alpha = if (rideReady) 0.10f else 0.04f))
+                                .clickable(enabled = rideReady) { triggerSingleRideLaunch(isUber = true) }
+                                .padding(vertical = 6.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Uber Only ↗",
+                                color = Color.White.copy(alpha = if (rideReady) 0.9f else 0.38f),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color.White.copy(alpha = if (rideReady) 0.10f else 0.04f))
+                                .clickable(enabled = rideReady) { triggerSingleRideLaunch(isUber = false) }
+                                .padding(vertical = 6.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Lyft Only ↗",
+                                color = Color.White.copy(alpha = if (rideReady) 0.9f else 0.38f),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
                     }
                 }
             }
         }
 
-        // Nearby-Sorted Suggestions Dropdown (200-PPI 64-Color RGB222 MIP Matrix)
+        // Subtle One UI Accessibility setup pill only when RIDE mode is selected and Accessibility is off
+        val a11yActive = FoldAccessibilityService.instance != null ||
+            SystemTweaker.isAccessibilityServiceEnabled(context)
+        if (selectedMode == QuickNavMode.RIDE && !a11yActive) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color(0xD9231F32))
+                    .border(1.dp, Color(0xFFC084FC).copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+                    .clickable {
+                        if (!SystemTweaker.ensureAccessibilityServiceEnabled(context)) {
+                            SystemTweaker.openAccessibilitySettings(context)
+                        }
+                    }
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Enable Fold8 Companion in Accessibility for automatic split-screen",
+                    color = Color.White.copy(alpha = 0.88f),
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Enable ↗",
+                    color = Color(0xFFC084FC),
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
+        // Suggested Locations Dropdown (Nearby-sorted with distance badge)
         AnimatedVisibility(
             visible = (dropdownOpen || isInputFocused) && suggestions.isNotEmpty(),
             enter = fadeIn() + expandVertically(),
@@ -1851,44 +1543,12 @@ fun OneUiQuickNavigationBar(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 3.dp)
-                    .clip(mipShape)
-                    .background(MipBlack)
-                    .mip200PpiMatrix()
-                    .border(2.dp, activeAccent, mipShape)
+                    .padding(top = 6.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color(0xF217181E))
+                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(20.dp))
+                    .padding(vertical = 4.dp)
             ) {
-                // Dropdown MIP header showing GPS/nearby bias status
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MipDarkBlue)
-                        .padding(horizontal = 8.dp, vertical = 3.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = if (destinationText.isBlank()) "RECENT DESTINATIONS" else "NEARBY MATCHES (TAP TO GO)",
-                        color = MipCyan,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 9.5.sp,
-                        fontWeight = FontWeight.ExtraBold
-                    )
-                    Text(
-                        text = "[HIDE]",
-                        color = MipSilver,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 9.5.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        modifier = Modifier.clickable {
-                            dropdownOpen = false
-                            focusManager.clearFocus()
-                            keyboardController?.hide()
-                        }
-                    )
-                }
-
-                HorizontalDivider(thickness = 1.dp, color = MipDarkGray)
-
                 suggestions.forEachIndexed { index, suggestion ->
                     val distBadge = suggestion.formattedDistanceBadge
                     Row(
@@ -1897,111 +1557,63 @@ fun OneUiQuickNavigationBar(
                             .clickable {
                                 triggerLaunch(selectedMode, suggestion)
                             }
-                            .padding(horizontal = 8.dp, vertical = 7.dp),
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Left Distance / History Badge in 6-bit RGB222 color
-                        Box(
-                            modifier = Modifier
-                                .clip(mipShape)
-                                .background(if (suggestion.isRecent) MipDarkBlue else MipDarkTeal)
-                                .border(
-                                    1.dp,
-                                    if (suggestion.isRecent) MipAmber else MipGreen,
-                                    mipShape
-                                )
-                                .padding(horizontal = 4.dp, vertical = 2.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = when {
-                                    suggestion.isRecent && distBadge != null -> distBadge
-                                    suggestion.isRecent -> "HST"
-                                    distBadge != null -> distBadge
-                                    else -> "LOC"
-                                },
-                                color = if (suggestion.isRecent) MipAmber else MipGreen,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 9.5.sp,
-                                fontWeight = FontWeight.ExtraBold
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(7.dp))
-
+                        Text(
+                            text = if (suggestion.isRecent) "🕘" else "📍",
+                            fontSize = 15.sp
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = suggestion.title.uppercase(Locale.US),
-                                color = MipWhite,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 11.5.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = suggestion.title,
+                                    color = Color.White,
+                                    fontSize = 13.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                                if (distBadge != null) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "• $distBadge",
+                                        color = Color(0xFF38BDF8),
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
                             if (suggestion.subtitle.isNotBlank()) {
                                 Spacer(modifier = Modifier.height(1.dp))
                                 Text(
-                                    text = suggestion.subtitle.uppercase(Locale.US),
-                                    color = MipSilver,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 9.5.sp,
-                                    fontWeight = FontWeight.Bold,
+                                    text = suggestion.subtitle,
+                                    color = Color.White.copy(alpha = 0.58f),
+                                    fontSize = 11.5.sp,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
-
-                        Spacer(modifier = Modifier.width(4.dp))
-
-                        // 1-Tap Direct Ride Split Button [U+L] right on every suggestion row
-                        if (selectedMode != QuickNavMode.RIDE) {
-                            Box(
-                                modifier = Modifier
-                                    .clip(mipShape)
-                                    .background(MipBlack)
-                                    .border(1.dp, MipAmber, mipShape)
-                                    .clickable {
-                                        selectedMode = QuickNavMode.RIDE
-                                        QuickNavigationLauncher.saveSelectedMode(context, QuickNavMode.RIDE)
-                                        triggerLaunch(QuickNavMode.RIDE, suggestion)
-                                    }
-                                    .padding(horizontal = 5.dp, vertical = 4.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "U+L",
-                                    color = MipAmber,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 9.5.sp,
-                                    fontWeight = FontWeight.ExtraBold
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(4.dp))
-                        }
-
-                        // Primary Mode Launch Badge
-                        Box(
-                            modifier = Modifier
-                                .clip(mipShape)
-                                .background(activeAccent)
-                                .padding(horizontal = 6.dp, vertical = 4.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = if (selectedMode == QuickNavMode.RIDE) "U+L>" else "${selectedMode.icon}>",
-                                color = MipBlack,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 9.5.sp,
-                                fontWeight = FontWeight.ExtraBold
-                            )
-                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (selectedMode == QuickNavMode.RIDE) "Uber+Lyft ↗" else "${selectedMode.icon} Go",
+                            color = if (selectedMode == QuickNavMode.RIDE) {
+                                Color(0xFFC084FC)
+                            } else {
+                                Color(0xFF38BDF8)
+                            },
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
                     }
                     if (index < suggestions.lastIndex) {
                         HorizontalDivider(
-                            thickness = 1.dp,
-                            color = MipDarkGray
+                            modifier = Modifier.padding(horizontal = 14.dp),
+                            thickness = 0.5.dp,
+                            color = Color.White.copy(alpha = 0.07f)
                         )
                     }
                 }

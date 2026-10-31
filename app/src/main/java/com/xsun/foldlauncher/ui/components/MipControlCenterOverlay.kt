@@ -728,11 +728,8 @@ private fun MipNotificationCard(
                 ) {
                     val iconBitmap = appEntry?.icon
                     if (iconBitmap != null) {
-                        val mipBitmap = remember(appEntry.uniqueKey, iconBitmap) {
-                            getOrBuildMipRgb222Bitmap(appEntry.uniqueKey, iconBitmap)
-                        }
                         Image(
-                            bitmap = mipBitmap,
+                            bitmap = iconBitmap,
                             contentDescription = item.appName,
                             contentScale = ContentScale.FillBounds,
                             filterQuality = FilterQuality.None,

@@ -1,9 +1,5 @@
 package com.xsun.foldlauncher.ui.screens
 
-import android.content.Intent
-import android.graphics.Bitmap
-import android.net.Uri
-import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -15,9 +11,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -49,13 +43,12 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -83,20 +76,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
@@ -116,8 +102,6 @@ import com.xsun.foldlauncher.model.AppPair
 import com.xsun.foldlauncher.model.FolderItem
 import com.xsun.foldlauncher.posture.DevicePostureState
 import com.xsun.foldlauncher.posture.PostureOverride
-import com.xsun.foldlauncher.service.FoldAccessibilityService
-import com.xsun.foldlauncher.service.FoldNotificationListenerService
 import com.xsun.foldlauncher.service.SystemTweaker
 import com.xsun.foldlauncher.spatial.FlexVirtualTrackpadCard
 import com.xsun.foldlauncher.spatial.RadialThumbArcOverlay
@@ -126,213 +110,134 @@ import com.xsun.foldlauncher.ui.animation.LauncherSpringSpecs
 import com.xsun.foldlauncher.ui.animation.RadialTriggerCorner
 import com.xsun.foldlauncher.ui.animation.launcherGestures
 import com.xsun.foldlauncher.ui.components.AppIconTile
-import com.xsun.foldlauncher.ui.components.MipControlCenterOverlay
 import com.xsun.foldlauncher.ui.components.OneUiConnectivityPillsRow
 import com.xsun.foldlauncher.ui.components.OneUiQuickNavigationBar
 import com.xsun.foldlauncher.ui.components.PersistentTaskbarDock
+import com.xsun.foldlauncher.ui.components.SmartLauncherUltraClockHeader
 import com.xsun.foldlauncher.ui.theme.FoldLauncherColors
 import com.xsun.foldlauncher.ui.theme.IconShapePreset
 import com.xsun.foldlauncher.vc.VcBackgroundMonitor
 import com.xsun.foldlauncher.vc.VcCommandCenterCard
 import com.xsun.foldlauncher.vc.VcLiveSummary
 import com.xsun.foldlauncher.viewmodel.WorkspaceProfile
+import java.util.Locale
 import kotlin.math.abs
-import kotlin.math.floor
-import kotlin.math.sin
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-private val HOME_PAGE_TITLES = listOf("DEV", "MAIN", "WORK")
-
-// Strict 6-Bit RGB222 (64-Color) MIP Hardware Palette (~200 PPI reflective LCD spec)
-private val MIP_BG = Color(0xFF000000)
-private val MIP_SURFACE = Color(0xFF000055)
-private val MIP_GRID = Color(0xFF555555)
-private val MIP_INK = Color(0xFFFFFFFF)
-private val MIP_MUTED = Color(0xFFAAAAAA)
-private val MIP_CYAN = Color(0xFF00FFFF)
+private val HOME_PAGE_TITLES = listOf("Dev", "Main", "Work")
 
 /**
- * v0.11.0 Selectable Low-PPI 64-Color (`RGB222`) MIP Reflective LCD Background Presets.
+ * Smart Launcher 6 (SL6) 6 Automatic Categories (`v0.14.0`):
+ * 1. `★ Top / All` (Frequently used & all apps)
+ * 2. `💬 Comm` (Phone, Messages, Gmail, Chat, Slack, Discord, WhatsApp, Zoom, Teams, Social)
+ * 3. `🌐 Net & Nav` (Chrome, Browser, Maps, Waze, Uber, Lyft, Earth, Transit)
+ * 4. `🎬 Media` (YouTube, Camera, Gallery, Photos, Music, Spotify, Video, Audio)
+ * 5. `💼 Work & Prod` (Work profile apps, Calendar, Docs, Drive, Sheets, Notes, Files, Mail)
+ * 6. `🛠 Dev & Tools` (GitHub, Termux, VC, Tailscale, ADB, Settings, Play Store, Calculator, Clock, Utilities)
  */
-enum class MipWallpaperPreset(val key: String, val badge: String) {
-    TEAL_HORIZON("teal_horizon", "TEAL"),
-    PAPER_LCD("paper_lcd", "LCD"),
-    PHOSPHOR_TERMINAL("phosphor_terminal", "TERM"),
-    AMBER_COCKPIT("amber_cockpit", "AMBR");
-
-    fun next(): MipWallpaperPreset {
-        val all = entries
-        return all[(ordinal + 1) % all.size]
-    }
-
-    companion object {
-        fun fromKey(raw: String?): MipWallpaperPreset {
-            return entries.firstOrNull { it.key.equals(raw, ignoreCase = true) } ?: TEAL_HORIZON
-        }
-    }
-}
-
-object MipWallpaperState {
-    private const val PREFS_NAME = "fold_launcher_prefs"
-    private const val KEY_MIP_WALLPAPER = "mip_wallpaper_preset"
-
-    private val _presetFlow = MutableStateFlow(MipWallpaperPreset.TEAL_HORIZON)
-    val presetFlow: StateFlow<MipWallpaperPreset> = _presetFlow.asStateFlow()
-    private var loaded = false
-
-    fun ensureLoaded(context: android.content.Context) {
-        if (!loaded) {
-            loaded = true
-            val prefs = context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
-            _presetFlow.value = MipWallpaperPreset.fromKey(prefs.getString(KEY_MIP_WALLPAPER, null))
-        }
-    }
-
-    fun cyclePreset(context: android.content.Context): MipWallpaperPreset {
-        ensureLoaded(context)
-        val next = _presetFlow.value.next()
-        _presetFlow.value = next
-        context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
-            .edit()
-            .putString(KEY_MIP_WALLPAPER, next.key)
-            .apply()
-        return next
-    }
-}
-
-/**
- * v0.12.0 Custom Opaque 16x-DPI 64-Color (`RGB222`) MIP Reflective LCD Wallpaper (`MipReflectiveWallpaper`).
- *
- * Drawn at `1.dp x 1.dp` (`~3px`, 4x finer linear resolution = 16x pixel density over `4.dp`)
- * using strict 6-bit `RGB222` colors (`0x00`, `0x55`, `0xAA`, `0xFF` per channel) with `1px` dark
- * inter-pixel LCD matrix grid lines so the phone's high-PPI photo wallpaper never bleeds through.
- */
-@Composable
-fun MipReflectiveWallpaper(
-    preset: MipWallpaperPreset = MipWallpaperPreset.TEAL_HORIZON,
-    modifier: Modifier = Modifier
+private enum class SmartAppCategory(
+    val icon: String,
+    val shortTitle: String,
+    val fullTitle: String
 ) {
-    val wallpaperBitmap = remember(preset) {
-        val cols = 280
-        val rows = 560
-        val out = IntArray(cols * rows)
-        val bayer2x2 = intArrayOf(0, 2, 3, 1)
+    TOP_ALL("★", "Top / All", "★ Top & All Apps"),
+    COMM("💬", "Comm", "💬 Communication & Social"),
+    NET_NAV("🌐", "Net & Nav", "🌐 Internet & Navigation"),
+    MEDIA("🎬", "Media", "🎬 Media, Photo & Audio"),
+    WORK_PROD("💼", "Work", "💼 Work & Productivity"),
+    DEV_TOOLS("🛠", "Dev", "🛠 Developer & System Tools")
+}
 
-        val c0: Int
-        val c1: Int
-        val c2: Int
-        val c3: Int
-        when (preset) {
-            MipWallpaperPreset.TEAL_HORIZON -> {
-                c0 = 0xFF000000.toInt()
-                c1 = 0xFF000055.toInt()
-                c2 = 0xFF005555.toInt()
-                c3 = 0xFF00AAAA.toInt()
-            }
-            MipWallpaperPreset.PAPER_LCD -> {
-                c0 = 0xFF000000.toInt()
-                c1 = 0xFF005555.toInt()
-                c2 = 0xFF555555.toInt()
-                c3 = 0xFFAAAAAA.toInt()
-            }
-            MipWallpaperPreset.PHOSPHOR_TERMINAL -> {
-                c0 = 0xFF000000.toInt()
-                c1 = 0xFF005500.toInt()
-                c2 = 0xFF005555.toInt()
-                c3 = 0xFF00AA55.toInt()
-            }
-            MipWallpaperPreset.AMBER_COCKPIT -> {
-                c0 = 0xFF000000.toInt()
-                c1 = 0xFF550000.toInt()
-                c2 = 0xFF555500.toInt()
-                c3 = 0xFFAA5500.toInt()
-            }
-        }
+private fun matchesSmartCategory(
+    app: AppEntry,
+    category: SmartAppCategory,
+    recentKeys: Set<String>
+): Boolean {
+    if (category == SmartAppCategory.TOP_ALL) return true
+    val pkg = app.packageName.lowercase(Locale.US)
+    val label = app.label.lowercase(Locale.US)
+    val cat = app.category.lowercase(Locale.US)
 
-        val horizonRow = (rows * 0.44f).toInt().coerceAtLeast(1)
+    val isComm = pkg.contains("dialer") || pkg.contains("phone") || pkg.contains("mms") ||
+        pkg.contains("messaging") || pkg.contains("messages") || pkg.contains("gmail") ||
+        pkg.contains("chat") || pkg.contains("slack") || pkg.contains("discord") ||
+        pkg.contains("whatsapp") || pkg.contains("telegram") || pkg.contains("signal") ||
+        pkg.contains("zoom") || pkg.contains("teams") || pkg.contains("contacts") ||
+        pkg.contains("social") || pkg.contains("twitter") || pkg.contains("instagram") ||
+        pkg.contains("reddit") || label.contains("phone") || label.contains("message") ||
+        label.contains("mail") || label.contains("chat") || cat.contains("social")
 
-        for (gy in 0 until rows) {
-            val ny = gy.toFloat() / rows.toFloat()
-            val distFromHorizon = abs(ny - 0.44f)
-            val intensity = (1.0f - (distFromHorizon * 2.1f)).coerceIn(0f, 1f)
-            val level = (intensity * 4.2f).toInt()
-            for (gx in 0 until cols) {
-                val bayer = bayer2x2[((gy and 1) shl 1) or (gx and 1)]
-                val isMajorGridCross = (gx % 24 == 0 && gy % 24 == 0)
-                val isHorizonLine = gy == horizonRow + ((sin(gx * 0.06f) * 3f).toInt())
+    val isNetNav = pkg.contains("chrome") || pkg.contains("browser") || pkg.contains("firefox") ||
+        pkg.contains("brave") || pkg.contains("edge") || pkg.contains("maps") ||
+        pkg.contains("waze") || pkg.contains("uber") || pkg.contains("lyft") ||
+        pkg.contains("earth") || pkg.contains("transit") || pkg.contains("navigation") ||
+        label.contains("chrome") || label.contains("browser") || label.contains("maps") ||
+        label.contains("uber") || label.contains("lyft") || cat.contains("maps")
 
-                out[gy * cols + gx] = when {
-                    isHorizonLine && (gx % 2 == 0) -> c3
-                    isMajorGridCross -> c2
-                    preset == MipWallpaperPreset.PAPER_LCD -> {
-                        if (((gx + gy) and 1) == 0) c0 else c1
-                    }
-                    level > bayer + 2 -> c2
-                    level > bayer -> c1
-                    gy > horizonRow && ((gy - horizonRow) % 16 == 0) && (gx % 8 == 0) -> c1
-                    else -> c0
-                }
-            }
-        }
-        Bitmap.createBitmap(out, cols, rows, Bitmap.Config.ARGB_8888).asImageBitmap()
-    }
+    val isMedia = pkg.contains("youtube") || pkg.contains("camera") || pkg.contains("gallery") ||
+        pkg.contains("photos") || pkg.contains("music") || pkg.contains("spotify") ||
+        pkg.contains("netflix") || pkg.contains("video") || pkg.contains("audio") ||
+        pkg.contains("podcast") || pkg.contains("recorder") || pkg.contains("player") ||
+        label.contains("youtube") || label.contains("camera") || label.contains("gallery") ||
+        label.contains("photo") || label.contains("music") || label.contains("video") ||
+        cat.contains("media") || cat.contains("audio") || cat.contains("video") || cat.contains("image")
 
-    Box(modifier = modifier.fillMaxSize().background(MIP_BG)) {
-        Image(
-            bitmap = wallpaperBitmap,
-            contentDescription = null,
-            contentScale = ContentScale.FillBounds,
-            filterQuality = FilterQuality.None,
-            modifier = Modifier.fillMaxSize()
-        )
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val cellPx = floor(1.dp.toPx()).coerceAtLeast(2f)
-            val gapPx = 0.75f
-            var x = cellPx - gapPx
-            while (x < size.width) {
-                drawRect(
-                    color = MIP_BG.copy(alpha = 0.45f),
-                    topLeft = Offset(x, 0f),
-                    size = Size(gapPx, size.height)
-                )
-                x += cellPx
-            }
-            var y = cellPx - gapPx
-            while (y < size.height) {
-                drawRect(
-                    color = MIP_BG.copy(alpha = 0.45f),
-                    topLeft = Offset(0f, y),
-                    size = Size(size.width, gapPx)
-                )
-                y += cellPx
-            }
-        }
+    val isWorkProd = app.isWorkProfile || pkg.contains("calendar") || pkg.contains("docs") ||
+        pkg.contains("drive") || pkg.contains("sheets") || pkg.contains("slides") ||
+        pkg.contains("notes") || pkg.contains("keep") || pkg.contains("files") ||
+        pkg.contains("office") || pkg.contains("outlook") || pkg.contains("notion") ||
+        pkg.contains("wallet") || label.contains("calendar") || label.contains("docs") ||
+        label.contains("drive") || label.contains("notes") || label.contains("files") ||
+        cat.contains("productivity")
+
+    val isDevTools = pkg.contains("github") || pkg.contains("termux") || pkg.contains("vc") ||
+        pkg.contains("tailscale") || pkg.contains("adb") || pkg.contains("settings") ||
+        pkg.contains("vending") || pkg.contains("calculator") || pkg.contains("clock") ||
+        pkg.contains("deskclock") || pkg.contains("weather") || pkg.contains("terminal") ||
+        pkg.contains("dev") || label.contains("github") || label.contains("termux") ||
+        label.contains("tailscale") || label.contains("settings") || label.contains("play store") ||
+        label.contains("calculator") || label.contains("clock") ||
+        (!isComm && !isNetNav && !isMedia && !isWorkProd && app.uniqueKey !in recentKeys)
+
+    return when (category) {
+        SmartAppCategory.TOP_ALL -> true
+        SmartAppCategory.COMM -> isComm
+        SmartAppCategory.NET_NAV -> isNetNav
+        SmartAppCategory.MEDIA -> isMedia
+        SmartAppCategory.WORK_PROD -> isWorkProd
+        SmartAppCategory.DEV_TOOLS -> isDevTools || (!isComm && !isNetNav && !isMedia && !isWorkProd)
     }
 }
 
 /**
- * v1.0.0 Three-Page (`Dev` on left | `Main` in middle | `Work` on right) Minimal One UI Home Screen (`minimal` edition).
+ * v0.14.0 Smart Launcher 6 (SL6) Signature Home Screen (`minimal` edition).
  *
- * - Uses `HorizontalPager` (`rememberPagerState(initialPage = 1, pageCount = { 3 })`) across all postures:
- *   - Page 0 (Left — `Dev`): Shows `OneUiConnectivityPillsRow` (Tailscale switch + IP & Wireless Debugging switch +
- *     `<ip>:<port>`) at the top, plus the user's configured Dev Apps grid below.
- *   - Page 1 (Middle — `Main`, Default Home): Shows ONLY the user's configured Main Apps grid over the system wallpaper
- *     (up to 12 apps on 4-col Cover/Slab or 18 apps on 6-col Inner, rendered in static non-scrolling rows).
- *   - Page 2 (Right — `Work`): Exclusively shows the user's Work Profile (`UserHandle{10}`) / Work Apps grid + an
- *     understated `"+ Edit Work Apps"` pill that opens the multi-select page app editor sheet.
- * - No bottom dock and no home search bar on any of the 3 pages—only a minimal 3-page indicator (`Dev • Main • Work`)
- *   with a subtle `✎` page-apps edit button at the bottom.
- * - Swiping up opens App Search; swiping down opens the Samsung One UI Quick Settings / Control Center pane.
+ * - **Ambient Frosted Glass Theme**: Translucent frosted dark acrylic surfaces (`Color(0xBF141720)` / `Color(0xD91A1E29)`
+ *   with `0.8.dp` `Color.White.copy(alpha = 0.14f)` subtle border and `RoundedCornerShape(24.dp)` / `28.dp`) floating
+ *   cleanly over the user's wallpaper.
+ * - **Top Zone**:
+ *   - `SmartLauncherUltraClockHeader` (`HH:mm`, `Sat, Oct 31`, battery/thermal chip, compact `[TS]` & `[ADB]` pills;
+ *     tap Clock -> Clock/Alarm app, tap Date -> Calendar app).
+ *   - Below on `Main`: `OneUiQuickNavigationBar` (`🚌 Bus`, `🚲 Bike`, `🚶 Walk`, `🚗 Drive`, `🚕 Ride` with Lyft+Uber split-screen).
+ *   - Below on `Dev`: `OneUiConnectivityPillsRow` (Tailscale & Wireless ADB switches + 1-tap IP copy).
+ * - **Ergonomic Lower-Half Home Icon Group (`Dev` • `Main` • `Work` Pages)**:
+ *   - Weighted toward the lower half of the screen for effortless one-handed thumb reach.
+ * - **Bottom Zone**:
+ *   - Frosted **Smart Search Bar Pill** (`🔍 Smart Search`) + **Category Drawer** trigger (`⊞ Categories`) that opens
+ *     the **Smart Launcher 6 Categorized App Drawer** (`SmartLauncherCategoryAppDrawerOverlay`)!
+ * - **Swipe-Down Gesture**:
+ *   - Swiping down on the home screen calls `onExpandNotifications()` (`SystemTweaker.expandNotificationsPanel(context)`)
+ *     to smoothly pull down the native system notification shade.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MinimalOneUiHomeScreen(
     columns: Int,
     hideSystemStatusBar: Boolean = false,
+    batteryPct: Int = 92,
+    isCharging: Boolean = false,
+    nextEventText: String = "",
     isWirelessAdbEnabled: Boolean,
     wirelessAdbPort: Int?,
     tailscaleIp: String?,
@@ -354,30 +259,9 @@ private fun MinimalOneUiHomeScreen(
     onExpandNotifications: () -> Unit,
     onDoubleTapLock: () -> Unit,
     onOpenSettings: () -> Unit,
+    onClockClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    val haptics = LocalHapticFeedback.current
-    LaunchedEffect(context) {
-        MipWallpaperState.ensureLoaded(context)
-    }
-    val mipWallpaperPreset by MipWallpaperState.presetFlow.collectAsState()
-    val liveForegroundPkgs by FoldAccessibilityService.recentForegroundPackages.collectAsState()
-    val activeNotifications by FoldNotificationListenerService.activeNotificationsFlow.collectAsState()
-    var dismissedRecentKeys by remember { mutableStateOf(emptySet<String>()) }
-    var isRecentsOverlayOpen by remember { mutableStateOf(false) }
-    var showMipControlCenter by remember { mutableStateOf(false) }
-
-    val mergedRecentApps = remember(liveForegroundPkgs, recentApps, allApps, dismissedRecentKeys) {
-        val byUniqueKey = allApps.associateBy { it.uniqueKey }
-        val byPkg = allApps.associateBy { it.packageName }
-        val fromLive = liveForegroundPkgs.mapNotNull { pkg -> byUniqueKey[pkg] ?: byPkg[pkg] }
-        (fromLive + recentApps + allApps.take(8))
-            .distinctBy { it.uniqueKey }
-            .filterNot { it.uniqueKey in dismissedRecentKeys || it.packageName in dismissedRecentKeys }
-            .take(12)
-    }
-
     val view = LocalView.current
     LaunchedEffect(hideSystemStatusBar) {
         val actWindow = (view.context as? android.app.Activity)?.window
@@ -391,18 +275,16 @@ private fun MinimalOneUiHomeScreen(
     val coroutineScope = rememberCoroutineScope()
 
     var editingPageIndex by remember { mutableIntStateOf(-1) }
+    var isCategoryDrawerOpen by remember { mutableStateOf(false) }
+    var selectedDrawerCategory by remember { mutableStateOf(SmartAppCategory.TOP_ALL) }
 
-    BackHandler(enabled = showMipControlCenter) {
-        showMipControlCenter = false
-    }
-
-    BackHandler(enabled = !showMipControlCenter && isRecentsOverlayOpen) {
-        isRecentsOverlayOpen = false
-    }
-
-    BackHandler(enabled = !showMipControlCenter && !isRecentsOverlayOpen && pagerState.currentPage != 1 && editingPageIndex < 0) {
-        coroutineScope.launch {
-            pagerState.animateScrollToPage(1)
+    BackHandler(enabled = isCategoryDrawerOpen || (pagerState.currentPage != 1 && editingPageIndex < 0)) {
+        if (isCategoryDrawerOpen) {
+            isCategoryDrawerOpen = false
+        } else {
+            coroutineScope.launch {
+                pagerState.animateScrollToPage(1)
+            }
         }
     }
 
@@ -420,7 +302,8 @@ private fun MinimalOneUiHomeScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .pointerInput(axisLockPx, triggerPx, triggerInstantSearch, onExpandNotifications) {
+            .pointerInput(axisLockPx, triggerPx, triggerInstantSearch, onExpandNotifications, isCategoryDrawerOpen) {
+                if (isCategoryDrawerOpen) return@pointerInput
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                     var totalDx = 0f
@@ -461,8 +344,7 @@ private fun MinimalOneUiHomeScreen(
                                     triggerInstantSearch()
                                 } else if (totalDy > triggerPx && abs(totalDy) > abs(totalDx) * 2.0f) {
                                     triggered = true
-                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                    showMipControlCenter = true
+                                    onExpandNotifications()
                                 }
                             }
                         }
@@ -481,8 +363,26 @@ private fun MinimalOneUiHomeScreen(
                 .fillMaxSize()
                 .statusBarsPadding()
                 .navigationBarsPadding()
-                .padding(vertical = 12.dp)
+                .padding(vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // Top Zone — Smart Launcher "Ultra-Clock" + Compact Status Pills
+            SmartLauncherUltraClockHeader(
+                batteryPct = batteryPct,
+                isCharging = isCharging,
+                nextEventText = nextEventText,
+                tailscaleIp = tailscaleIp,
+                lanIp = lanIp,
+                isWirelessAdbEnabled = isWirelessAdbEnabled,
+                wirelessAdbPort = wirelessAdbPort,
+                onClockClick = onClockClick,
+                onToggleTailscale = onToggleTailscaleVpn,
+                onOpenTailscaleApp = onOpenTailscaleApp,
+                onToggleWirelessAdb = onToggleWirelessAdb,
+                onOpenWirelessAdbSettings = onOpenWirelessAdbSettings,
+                modifier = Modifier.padding(horizontal = horizontalPad)
+            )
+
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier
@@ -491,7 +391,7 @@ private fun MinimalOneUiHomeScreen(
             ) { pageIndex ->
                 when (pageIndex) {
                     0 -> {
-                        // Page 0 (Left) — Development View: OneUiConnectivityPillsRow at top + configured Dev Apps grid
+                        // Page 0 (Left) — Development View: OneUiConnectivityPillsRow at top + ergonomic lower-half Dev Apps grid
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -517,12 +417,12 @@ private fun MinimalOneUiHomeScreen(
                                 onAppClick = onAppClick,
                                 onAppLongClick = onAppLongClick
                             )
-                            Spacer(modifier = Modifier.height(16.dp))
+                            Spacer(modifier = Modifier.height(8.dp))
                         }
                     }
 
                     1 -> {
-                        // Page 1 (Middle — Default Home) — Main View: Top Quick Navigation Bar + configured Main Apps grid over the system wallpaper
+                        // Page 1 (Middle — Default Home) — Main View: Top Quick Navigation Bar + ergonomic lower-half Main Apps grid
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -539,18 +439,68 @@ private fun MinimalOneUiHomeScreen(
                                 onAppClick = onAppClick,
                                 onAppLongClick = onAppLongClick
                             )
-                            Spacer(modifier = Modifier.height(16.dp))
+                            Spacer(modifier = Modifier.height(8.dp))
                         }
                     }
 
                     else -> {
-                        // Page 2 (Right) — Work View: Clean, bottom-weighted One UI Work Profile / Work Apps grid
+                        // Page 2 (Right) — Work View: Frosted Work Profile Pill + ergonomic lower-half Work Apps grid
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .padding(horizontal = horizontalPad),
                             verticalArrangement = Arrangement.Bottom
                         ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(24.dp))
+                                    .background(Color(0xBF141720))
+                                    .border(0.8.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(24.dp))
+                                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        text = "💼",
+                                        fontSize = 14.sp
+                                    )
+                                    Column {
+                                        Text(
+                                            text = "WORK PROFILE",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            letterSpacing = 0.8.sp,
+                                            color = Color.White
+                                        )
+                                        Text(
+                                            text = "${workPageApps.size} managed & work apps",
+                                            fontSize = 10.sp,
+                                            color = Color(0xFF94A3B8)
+                                        )
+                                    }
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(Color(0xD91A1E29))
+                                        .border(0.8.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(14.dp))
+                                        .clickable { editingPageIndex = 2 }
+                                        .padding(horizontal = 11.dp, vertical = 5.dp)
+                                ) {
+                                    Text(
+                                        text = "+ Edit Work Apps",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFFE2E8F0)
+                                    )
+                                }
+                            }
+
                             Spacer(modifier = Modifier.weight(1f))
 
                             StaticNonScrollingAppGrid(
@@ -561,26 +511,15 @@ private fun MinimalOneUiHomeScreen(
                                 onAppClick = onAppClick,
                                 onAppLongClick = onAppLongClick
                             )
-                            Spacer(modifier = Modifier.height(16.dp))
+                            Spacer(modifier = Modifier.height(8.dp))
                         }
                     }
                 }
             }
 
-            // Minimal MIP 3-Page Indicator ("[DEV] : [MAIN] : [WORK]") + "[SHADE]" + "[REC]" + "[BG]" + "[CFG]"
+            // Frosted 3-Page Indicator ("Dev  •  Main  •  Work") + "✎" page apps editor button
             OneUiMinimalPageIndicatorBar(
                 currentPage = pagerState.currentPage,
-                wallpaperPreset = mipWallpaperPreset,
-                notificationCount = activeNotifications.size,
-                onOpenControlCenter = {
-                    showMipControlCenter = true
-                },
-                onCycleWallpaperPreset = {
-                    MipWallpaperState.cyclePreset(context)
-                },
-                onOpenRecents = {
-                    isRecentsOverlayOpen = true
-                },
                 onSelectPage = { targetPage ->
                     coroutineScope.launch {
                         pagerState.animateScrollToPage(targetPage)
@@ -591,77 +530,37 @@ private fun MinimalOneUiHomeScreen(
                 },
                 modifier = Modifier.padding(horizontal = horizontalPad)
             )
+
+            // Bottom Zone — Smart Launcher "Smart Search Bar" + Category Drawer Trigger (`⊞ Categories`)
+            SmartLauncherBottomSearchAndCategoryBar(
+                onOpenSmartSearch = triggerInstantSearch,
+                onOpenCategoryDrawer = { category ->
+                    selectedDrawerCategory = category
+                    isCategoryDrawerOpen = true
+                },
+                modifier = Modifier.padding(horizontal = horizontalPad)
+            )
         }
 
-        MipControlCenterOverlay(
-            visible = showMipControlCenter,
-            isExpanded = columns >= 6,
-            installedApps = allApps,
-            isWirelessAdbEnabled = isWirelessAdbEnabled,
-            wirelessAdbPort = wirelessAdbPort,
-            tailscaleIp = tailscaleIp,
-            lanIp = lanIp,
-            wallpaperBadge = mipWallpaperPreset.badge,
-            onToggleWirelessAdb = onToggleWirelessAdb,
-            onToggleTailscale = onToggleTailscaleVpn,
-            onSplitTopTwoRecentApps = {
-                if (mergedRecentApps.size >= 2) {
-                    SystemTweaker.launchSplitScreenPair(
-                        context = context,
-                        primaryPackage = mergedRecentApps[0].packageName,
-                        secondaryPackage = mergedRecentApps[1].packageName
-                    )
-                }
-            },
-            onOpenRecents = {
-                showMipControlCenter = false
-                isRecentsOverlayOpen = true
-            },
-            onCycleWallpaperPreset = {
-                MipWallpaperState.cyclePreset(context)
-            },
-            onDismiss = { showMipControlCenter = false }
-        )
-
-        MipLauncherRecentsOverlay(
-            visible = isRecentsOverlayOpen,
-            recentApps = mergedRecentApps,
-            columns = if (columns >= 6) 3 else 2,
+        // Smart Launcher 6 Automatic Category Bar App Drawer Overlay
+        SmartLauncherCategoryAppDrawerOverlay(
+            visible = isCategoryDrawerOpen,
+            selectedCategory = selectedDrawerCategory,
+            onSelectCategory = { selectedDrawerCategory = it },
+            allApps = allApps,
+            recentApps = recentApps,
+            columns = columns,
             iconShapePreset = iconShapePreset,
             onLaunchApp = { app ->
-                isRecentsOverlayOpen = false
+                isCategoryDrawerOpen = false
                 onAppClick(app)
             },
-            onSplitApps = { primary, secondary ->
-                isRecentsOverlayOpen = false
-                SystemTweaker.launchSplitScreenPair(
-                    context = context,
-                    primaryPackage = primary.packageName,
-                    secondaryPackage = secondary.packageName
-                )
+            onAppLongClick = onAppLongClick,
+            onOpenSmartSearch = {
+                isCategoryDrawerOpen = false
+                triggerInstantSearch()
             },
-            onRemoveRecentApp = { app ->
-                dismissedRecentKeys = dismissedRecentKeys + app.uniqueKey + app.packageName
-                FoldAccessibilityService.removeRecentForegroundPackage(app.packageName)
-            },
-            onClearAllRecents = {
-                dismissedRecentKeys = dismissedRecentKeys +
-                    mergedRecentApps.flatMap { listOf(it.uniqueKey, it.packageName) }
-                FoldAccessibilityService.clearRecentForegroundPackages()
-            },
-            onOpenAppInfo = { app ->
-                isRecentsOverlayOpen = false
-                runCatching {
-                    val infoIntent = Intent(
-                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                        Uri.fromParts("package", app.packageName, null)
-                    ).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    context.startActivity(infoIntent)
-                }
-            },
-            onDismiss = { isRecentsOverlayOpen = false }
+            onDismiss = { isCategoryDrawerOpen = false }
         )
 
         if (editingPageIndex in 0..2) {
@@ -741,180 +640,467 @@ private fun StaticNonScrollingAppGrid(
 }
 
 /**
- * Minimal MIP 3-page indicator (`[DEV]  •  MAIN  •  WORK`) with `FontFamily.Monospace`,
- * crisp `1.dp` `MIP_GRID` border, and `[✎]` button to edit the current page's apps.
+ * Frosted 3-page indicator (`Dev  •  Main  •  Work`) with a subtle active pill and a small `✎` button
+ * to edit the current page's apps.
  */
 @Composable
 private fun OneUiMinimalPageIndicatorBar(
     currentPage: Int,
-    wallpaperPreset: MipWallpaperPreset = MipWallpaperPreset.TEAL_HORIZON,
-    notificationCount: Int = 0,
-    onOpenControlCenter: () -> Unit = {},
-    onCycleWallpaperPreset: () -> Unit = {},
-    onOpenRecents: () -> Unit = {},
     onSelectPage: (Int) -> Unit,
     onEditCurrentPageApps: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val barShape = CutCornerShape(2.dp)
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
+            .padding(vertical = 2.dp),
         contentAlignment = Alignment.Center
     ) {
         Row(
             modifier = Modifier
-                .clip(barShape)
-                .background(MIP_BG)
-                .border(2.dp, MIP_GRID, barShape)
-                .padding(horizontal = 5.dp, vertical = 4.dp),
+                .clip(RoundedCornerShape(24.dp))
+                .background(Color(0xBF141720))
+                .border(0.8.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(24.dp))
+                .padding(horizontal = 10.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(3.dp)
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             HOME_PAGE_TITLES.forEachIndexed { index, title ->
                 val selected = index == currentPage
-                val itemShape = CutCornerShape(2.dp)
                 Box(
                     modifier = Modifier
-                        .clip(itemShape)
-                        .background(if (selected) MIP_CYAN else MIP_BG)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(
+                            if (selected) Color(0xFF38BDF8).copy(alpha = 0.22f)
+                            else Color.Transparent
+                        )
                         .border(
-                            width = 1.dp,
-                            color = if (selected) MIP_INK else MIP_GRID,
-                            shape = itemShape
+                            0.8.dp,
+                            if (selected) Color(0xFF38BDF8).copy(alpha = 0.45f) else Color.Transparent,
+                            RoundedCornerShape(14.dp)
                         )
                         .clickable { onSelectPage(index) }
-                        .padding(horizontal = 6.dp, vertical = 3.dp),
+                        .padding(horizontal = 11.dp, vertical = 4.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = if (selected) "[$title]" else title,
-                        fontSize = 9.5.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = if (selected) MIP_BG else MIP_MUTED
+                        text = title,
+                        fontSize = 11.sp,
+                        fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium,
+                        color = if (selected) Color.White else Color(0xFF94A3B8)
                     )
                 }
                 if (index < HOME_PAGE_TITLES.lastIndex) {
                     Text(
-                        text = ":",
-                        fontSize = 9.5.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = MIP_GRID
+                        text = "•",
+                        fontSize = 10.sp,
+                        color = Color.White.copy(alpha = 0.25f)
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.width(2.dp))
-
-            val editShape = CutCornerShape(2.dp)
-            Box(
-                modifier = Modifier
-                    .clip(editShape)
-                    .background(MIP_SURFACE)
-                    .border(1.dp, if (notificationCount > 0) MIP_CYAN else MIP_INK, editShape)
-                    .clickable(onClick = onOpenControlCenter)
-                    .padding(horizontal = 5.dp, vertical = 3.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = if (notificationCount > 0) "[NOTIF:$notificationCount]" else "[SHADE ▾]",
-                    fontSize = 9.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = if (notificationCount > 0) MIP_CYAN else MIP_INK
-                )
-            }
+            Spacer(modifier = Modifier.width(4.dp))
 
             Box(
                 modifier = Modifier
-                    .clip(editShape)
-                    .background(MIP_SURFACE)
-                    .border(1.dp, MIP_CYAN, editShape)
-                    .clickable(onClick = onOpenRecents)
-                    .padding(horizontal = 5.dp, vertical = 3.dp),
+                    .size(22.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.10f))
+                    .clickable(onClick = onEditCurrentPageApps),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "[REC]",
-                    fontSize = 9.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = MIP_CYAN
-                )
-            }
-
-            Box(
-                modifier = Modifier
-                    .clip(editShape)
-                    .background(MIP_SURFACE)
-                    .border(1.dp, MIP_INK, editShape)
-                    .clickable(onClick = onCycleWallpaperPreset)
-                    .padding(horizontal = 5.dp, vertical = 3.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "[BG:${wallpaperPreset.badge}]",
-                    fontSize = 9.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = MIP_INK
-                )
-            }
-
-            Box(
-                modifier = Modifier
-                    .clip(editShape)
-                    .background(MIP_SURFACE)
-                    .border(1.dp, MIP_CYAN, editShape)
-                    .clickable(onClick = onEditCurrentPageApps)
-                    .padding(horizontal = 5.dp, vertical = 3.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "[CFG]",
-                    fontSize = 9.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = MIP_CYAN
+                    text = "✎",
+                    fontSize = 11.sp,
+                    color = Color(0xFFE2E8F0)
                 )
             }
         }
     }
 }
 
+/**
+ * Smart Launcher 6 (SL6) Bottom Thumb-Zone Bar (`v0.14.0`):
+ * - Left (`weight(1f)`): Signature Frosted **Smart Search Bar Pill** (`🔍 Smart Search` — apps, web, math/unit calc, split-screen).
+ * - Right: Quick **Category Drawer** trigger (`⊞ Categories`) + quick category icons that open the
+ *   **Smart Launcher Categorized App Drawer** (`SmartLauncherCategoryAppDrawerOverlay`)!
+ */
 @Composable
-fun OneUiBottomSearchTriggerPill(
-    onClick: () -> Unit,
+private fun SmartLauncherBottomSearchAndCategoryBar(
+    onOpenSmartSearch: () -> Unit,
+    onOpenCategoryDrawer: (SmartAppCategory) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val pillShape = RoundedCornerShape(10.dp)
+    val pillShape = RoundedCornerShape(26.dp)
+    val frostedSearchSurface = Color(0xD91A1E29)
+    val frostedCategorySurface = Color(0xBF141720)
+    val subtleBorder = Color.White.copy(alpha = 0.14f)
+
     Row(
-        modifier = modifier
-            .clip(pillShape)
-            .background(MIP_BG.copy(alpha = 0.90f))
-            .border(1.dp, MIP_GRID, pillShape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 7.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = ">",
-            fontSize = 12.sp,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.ExtraBold,
-            color = MIP_CYAN
-        )
-        Text(
-            text = "search_apps...",
-            fontSize = 11.sp,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Medium,
-            color = MIP_MUTED
-        )
+        // Left: Smart Launcher "Smart Search Bar" Pill
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .clip(pillShape)
+                .background(frostedSearchSurface)
+                .border(0.8.dp, subtleBorder, pillShape)
+                .clickable(onClick = onOpenSmartSearch)
+                .padding(horizontal = 15.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(9.dp)
+            ) {
+                Text(
+                    text = "🔍",
+                    fontSize = 14.sp
+                )
+                Column {
+                    Text(
+                        text = "Smart Search",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        maxLines = 1
+                    )
+                    Text(
+                        text = "Apps · Web · Math · Split",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xFF94A3B8),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color.White.copy(alpha = 0.08f))
+                    .padding(horizontal = 7.dp, vertical = 3.dp)
+            ) {
+                Text(
+                    text = "SL6",
+                    fontSize = 9.5.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Color(0xFF38BDF8)
+                )
+            }
+        }
+
+        // Right: Category Drawer Trigger (`⊞ Categories`)
+        Row(
+            modifier = Modifier
+                .clip(pillShape)
+                .background(frostedCategorySurface)
+                .border(0.8.dp, Color(0xFF38BDF8).copy(alpha = 0.38f), pillShape)
+                .clickable { onOpenCategoryDrawer(SmartAppCategory.TOP_ALL) }
+                .padding(horizontal = 14.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            Text(
+                text = "⊞",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = Color(0xFF38BDF8)
+            )
+            Column {
+                Text(
+                    text = "Categories",
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    maxLines = 1
+                )
+                Text(
+                    text = "★ 💬 🌐 🎬 💼 🛠",
+                    fontSize = 9.5.sp,
+                    color = Color(0xFF94A3B8),
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Smart Launcher 6 (SL6) Automatic Category Bar App Drawer (`v0.14.0`):
+ * - Translucent frosted dark acrylic sheet (`Color(0xF210131C)`, `0.8.dp` `Color.White.copy(alpha = 0.14f)` border,
+ *   `RoundedCornerShape(28.dp)`).
+ * - Automatically classifies all installed apps into **6 Smart Categories**:
+ *   1. `★ Top / All`
+ *   2. `💬 Comm`
+ *   3. `🌐 Net & Nav`
+ *   4. `🎬 Media`
+ *   5. `💼 Work & Prod`
+ *   6. `🛠 Dev & Tools`
+ * - Features a **Bottom Category Bar** for effortless one-handed thumb switching that immediately filters
+ *   the App Grid with a smooth spring transition and shows the category title & app count at the top.
+ */
+@Composable
+private fun SmartLauncherCategoryAppDrawerOverlay(
+    visible: Boolean,
+    selectedCategory: SmartAppCategory,
+    onSelectCategory: (SmartAppCategory) -> Unit,
+    allApps: List<AppEntry>,
+    recentApps: List<AppEntry>,
+    columns: Int,
+    iconShapePreset: IconShapePreset,
+    onLaunchApp: (AppEntry) -> Unit,
+    onAppLongClick: (AppEntry) -> Unit,
+    onOpenSmartSearch: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val density = LocalDensity.current
+    val swipeDownDismissPx = with(density) { 54.dp.toPx() }
+    val recentKeys = remember(recentApps) { recentApps.map { it.uniqueKey }.toSet() }
+
+    val categoryCounts = remember(allApps, recentKeys) {
+        SmartAppCategory.entries.associateWith { cat ->
+            allApps.count { app -> matchesSmartCategory(app, cat, recentKeys) }
+        }
+    }
+
+    val filteredApps = remember(allApps, recentApps, selectedCategory, recentKeys) {
+        if (selectedCategory == SmartAppCategory.TOP_ALL) {
+            (recentApps + allApps).distinctBy { it.uniqueKey }
+        } else {
+            allApps.filter { app -> matchesSmartCategory(app, selectedCategory, recentKeys) }
+        }
+    }
+
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(animationSpec = LauncherSpringSpecs.SearchSheetSpring) +
+            slideInVertically(
+                animationSpec = LauncherSpringSpecs.Snappy120HzIntOffset,
+                initialOffsetY = { it / 6 }
+            ),
+        exit = fadeOut(animationSpec = LauncherSpringSpecs.SearchSheetSpring) +
+            slideOutVertically(
+                animationSpec = LauncherSpringSpecs.Snappy120HzIntOffset,
+                targetOffsetY = { it / 6 }
+            )
+    ) {
+        val headerShape = RoundedCornerShape(26.dp)
+        val gridCardShape = RoundedCornerShape(28.dp)
+        val bottomBarShape = RoundedCornerShape(28.dp)
+        val frostedCard = Color(0xD91A1E29)
+        val frostedHeader = Color(0xBF141720)
+        val subtleBorder = Color.White.copy(alpha = 0.14f)
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xE60B0E14))
+                .pointerInput(swipeDownDismissPx, onDismiss) {
+                    var totalDy = 0f
+                    detectVerticalDragGestures(
+                        onDragStart = { totalDy = 0f },
+                        onVerticalDrag = { _, dragAmount ->
+                            totalDy += dragAmount
+                            if (totalDy >= swipeDownDismissPx) {
+                                onDismiss()
+                            }
+                        }
+                    )
+                }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .padding(horizontal = if (columns >= 6) 22.dp else 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // Top Header Card: Category Title + App Count + Quick Smart Search & Close
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(headerShape)
+                        .background(frostedHeader)
+                        .border(0.8.dp, subtleBorder, headerShape)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = selectedCategory.fullTitle,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "${filteredApps.size} ${if (filteredApps.size == 1) "app" else "apps"} in category · Tap bottom bar to switch",
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFF38BDF8),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(frostedCard)
+                                .border(0.8.dp, subtleBorder, RoundedCornerShape(14.dp))
+                                .clickable(onClick = onOpenSmartSearch)
+                                .padding(horizontal = 11.dp, vertical = 7.dp)
+                        ) {
+                            Text(
+                                text = "🔍 Search",
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.10f))
+                                .clickable(onClick = onDismiss),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "✕",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFE2E8F0)
+                            )
+                        }
+                    }
+                }
+
+                // Categorized App Grid (smoothly animated on category switch)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .clip(gridCardShape)
+                        .background(frostedCard)
+                        .border(0.8.dp, subtleBorder, gridCardShape)
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                        .animateContentSize(
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioNoBouncy,
+                                stiffness = Spring.StiffnessMediumLow
+                            )
+                        )
+                ) {
+                    if (filteredApps.isEmpty()) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "No apps in ${selectedCategory.fullTitle}",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFF94A3B8)
+                            )
+                        }
+                    } else {
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(columns),
+                            contentPadding = PaddingValues(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(14.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(
+                                items = filteredApps,
+                                key = { "${selectedCategory.name}_${it.uniqueKey}" }
+                            ) { app ->
+                                AppIconTile(
+                                    app = app,
+                                    iconShapePreset = iconShapePreset,
+                                    showLabel = true,
+                                    compact = false,
+                                    onClick = { onLaunchApp(app) },
+                                    onLongClick = { onAppLongClick(app) }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Bottom Category Bar (6 Smart Categories for effortless one-handed thumb switching)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(bottomBarShape)
+                        .background(frostedHeader)
+                        .border(0.8.dp, subtleBorder, bottomBarShape)
+                        .padding(horizontal = 8.dp, vertical = 7.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    SmartAppCategory.entries.forEach { category ->
+                        val active = category == selectedCategory
+                        val count = categoryCounts[category] ?: 0
+                        val tabShape = RoundedCornerShape(20.dp)
+
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(tabShape)
+                                .background(
+                                    if (active) Color(0xFF38BDF8).copy(alpha = 0.22f)
+                                    else Color.Transparent
+                                )
+                                .border(
+                                    0.8.dp,
+                                    if (active) Color(0xFF38BDF8).copy(alpha = 0.55f)
+                                    else Color.Transparent,
+                                    tabShape
+                                )
+                                .clickable { onSelectCategory(category) }
+                                .padding(vertical = 7.dp, horizontal = 2.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(
+                                text = category.icon,
+                                fontSize = 15.sp
+                            )
+                            Text(
+                                text = category.shortTitle,
+                                fontSize = 10.sp,
+                                fontWeight = if (active) FontWeight.ExtraBold else FontWeight.SemiBold,
+                                color = if (active) Color.White else Color(0xFF94A3B8),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "$count",
+                                fontSize = 8.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (active) Color(0xFF7DD3FC) else Color(0xFF64748B)
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -940,9 +1126,9 @@ private fun EditPageAppsSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = MIP_BG,
-        contentColor = MIP_INK,
-        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+        containerColor = Color(0xFF17181E),
+        contentColor = Color.White,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     ) {
         val sheetView = LocalView.current
         LaunchedEffect(hideSystemStatusBar) {
@@ -964,34 +1150,30 @@ private fun EditPageAppsSheet(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "[EDIT // $pageTitle]",
-                        fontSize = 15.sp,
-                        fontFamily = FontFamily.Monospace,
+                        text = "Edit $pageTitle Apps",
+                        fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
-                        color = MIP_INK
+                        color = Color.White
                     )
                     Text(
-                        text = "${selectedPackages.size} APPS SELECTED",
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = MIP_MUTED
+                        text = "${selectedPackages.size} apps selected for $pageTitle page",
+                        fontSize = 12.sp,
+                        color = Color(0xFF94A3B8)
                     )
                 }
 
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MIP_SURFACE)
-                        .border(1.dp, MIP_GRID, RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.White.copy(alpha = 0.08f))
                         .clickable(onClick = onOpenLauncherSettings)
                         .padding(horizontal = 10.dp, vertical = 6.dp)
                 ) {
                     Text(
-                        text = "[CFG]",
+                        text = "⚙ Settings",
                         fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        color = MIP_CYAN
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFFCBD5E1)
                     )
                 }
             }
@@ -1005,29 +1187,31 @@ private fun EditPageAppsSheet(
                     Box(
                         modifier = Modifier
                             .weight(1f)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(if (active) MIP_SURFACE else MIP_BG)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(
+                                if (active) Color(0xFF0381FE).copy(alpha = 0.24f)
+                                else Color.White.copy(alpha = 0.06f)
+                            )
                             .border(
                                 1.dp,
-                                if (active) MIP_CYAN else MIP_GRID,
-                                RoundedCornerShape(8.dp)
+                                if (active) Color(0xFF38BDF8) else Color.White.copy(alpha = 0.10f),
+                                RoundedCornerShape(14.dp)
                             )
                             .clickable { onSelectPageIndex(idx) }
                             .padding(vertical = 8.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = if (active) "[$label]" else label,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
+                            text = label,
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
-                            color = if (active) MIP_CYAN else MIP_MUTED
+                            color = if (active) Color.White else Color(0xFF94A3B8)
                         )
                     }
                 }
             }
 
-            HorizontalDivider(color = MIP_GRID)
+            HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
 
             val sortedApps = remember(allApps, pageIndex) {
                 if (pageIndex == 2) {
@@ -1161,19 +1345,14 @@ fun OneUiMinimalAppSearchOverlay(
     onAppLongClick: (AppEntry) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val context = LocalContext.current
     val view = LocalView.current
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val density = LocalDensity.current
     val swipeDownDismissPx = with(density) { 48.dp.toPx() }
-    var isFullRecentsDeckOpen by remember { mutableStateOf(false) }
-    var dismissedSearchRecentKeys by remember { mutableStateOf(emptySet<String>()) }
-    val liveForegroundPkgs by FoldAccessibilityService.recentForegroundPackages.collectAsState()
 
     val dismissSearchCleanly = remember(keyboardController, onDismiss) {
         {
-            isFullRecentsDeckOpen = false
             keyboardController?.hide()
             onDismiss()
         }
@@ -1213,14 +1392,8 @@ fun OneUiMinimalAppSearchOverlay(
     ) {
         val searchBarShape = RoundedCornerShape(24.dp)
         val trimmedQuery = query.trim()
-        val displayRecentApps = remember(liveForegroundPkgs, recentApps, rankedApps, dismissedSearchRecentKeys) {
-            val byUniqueKey = (recentApps + rankedApps).associateBy { it.uniqueKey }
-            val byPkg = (recentApps + rankedApps).associateBy { it.packageName }
-            val fromLive = liveForegroundPkgs.mapNotNull { pkg -> byUniqueKey[pkg] ?: byPkg[pkg] }
-            val combined = (fromLive + recentApps).distinctBy { it.uniqueKey }
-            val base = if (combined.isNotEmpty()) combined else rankedApps.take(8)
-            base.filterNot { it.uniqueKey in dismissedSearchRecentKeys || it.packageName in dismissedSearchRecentKeys }
-                .take(12)
+        val displayRecentApps = remember(recentApps, rankedApps) {
+            if (recentApps.isNotEmpty()) recentApps else rankedApps.take(8)
         }
         val topMatches = remember(trimmedQuery, rankedApps) {
             if (trimmedQuery.isEmpty()) emptyList() else rankedApps.take(8)
@@ -1293,19 +1466,7 @@ fun OneUiMinimalAppSearchOverlay(
                             iconShapePreset = iconShapePreset,
                             compact = matchRows.isNotEmpty(),
                             onLaunchApp = onLaunchApp,
-                            onAppLongClick = onAppLongClick,
-                            onSplitApps = { primary, secondary ->
-                                dismissSearchCleanly()
-                                SystemTweaker.launchSplitScreenPair(
-                                    context = context,
-                                    primaryPackage = primary.packageName,
-                                    secondaryPackage = secondary.packageName
-                                )
-                            },
-                            onOpenFullRecentsDeck = {
-                                keyboardController?.hide()
-                                isFullRecentsDeckOpen = true
-                            }
+                            onAppLongClick = onAppLongClick
                         )
                         Spacer(modifier = Modifier.height(10.dp))
                     }
@@ -1327,14 +1488,13 @@ fun OneUiMinimalAppSearchOverlay(
                             shrinkTowards = Alignment.Bottom
                         ) + fadeOut(animationSpec = LauncherSpringSpecs.SearchSheetSpring)
                     ) {
-                        val matchCardShape = RoundedCornerShape(14.dp)
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(bottom = 10.dp)
-                                .clip(matchCardShape)
-                                .background(MIP_BG)
-                                .border(1.dp, MIP_GRID, matchCardShape)
+                                .clip(RoundedCornerShape(26.dp))
+                                .background(Color(0xD917181E))
+                                .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(26.dp))
                                 .clickable(
                                     interactionSource = remember { MutableInteractionSource() },
                                     indication = null,
@@ -1357,18 +1517,17 @@ fun OneUiMinimalAppSearchOverlay(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = "[SUGGESTED]",
+                                    text = "SUGGESTED MATCHES",
                                     fontSize = 10.sp,
-                                    fontFamily = FontFamily.Monospace,
                                     fontWeight = FontWeight.Bold,
-                                    color = MIP_MUTED
+                                    letterSpacing = 1.0.sp,
+                                    color = Color(0xFF94A3B8)
                                 )
                                 Text(
-                                    text = "[${topMatches.size} MATCHES]",
+                                    text = "${topMatches.size} ${if (topMatches.size == 1) "app" else "apps"}",
                                     fontSize = 10.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MIP_CYAN
+                                    fontWeight = FontWeight.Medium,
+                                    color = Color(0xFF38BDF8)
                                 )
                             }
 
@@ -1402,37 +1561,34 @@ fun OneUiMinimalAppSearchOverlay(
                     }
                 }
 
-                // MIP Terminal Search Text Box Docked Right on Top of the Keyboard (no close '✕' button)
-                val mipSearchShape = RoundedCornerShape(12.dp)
+                // Search Text Box Docked Right on Top of the Keyboard (no close '✕' button)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(mipSearchShape)
-                        .background(MIP_SURFACE)
-                        .border(1.dp, MIP_CYAN.copy(alpha = 0.65f), mipSearchShape)
+                        .clip(searchBarShape)
+                        .background(Color(0xFF1C1E26))
+                        .border(1.dp, Color.White.copy(alpha = 0.16f), searchBarShape)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
                             onClick = {}
                         )
-                        .padding(horizontal = 16.dp, vertical = 13.dp),
+                        .padding(horizontal = 18.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = ">",
-                        fontSize = 16.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = MIP_CYAN
+                        text = "⌕",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF38BDF8)
                     )
-                    Spacer(modifier = Modifier.width(10.dp))
+                    Spacer(modifier = Modifier.width(12.dp))
                     Box(modifier = Modifier.weight(1f)) {
                         if (query.isEmpty()) {
                             Text(
-                                text = "search_apps...",
-                                fontSize = 14.sp,
-                                fontFamily = FontFamily.Monospace,
-                                color = MIP_MUTED
+                                text = "Search apps",
+                                fontSize = 16.sp,
+                                color = Color(0xFF94A3B8)
                             )
                         }
                         BasicTextField(
@@ -1440,12 +1596,11 @@ fun OneUiMinimalAppSearchOverlay(
                             onValueChange = onQueryChange,
                             singleLine = true,
                             textStyle = TextStyle(
-                                fontSize = 14.sp,
-                                fontFamily = FontFamily.Monospace,
+                                fontSize = 16.sp,
                                 fontWeight = FontWeight.Medium,
-                                color = MIP_INK
+                                color = Color.White
                             ),
-                            cursorBrush = SolidColor(MIP_CYAN),
+                            cursorBrush = SolidColor(Color(0xFF38BDF8)),
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                             keyboardActions = KeyboardActions(
                                 onSearch = {
@@ -1461,56 +1616,13 @@ fun OneUiMinimalAppSearchOverlay(
                     }
                 }
             }
-
-            MipLauncherRecentsOverlay(
-                visible = isFullRecentsDeckOpen,
-                recentApps = displayRecentApps,
-                columns = if (columns >= 6) 3 else 2,
-                iconShapePreset = iconShapePreset,
-                onLaunchApp = { app ->
-                    isFullRecentsDeckOpen = false
-                    onLaunchApp(app)
-                },
-                onSplitApps = { primary, secondary ->
-                    isFullRecentsDeckOpen = false
-                    dismissSearchCleanly()
-                    SystemTweaker.launchSplitScreenPair(
-                        context = context,
-                        primaryPackage = primary.packageName,
-                        secondaryPackage = secondary.packageName
-                    )
-                },
-                onRemoveRecentApp = { app ->
-                    dismissedSearchRecentKeys = dismissedSearchRecentKeys + app.uniqueKey + app.packageName
-                    FoldAccessibilityService.removeRecentForegroundPackage(app.packageName)
-                },
-                onClearAllRecents = {
-                    dismissedSearchRecentKeys = dismissedSearchRecentKeys +
-                        displayRecentApps.flatMap { listOf(it.uniqueKey, it.packageName) }
-                    FoldAccessibilityService.clearRecentForegroundPackages()
-                },
-                onOpenAppInfo = { app ->
-                    isFullRecentsDeckOpen = false
-                    dismissSearchCleanly()
-                    runCatching {
-                        val infoIntent = Intent(
-                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                            Uri.fromParts("package", app.packageName, null)
-                        ).apply {
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                        context.startActivity(infoIntent)
-                    }
-                },
-                onDismiss = { isFullRecentsDeckOpen = false }
-            )
         }
     }
 }
 
 /**
- * Horizontally scrollable Recent Apps MIP terminal thumbnail strip (`RecentAppsThumbnailStrip`) displayed
- * at the top of `OneUiMinimalAppSearchOverlay` both when the search box is empty and while typing.
+ * Horizontally scrollable Recent Apps thumbnail strip (`RecentAppsThumbnailStrip`) displayed at the top
+ * of `OneUiMinimalAppSearchOverlay` both when the search box is empty and while typing.
  */
 @Composable
 private fun RecentAppsThumbnailStrip(
@@ -1519,19 +1631,15 @@ private fun RecentAppsThumbnailStrip(
     compact: Boolean = false,
     onLaunchApp: (AppEntry) -> Unit,
     onAppLongClick: (AppEntry) -> Unit,
-    onSplitApps: ((AppEntry, AppEntry) -> Unit)? = null,
-    onOpenFullRecentsDeck: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
-    val stripShape = CutCornerShape(4.dp)
-    val pillShape = CutCornerShape(2.dp)
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(stripShape)
-            .background(MIP_BG)
-            .border(1.dp, MIP_GRID, stripShape)
+            .clip(RoundedCornerShape(26.dp))
+            .background(Color(0xCC14161D))
+            .border(1.dp, Color.White.copy(alpha = 0.09f), RoundedCornerShape(26.dp))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -1543,60 +1651,23 @@ private fun RecentAppsThumbnailStrip(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp),
+                .padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "[RECENT // ${recentApps.size}]",
+                text = "RECENT APPS",
                 fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.ExtraBold,
-                color = MIP_INK
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.0.sp,
+                color = Color(0xFF94A3B8)
             )
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (recentApps.size >= 2 && onSplitApps != null) {
-                    Box(
-                        modifier = Modifier
-                            .clip(pillShape)
-                            .background(MIP_SURFACE)
-                            .border(1.dp, MIP_CYAN, pillShape)
-                            .clickable { onSplitApps(recentApps[0], recentApps[1]) }
-                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "[SPLIT TOP 2]",
-                            fontSize = 9.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = MIP_CYAN
-                        )
-                    }
-                }
-                if (onOpenFullRecentsDeck != null) {
-                    Box(
-                        modifier = Modifier
-                            .clip(pillShape)
-                            .background(MIP_SURFACE)
-                            .border(1.dp, MIP_INK, pillShape)
-                            .clickable(onClick = onOpenFullRecentsDeck)
-                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "[VIEW ALL RECENTS]",
-                            fontSize = 9.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = MIP_INK
-                        )
-                    }
-                }
-            }
+            Text(
+                text = "Swipe ⟷",
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium,
+                color = Color.White.copy(alpha = 0.45f)
+            )
         }
 
         LazyRow(
@@ -1605,29 +1676,16 @@ private fun RecentAppsThumbnailStrip(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            itemsIndexed(
+            items(
                 items = recentApps,
-                key = { _, app -> app.uniqueKey }
-            ) { index, app ->
-                val splitPartner = remember(index, recentApps) {
-                    if (recentApps.size < 2) null
-                    else if (index == 0) recentApps.getOrNull(1)
-                    else recentApps.firstOrNull()
-                }
+                key = { it.uniqueKey }
+            ) { app ->
                 RecentAppThumbnailCard(
-                    index = index,
                     app = app,
                     iconShapePreset = iconShapePreset,
                     compact = compact,
                     onClick = { onLaunchApp(app) },
-                    onLongClick = { onAppLongClick(app) },
-                    onSplitWithTop = if (splitPartner != null && onSplitApps != null) {
-                        {
-                            val first = if (index == 0) app else splitPartner
-                            val second = if (index == 0) splitPartner else app
-                            onSplitApps(first, second)
-                        }
-                    } else null
+                    onLongClick = { onAppLongClick(app) }
                 )
             }
         }
@@ -1635,543 +1693,105 @@ private fun RecentAppsThumbnailStrip(
 }
 
 /**
- * Minimal MIP Terminal Recent App thumbnail card (`RecentAppThumbnailCard`) inside `RecentAppsThumbnailStrip`.
+ * Individual Recent App mini-window thumbnail card (`RecentAppThumbnailCard`) inside `RecentAppsThumbnailStrip`.
  */
 @Composable
 private fun RecentAppThumbnailCard(
-    index: Int = 0,
     app: AppEntry,
     iconShapePreset: IconShapePreset,
     compact: Boolean = false,
     onClick: () -> Unit,
-    onLongClick: () -> Unit,
-    onSplitWithTop: (() -> Unit)? = null
+    onLongClick: () -> Unit
 ) {
-    val cardWidth = if (compact) 94.dp else 104.dp
-    val cardHeight = if (compact) 110.dp else 124.dp
-    val cardShape = CutCornerShape(4.dp)
-    val previewSurfaceShape = CutCornerShape(3.dp)
+    val cardWidth = if (compact) 94.dp else 102.dp
+    val cardHeight = if (compact) 114.dp else 128.dp
+    val cardShape = RoundedCornerShape(20.dp)
+    val previewSurfaceShape = RoundedCornerShape(14.dp)
 
     Column(
         modifier = Modifier
             .width(cardWidth)
             .height(cardHeight)
             .clip(cardShape)
-            .background(MIP_SURFACE)
+            .background(Color(0xE61B1D26))
             .border(
                 1.dp,
-                if (app.isWorkProfile) MIP_CYAN else MIP_GRID,
+                if (app.isWorkProfile) Color(0xFF0381FE).copy(alpha = 0.40f)
+                else Color.White.copy(alpha = 0.10f),
                 cardShape
             )
-            .padding(5.dp),
+            .padding(8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
+        // Mini-window title bar (subtle multitasking window chrome + Work profile indicator)
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 2.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "[#%02d]".format(index + 1),
-                fontSize = 8.5.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.ExtraBold,
-                color = MIP_MUTED
-            )
-            if (onSplitWithTop != null) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(5.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF38BDF8).copy(alpha = 0.65f))
+                )
+                Box(
+                    modifier = Modifier
+                        .width(14.dp)
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(Color.White.copy(alpha = 0.18f))
+                )
+            }
+            if (app.isWorkProfile) {
                 Text(
-                    text = "[◫]",
-                    fontSize = 8.5.sp,
-                    fontFamily = FontFamily.Monospace,
+                    text = "WORK",
+                    fontSize = 8.sp,
                     fontWeight = FontWeight.ExtraBold,
-                    color = MIP_CYAN,
-                    modifier = Modifier.clickable(onClick = onSplitWithTop)
+                    color = Color(0xFF38BDF8)
                 )
             }
         }
 
-        Spacer(modifier = Modifier.height(2.dp))
-
-        // 16x-DPI MIP pixel-grid dither preview surface with centered 80x80 RGB222 app icon
+        // Mini-window preview surface with centered app icon + briefcase badge
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
+                .padding(vertical = 4.dp)
                 .clip(previewSurfaceShape)
-                .background(MIP_BG)
-                .border(1.dp, MIP_GRID, previewSurfaceShape)
+                .background(Color.White.copy(alpha = 0.04f))
+                .border(0.5.dp, Color.White.copy(alpha = 0.06f), previewSurfaceShape)
                 .clickable(onClick = onClick),
             contentAlignment = Alignment.Center
         ) {
-            Canvas(modifier = Modifier.matchParentSize()) {
-                val step = 2.dp.toPx().coerceAtLeast(2f)
-                val dot = 1f
-                var y = step / 2f
-                while (y < size.height) {
-                    var x = step / 2f
-                    while (x < size.width) {
-                        drawRect(
-                            color = MIP_GRID.copy(alpha = 0.45f),
-                            topLeft = Offset(x, y),
-                            size = Size(dot, dot)
-                        )
-                        x += step
-                    }
-                    y += step
-                }
-            }
-
             AppIconTile(
                 app = app,
                 iconShapePreset = iconShapePreset,
                 showLabel = false,
-                compact = true,
+                compact = compact,
                 onClick = onClick,
                 onLongClick = onLongClick
             )
         }
 
-        Spacer(modifier = Modifier.height(3.dp))
-
-        // Bottom MIP monospace app label
+        // Bottom app title
         Text(
-            text = app.label.uppercase(),
-            fontSize = 9.5.sp,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.ExtraBold,
-            letterSpacing = (-0.2).sp,
-            color = MIP_INK,
+            text = app.label,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Color.White,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.clickable(onClick = onClick)
         )
-    }
-}
-
-/**
- * v0.12.0 Built-In Launcher MIP Recent Apps Multitasking Deck (`MipLauncherRecentsOverlay`).
- *
- * Renders the system's recent foreground apps directly inside the launcher with:
- * - Header: `[RECENT APPS // N ACTIVE]`, `[SPLIT TOP 2]`, `[CLEAR]`, `[CLOSE]`
- * - Responsive 2-column (Cover/Slab) or 3-column (Unfolded Inner) MIP Window Card Deck where each card shows:
- *   - Window title bar: `[#01] APP_NAME` + `[SPLIT ◫]` + `[✕]`
- *   - 16x-DPI MIP window preview surface with `80x80` `RGB222` MIP icon, package telemetry, and `ACTIVE_TASK` status
- *   - Bottom action row: `[SWITCH ->]` and `[APP INFO]`
- */
-@Composable
-fun MipLauncherRecentsOverlay(
-    visible: Boolean,
-    recentApps: List<AppEntry>,
-    columns: Int = 2,
-    iconShapePreset: IconShapePreset,
-    onLaunchApp: (AppEntry) -> Unit,
-    onSplitApps: (AppEntry, AppEntry) -> Unit,
-    onRemoveRecentApp: (AppEntry) -> Unit,
-    onClearAllRecents: () -> Unit,
-    onOpenAppInfo: (AppEntry) -> Unit,
-    onDismiss: () -> Unit
-) {
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(animationSpec = LauncherSpringSpecs.SearchSheetSpring) +
-            slideInVertically(
-                animationSpec = LauncherSpringSpecs.Snappy120HzIntOffset,
-                initialOffsetY = { it / 10 }
-            ),
-        exit = fadeOut(animationSpec = LauncherSpringSpecs.SearchSheetSpring) +
-            slideOutVertically(
-                animationSpec = LauncherSpringSpecs.Snappy120HzIntOffset,
-                targetOffsetY = { it / 10 }
-            )
-    ) {
-        val headerShape = CutCornerShape(3.dp)
-        val btnShape = CutCornerShape(2.dp)
-        val rows = remember(recentApps, columns) {
-            recentApps.chunked(columns.coerceAtLeast(2))
-        }
-
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(MIP_BG.copy(alpha = 0.96f))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = {}
-                )
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                // Top MIP Recent Apps Command Bar
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(headerShape)
-                        .background(MIP_SURFACE)
-                        .border(1.dp, MIP_CYAN, headerShape)
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "[RECENT APPS // ${recentApps.size} ACTIVE]",
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = MIP_INK,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
-
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (recentApps.size >= 2) {
-                            Box(
-                                modifier = Modifier
-                                    .clip(btnShape)
-                                    .background(MIP_CYAN)
-                                    .border(1.dp, MIP_INK, btnShape)
-                                    .clickable {
-                                        onSplitApps(recentApps[0], recentApps[1])
-                                    }
-                                    .padding(horizontal = 7.dp, vertical = 4.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "[SPLIT TOP 2]",
-                                    fontSize = 9.5.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = MIP_BG
-                                )
-                            }
-                        }
-
-                        if (recentApps.isNotEmpty()) {
-                            Box(
-                                modifier = Modifier
-                                    .clip(btnShape)
-                                    .background(MIP_BG)
-                                    .border(1.dp, MIP_GRID, btnShape)
-                                    .clickable(onClick = onClearAllRecents)
-                                    .padding(horizontal = 7.dp, vertical = 4.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "[CLEAR]",
-                                    fontSize = 9.5.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = MIP_MUTED
-                                )
-                            }
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .clip(btnShape)
-                                .background(MIP_BG)
-                                .border(1.dp, MIP_INK, btnShape)
-                                .clickable(onClick = onDismiss)
-                                .padding(horizontal = 7.dp, vertical = 4.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "[CLOSE]",
-                                fontSize = 9.5.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = MIP_INK
-                            )
-                        }
-                    }
-                }
-
-                if (recentApps.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .border(1.dp, MIP_GRID, headerShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "[NO ACTIVE RECENT TASKS // LAUNCH AN APP]",
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            color = MIP_MUTED
-                        )
-                    }
-                } else {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        rows.forEachIndexed { rowIdx, rowApps ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                verticalAlignment = Alignment.Top
-                            ) {
-                                val colCount = columns.coerceAtLeast(2)
-                                for (colIdx in 0 until colCount) {
-                                    val app = rowApps.getOrNull(colIdx)
-                                    val globalIdx = rowIdx * colCount + colIdx
-                                    Box(modifier = Modifier.weight(1f)) {
-                                        if (app != null) {
-                                            val partner = if (recentApps.size < 2) {
-                                                null
-                                            } else if (globalIdx == 0) {
-                                                recentApps.getOrNull(1)
-                                            } else {
-                                                recentApps.firstOrNull()
-                                            }
-                                            MipRecentTaskWindowCard(
-                                                index = globalIdx,
-                                                app = app,
-                                                iconShapePreset = iconShapePreset,
-                                                onSwitchToTask = { onLaunchApp(app) },
-                                                onSplitTask = if (partner != null) {
-                                                    {
-                                                        val first = if (globalIdx == 0) app else partner
-                                                        val second = if (globalIdx == 0) partner else app
-                                                        onSplitApps(first, second)
-                                                    }
-                                                } else null,
-                                                onRemoveTask = { onRemoveRecentApp(app) },
-                                                onOpenAppInfo = { onOpenAppInfo(app) }
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun MipRecentTaskWindowCard(
-    index: Int,
-    app: AppEntry,
-    iconShapePreset: IconShapePreset,
-    onSwitchToTask: () -> Unit,
-    onSplitTask: (() -> Unit)?,
-    onRemoveTask: () -> Unit,
-    onOpenAppInfo: () -> Unit
-) {
-    val cardShape = CutCornerShape(4.dp)
-    val previewShape = CutCornerShape(3.dp)
-    val btnShape = CutCornerShape(2.dp)
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(cardShape)
-            .background(MIP_SURFACE)
-            .border(
-                width = 1.dp,
-                color = if (index == 0 || app.isWorkProfile) MIP_CYAN else MIP_GRID,
-                shape = cardShape
-            )
-            .padding(8.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        // Window Title Bar: `[#01] APP_NAME` + `[SPLIT ◫]` + `[✕]`
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "[#%02d] %s".format(index + 1, app.label.uppercase()),
-                fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.ExtraBold,
-                color = if (index == 0) MIP_CYAN else MIP_INK,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (onSplitTask != null) {
-                    Box(
-                        modifier = Modifier
-                            .clip(btnShape)
-                            .background(MIP_BG)
-                            .border(1.dp, MIP_CYAN, btnShape)
-                            .clickable(onClick = onSplitTask)
-                            .padding(horizontal = 5.dp, vertical = 2.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "[SPLIT ◫]",
-                            fontSize = 8.5.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = MIP_CYAN
-                        )
-                    }
-                }
-
-                Box(
-                    modifier = Modifier
-                        .clip(btnShape)
-                        .background(MIP_BG)
-                        .border(1.dp, MIP_GRID, btnShape)
-                        .clickable(onClick = onRemoveTask)
-                        .padding(horizontal = 5.dp, vertical = 2.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "[✕]",
-                        fontSize = 8.5.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = MIP_MUTED
-                    )
-                }
-            }
-        }
-
-        // Large MIP Dithered Window Preview Surface
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(104.dp)
-                .clip(previewShape)
-                .background(MIP_BG)
-                .border(1.dp, MIP_GRID, previewShape)
-                .clickable(onClick = onSwitchToTask)
-                .padding(8.dp)
-        ) {
-            Canvas(modifier = Modifier.matchParentSize()) {
-                val step = 2.dp.toPx().coerceAtLeast(2f)
-                var y = step / 2f
-                while (y < size.height) {
-                    var x = step / 2f
-                    while (x < size.width) {
-                        drawRect(
-                            color = MIP_GRID.copy(alpha = 0.35f),
-                            topLeft = Offset(x, y),
-                            size = Size(1f, 1f)
-                        )
-                        x += step
-                    }
-                    y += step
-                }
-            }
-
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.SpaceBetween,
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = if (app.isWorkProfile) "WORK_PROFILE" else "ACTIVE_TASK",
-                        fontSize = 8.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        color = if (app.isWorkProfile) MIP_CYAN else MIP_MUTED
-                    )
-                    Text(
-                        text = if (index == 0) "TOP" else "BG_${index}",
-                        fontSize = 8.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        color = MIP_CYAN
-                    )
-                }
-
-                AppIconTile(
-                    app = app,
-                    iconShapePreset = iconShapePreset,
-                    showLabel = false,
-                    compact = true,
-                    onClick = onSwitchToTask,
-                    onLongClick = onOpenAppInfo
-                )
-
-                Text(
-                    text = app.packageName,
-                    fontSize = 8.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = MIP_MUTED,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-
-        // Bottom Action Row: `[SWITCH ->]` and `[APP INFO]`
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(btnShape)
-                    .background(MIP_BG)
-                    .border(1.dp, MIP_CYAN, btnShape)
-                    .clickable(onClick = onSwitchToTask)
-                    .padding(vertical = 4.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "[SWITCH ->]",
-                    fontSize = 9.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = MIP_CYAN
-                )
-            }
-
-            Box(
-                modifier = Modifier
-                    .clip(btnShape)
-                    .background(MIP_BG)
-                    .border(1.dp, MIP_GRID, btnShape)
-                    .clickable(onClick = onOpenAppInfo)
-                    .padding(horizontal = 6.dp, vertical = 4.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "[APP INFO]",
-                    fontSize = 9.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    color = MIP_MUTED
-                )
-            }
-        }
     }
 }
 
@@ -2847,6 +2467,9 @@ fun CoverOrSlabHomeScreen(
         MinimalOneUiHomeScreen(
             columns = 4,
             hideSystemStatusBar = hideSystemStatusBar,
+            batteryPct = batteryPct,
+            isCharging = isCharging,
+            nextEventText = nextEventText,
             isWirelessAdbEnabled = isWirelessAdbEnabled,
             wirelessAdbPort = wirelessAdbPort,
             tailscaleIp = tailscaleIp,
@@ -2868,6 +2491,7 @@ fun CoverOrSlabHomeScreen(
             onExpandNotifications = onExpandNotifications,
             onDoubleTapLock = onDoubleTapLock,
             onOpenSettings = onOpenSettings,
+            onClockClick = onClockClick,
             modifier = modifier
         )
     }
@@ -2993,6 +2617,9 @@ fun UnfoldedInnerDashboardScreen(
         MinimalOneUiHomeScreen(
             columns = 6,
             hideSystemStatusBar = hideSystemStatusBar,
+            batteryPct = batteryPct,
+            isCharging = isCharging,
+            nextEventText = nextEventText,
             isWirelessAdbEnabled = isWirelessAdbEnabled,
             wirelessAdbPort = wirelessAdbPort,
             tailscaleIp = tailscaleIp,
@@ -3014,6 +2641,7 @@ fun UnfoldedInnerDashboardScreen(
             onExpandNotifications = onExpandNotifications,
             onDoubleTapLock = onDoubleTapLock,
             onOpenSettings = onOpenSettings,
+            onClockClick = onClockClick,
             modifier = modifier
         )
     }
@@ -3137,6 +2765,9 @@ fun FlexTabletopHomeScreen(
         MinimalOneUiHomeScreen(
             columns = 6,
             hideSystemStatusBar = hideSystemStatusBar,
+            batteryPct = batteryPct,
+            isCharging = isCharging,
+            nextEventText = nextEventText,
             isWirelessAdbEnabled = isWirelessAdbEnabled,
             wirelessAdbPort = wirelessAdbPort,
             tailscaleIp = tailscaleIp,
@@ -3158,6 +2789,7 @@ fun FlexTabletopHomeScreen(
             onExpandNotifications = onExpandNotifications,
             onDoubleTapLock = onDoubleTapLock,
             onOpenSettings = onOpenSettings,
+            onClockClick = onClockClick,
             modifier = modifier
         )
     }
