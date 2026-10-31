@@ -178,7 +178,7 @@ class SearchEngineTest {
             latitude = 37.6213,
             longitude = -122.3790
         )
-        assertTrue(uberDeepLink.startsWith("uber://?action=setPickup&pickup=my_location"))
+        assertTrue(uberDeepLink.startsWith("uber://?client_id=fold8_launcher&action=setPickup&pickup=my_location"))
         assertTrue(uberDeepLink.contains("dropoff[latitude]=37.6213"))
         assertTrue(uberDeepLink.contains("dropoff[longitude]=-122.379"))
 
