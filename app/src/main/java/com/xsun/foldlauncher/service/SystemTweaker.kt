@@ -720,6 +720,39 @@ object SystemTweaker {
         return enabledServices.split(':').any { it.equals(expectedComponent, ignoreCase = true) }
     }
 
+    /**
+     * Automatically enables [FoldAccessibilityService] in `Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES`
+     * whenever `WRITE_SECURE_SETTINGS` has been granted via ADB, so split-screen docking
+     * (`GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN`), double-tap lock, and Quick Settings gestures work out-of-the-box.
+     */
+    fun ensureAccessibilityServiceEnabled(context: Context): Boolean {
+        if (FoldAccessibilityService.instance != null) return true
+        if (!hasWriteSecureSettings(context)) return isAccessibilityServiceEnabled(context)
+        return try {
+            val cr = context.contentResolver
+            val component = "${context.packageName}/${FoldAccessibilityService::class.java.canonicalName}"
+            val current = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+                ?.trim()
+                .orEmpty()
+            val parts = current.split(':')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .toMutableList()
+            if (parts.none { it.equals(component, ignoreCase = true) }) {
+                parts.add(component)
+                Settings.Secure.putString(
+                    cr,
+                    Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+                    parts.joinToString(":")
+                )
+            }
+            Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+            true
+        } catch (_: Exception) {
+            isAccessibilityServiceEnabled(context)
+        }
+    }
+
     fun getCurrentImeId(context: Context): String {
         return Settings.Secure.getString(
             context.contentResolver,
@@ -1085,16 +1118,25 @@ object SystemTweaker {
     }
 
     /**
-     * Launches two apps side-by-side in multi-window / split-screen mode on the Z Fold 8 inner display.
+     * Launches two apps side-by-side in multi-window / split-screen mode on Samsung One UI
+     * (both slab phones like S23/S25 and Z Fold 8 inner/cover screens).
+     *
+     * On One UI (`StageCoordinator`), `FLAG_ACTIVITY_LAUNCH_ADJACENT` only targets `SideStage`
+     * if `MainStage` split-screen is already active (`isSplitActive=true`). Therefore we:
+     * 1. Auto-enable [FoldAccessibilityService] if `WRITE_SECURE_SETTINGS` is granted,
+     * 2. Launch [primaryPackage] in standard task mode,
+     * 3. Trigger `GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN` at `+380ms` to dock [primaryPackage] into the top/left stage,
+     * 4. Launch [secondaryPackage] with `FLAG_ACTIVITY_LAUNCH_ADJACENT` at `+820ms` into the bottom/right stage.
      */
     fun launchSplitScreenPair(
         context: Context,
         primaryPackage: String,
         secondaryPackage: String
     ): Boolean {
+        ensureAccessibilityServiceEnabled(context)
         val pm = context.packageManager
         val primaryIntent = pm.getLaunchIntentForPackage(primaryPackage)?.apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         } ?: return false
 
         val secondaryIntent = pm.getLaunchIntentForPackage(secondaryPackage)?.apply {
@@ -1105,14 +1147,19 @@ object SystemTweaker {
             )
         } ?: return false
 
+        val mainHandler = Handler(Looper.getMainLooper())
         return try {
             context.startActivity(primaryIntent)
-            Handler(Looper.getMainLooper()).postDelayed({
-                try {
-                    context.startActivity(secondaryIntent)
-                } catch (_: Exception) {
-                }
-            }, 180L)
+            mainHandler.postDelayed({
+                val docked = FoldAccessibilityService.instance?.toggleSplitScreen() == true
+                val secondDelay = if (docked) 440L else 120L
+                mainHandler.postDelayed({
+                    try {
+                        context.startActivity(secondaryIntent)
+                    } catch (_: Exception) {
+                    }
+                }, secondDelay)
+            }, 380L)
             true
         } catch (_: Exception) {
             false

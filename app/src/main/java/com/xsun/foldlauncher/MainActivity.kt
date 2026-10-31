@@ -26,6 +26,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.xsun.foldlauncher.hud.EXTRA_OPEN_SPOTLIGHT
 import com.xsun.foldlauncher.posture.DevicePosture
 import com.xsun.foldlauncher.posture.rememberPostureState
+import com.xsun.foldlauncher.service.SystemTweaker
 import com.xsun.foldlauncher.ui.animation.PostureAnimatedContainer
 import com.xsun.foldlauncher.ui.components.AppContextMenuSheet
 import com.xsun.foldlauncher.ui.components.SpotlightSearchOverlay
@@ -53,6 +54,7 @@ class MainActivity : ComponentActivity() {
 
         WindowCompat.setDecorFitsSystemWindows(window, false)
         onBackPressedDispatcher.addCallback(this, backPressedCallback)
+        SystemTweaker.ensureAccessibilityServiceEnabled(this)
         requestPostNotificationsIfNeeded()
         handleIntent(intent)
 
@@ -93,6 +95,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        SystemTweaker.ensureAccessibilityServiceEnabled(this)
         viewModel.onLauncherResumed()
         applySystemBarVisibility(viewModel.hideSystemStatusBar.value)
     }
@@ -106,14 +109,18 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestPostNotificationsIfNeeded() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.POST_NOTIFICATIONS
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1002)
-            }
+        val needed = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            needed.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            needed.add(Manifest.permission.ACCESS_COARSE_LOCATION)
+            needed.add(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+        if (needed.isNotEmpty()) {
+            requestPermissions(needed.toTypedArray(), 1002)
         }
     }
 

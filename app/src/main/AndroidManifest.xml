@@ -12,6 +12,10 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Location permissions for nearby-biased navigation & ride-share autocomplete -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
     <!-- Allows swipe-down on home screen to expand notification panel -->
     <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
 
@@ -37,6 +41,9 @@
         <package android:name="com.termux.api" />
         <package android:name="com.android.chrome" />
         <package android:name="com.tailscale.ipn" />
+        <package android:name="com.google.android.apps.maps" />
+        <package android:name="com.ubercab" />
+        <package android:name="me.lyft.android" />
     </queries>
 
     <application

@@ -190,5 +190,23 @@ class SearchEngineTest {
         assertTrue(lyftDeepLink.startsWith("lyft://ridetype?id=lyft"))
         assertTrue(lyftDeepLink.contains("destination[latitude]=37.6213"))
         assertTrue(lyftDeepLink.contains("destination[longitude]=-122.379"))
+
+        // Coordinate-prioritized navigation URI for Best Buy SF (1717 Harrison St)
+        val sfBestBuyNavUri = QuickNavigationLauncher.buildGoogleMapsPrimaryUri(
+            mode = QuickNavMode.DRIVE,
+            destinationQuery = "Best Buy, 1717 Harrison St, San Francisco, CA",
+            latitude = 37.768358,
+            longitude = -122.4128193
+        )
+        assertEquals("google.navigation:q=37.768358,-122.4128193&mode=d", sfBestBuyNavUri)
+
+        // Haversine distance check: Downtown SF (37.7965, -122.3979) to SF Best Buy (37.7684, -122.4128) is ~2.1 miles
+        val sfDistanceMiles = QuickNavigationLauncher.computeDistanceMiles(
+            37.7965,
+            -122.3979,
+            37.768358,
+            -122.4128193
+        )
+        assertTrue(sfDistanceMiles in 1.5..3.0)
     }
 }

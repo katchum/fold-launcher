@@ -1,7 +1,7 @@
 package com.xsun.foldlauncher.ui.components
 
+import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -33,10 +34,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.FilterQuality
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -51,15 +51,76 @@ import com.xsun.foldlauncher.model.AppShortcutItem
 import com.xsun.foldlauncher.ui.animation.iconPressPhysics
 import com.xsun.foldlauncher.ui.theme.FoldLauncherColors
 import com.xsun.foldlauncher.ui.theme.IconShapePreset
-import com.xsun.foldlauncher.ui.theme.iconShapeForPreset
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 import kotlin.math.floor
 
-private val MIP_BG = Color(0xFF0A0D10)
-private val MIP_SURFACE = Color(0xFF11161B)
-private val MIP_GRID = Color(0xFF1E293B)
-private val MIP_INK = Color(0xFFE2E8F0)
-private val MIP_CYAN = Color(0xFF38BDF8)
+// Strict 6-Bit RGB222 (64-Color) MIP Hardware Palette (2 bits per R, G, B channel: 0x00, 0x55, 0xAA, 0xFF)
+private val MIP_BLACK = Color(0xFF000000)
+private val MIP_DARK_BLUE = Color(0xFF000055)
+private val MIP_DARK_TEAL = Color(0xFF005555)
+private val MIP_DARK_GRAY = Color(0xFF555555)
+private val MIP_SILVER = Color(0xFFAAAAAA)
+private val MIP_WHITE = Color(0xFFFFFFFF)
+private val MIP_CYAN = Color(0xFF00FFFF)
+private val MIP_GREEN = Color(0xFF00FF55)
+
+private const val MIP_ICON_GRID_RES = 20
+private val mipQuantizedIconCache = ConcurrentHashMap<String, IntArray>()
+
+/**
+ * Downsamples a high-DPI truecolor Android app icon into a `20x20` low-resolution (~200 PPI)
+ * pixel matrix and quantizes every pixel to the hardware 6-bit `RGB222` (64-color) MIP palette
+ * (`0x00`, `0x55`, `0xAA`, `0xFF` per channel) using 2x2 ordered Bayer dithering.
+ */
+private fun getOrBuildMipRgb222Cells(cacheKey: String, imageBitmap: ImageBitmap): IntArray {
+    mipQuantizedIconCache[cacheKey]?.let { return it }
+    val out = IntArray(MIP_ICON_GRID_RES * MIP_ICON_GRID_RES)
+    runCatching {
+        val srcBitmap = imageBitmap.asAndroidBitmap()
+        val softBitmap = if (srcBitmap.config == Bitmap.Config.HARDWARE) {
+            srcBitmap.copy(Bitmap.Config.ARGB_8888, false)
+        } else {
+            srcBitmap
+        }
+        val scaled = Bitmap.createScaledBitmap(softBitmap, MIP_ICON_GRID_RES, MIP_ICON_GRID_RES, true)
+        val rawPixels = IntArray(MIP_ICON_GRID_RES * MIP_ICON_GRID_RES)
+        scaled.getPixels(rawPixels, 0, MIP_ICON_GRID_RES, 0, 0, MIP_ICON_GRID_RES, MIP_ICON_GRID_RES)
+
+        // 2x2 Bayer ordered dither thresholds (-24, +8, +24, -8) for 6-bit RGB222 quantization
+        val bayer2x2 = intArrayOf(-24, 8, 24, -8)
+
+        for (y in 0 until MIP_ICON_GRID_RES) {
+            for (x in 0 until MIP_ICON_GRID_RES) {
+                val idx = y * MIP_ICON_GRID_RES + x
+                val argb = rawPixels[idx]
+                val a = (argb ushr 24) and 0xFF
+                if (a < 96) {
+                    // Transparent cell -> MIP reflective black/dark-blue checkerboard cell
+                    out[idx] = if ((x + y) % 2 == 0) 0xFF000000.toInt() else 0xFF000055.toInt()
+                } else {
+                    val dither = bayer2x2[((y and 1) shl 1) or (x and 1)]
+                    val r8 = (((argb ushr 16) and 0xFF) + dither).coerceIn(0, 255)
+                    val g8 = (((argb ushr 8) and 0xFF) + dither).coerceIn(0, 255)
+                    val b8 = ((argb and 0xFF) + dither).coerceIn(0, 255)
+
+                    // Quantize 8-bit channel (0..255) -> 2-bit MIP channel (0..3) -> replicate (0x00, 0x55, 0xAA, 0xFF)
+                    val r2 = (r8 ushr 6) * 0x55
+                    val g2 = (g8 ushr 6) * 0x55
+                    val b2 = (b8 ushr 6) * 0x55
+                    out[idx] = (0xFF shl 24) or (r2 shl 16) or (g2 shl 8) or b2
+                }
+            }
+        }
+    }.onFailure {
+        for (i in out.indices) {
+            out[i] = 0xFF005555.toInt()
+        }
+    }
+    mipQuantizedIconCache[cacheKey] = out
+    return out
+}
 
 @Composable
 fun AppIconTile(
@@ -71,8 +132,9 @@ fun AppIconTile(
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val shape = remember(iconShapePreset) { iconShapeForPreset(iconShapePreset) }
-    val iconSize = if (compact) 46.dp else 54.dp
+    // Low-resolution MIP chamfered pixel frame (stepped 3.dp cut corners instead of smooth high-DPI curves)
+    val mipShape = remember { CutCornerShape(3.dp) }
+    val iconSize = if (compact) 46.dp else 52.dp
 
     Column(
         modifier = modifier
@@ -80,7 +142,7 @@ fun AppIconTile(
                 onClick = onClick,
                 onLongClick = onLongClick
             )
-            .padding(vertical = if (compact) 3.dp else 5.dp, horizontal = 4.dp),
+            .padding(vertical = if (compact) 3.dp else 4.dp, horizontal = 3.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -91,45 +153,61 @@ fun AppIconTile(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .clip(shape)
-                    .background(MIP_SURFACE)
+                    .clip(mipShape)
+                    .background(MIP_BLACK)
                     .border(
-                        1.dp,
-                        if (app.isWorkProfile) MIP_CYAN.copy(alpha = 0.55f) else MIP_GRID,
-                        shape
-                    ),
+                        width = if (app.isWorkProfile) 1.5.dp else 1.dp,
+                        color = if (app.isWorkProfile) MIP_CYAN else MIP_DARK_GRAY,
+                        shape = mipShape
+                    )
+                    .padding(2.dp),
                 contentAlignment = Alignment.Center
             ) {
                 val bitmap = app.icon
                 if (bitmap != null) {
-                    Image(
-                        bitmap = bitmap,
-                        contentDescription = app.label,
-                        contentScale = ContentScale.Crop,
-                        filterQuality = FilterQuality.None,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                    val mipCells = remember(app.uniqueKey, bitmap) {
+                        getOrBuildMipRgb222Cells(app.uniqueKey, bitmap)
+                    }
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val grid = MIP_ICON_GRID_RES
+                        val cellW = size.width / grid
+                        val cellH = size.height / grid
+                        val gap = 0.75f
+                        for (gy in 0 until grid) {
+                            for (gx in 0 until grid) {
+                                val c = Color(mipCells[gy * grid + gx])
+                                drawRect(
+                                    color = c,
+                                    topLeft = Offset(gx * cellW, gy * cellH),
+                                    size = Size(
+                                        (cellW - gap).coerceAtLeast(1f),
+                                        (cellH - gap).coerceAtLeast(1f)
+                                    )
+                                )
+                            }
+                        }
+                    }
                 } else {
-                    val gradientColors = remember(app.packageName) {
-                        monogramGradientForPackage(app.packageName)
+                    val baseColor = remember(app.packageName) {
+                        mipPaletteColorForPackage(app.packageName)
                     }
                     val monogramText = remember(app.label, app.acronym) {
-                        app.acronym.uppercase().take(2).ifEmpty {
+                        app.acronym.uppercase(Locale.US).take(2).ifEmpty {
                             app.firstLetter.toString()
                         }
                     }
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .background(Brush.linearGradient(gradientColors)),
+                            .background(baseColor),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = monogramText,
-                            fontSize = if (compact) 15.sp else 18.sp,
+                            fontSize = if (compact) 14.sp else 17.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.ExtraBold,
-                            color = MIP_INK
+                            color = MIP_WHITE
                         )
                     }
                 }
@@ -146,18 +224,20 @@ fun AppIconTile(
         }
 
         if (showLabel) {
-            Spacer(modifier = Modifier.height(if (compact) 4.dp else 5.dp))
+            Spacer(modifier = Modifier.height(if (compact) 3.dp else 4.dp))
             Text(
-                text = app.label,
-                fontSize = if (compact) 10.sp else 11.sp,
+                text = app.label.uppercase(Locale.US),
+                fontSize = if (compact) 9.5.sp else 10.sp,
                 fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Medium,
-                letterSpacing = (-0.2).sp,
-                color = MIP_INK,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = (-0.3).sp,
+                color = MIP_WHITE,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .background(MIP_BLACK, CutCornerShape(1.dp))
+                    .padding(horizontal = 3.dp, vertical = 1.dp)
             )
         }
     }
@@ -165,8 +245,8 @@ fun AppIconTile(
 
 /**
  * Minimal 9x9 MIP Pixel-Matrix Briefcase Badge (`profile 10` / managed work profile):
- * Dark `#0A0D10` (`MIP_BG`) rounded-rect (`RoundedCornerShape(4.dp)`) with a crisp `1.dp` `#38BDF8` (`MIP_CYAN`)
- * border and integer-snapped `drawRect` pixel blocks forming a tiny 9x9 pixel-art briefcase.
+ * Strict 6-bit `RGB222` `#000000` (`MIP_BLACK`) with `1.dp` `#00FFFF` (`MIP_CYAN`) chamfered border
+ * and integer-snapped `drawRect` pixel blocks forming a 9x9 pixel-art briefcase.
  */
 @Composable
 fun OneUiWorkBriefcaseBadge(
@@ -174,13 +254,13 @@ fun OneUiWorkBriefcaseBadge(
     modifier: Modifier = Modifier
 ) {
     val badgeSize = if (compact) 14.dp else 16.dp
-    val badgeShape = RoundedCornerShape(4.dp)
+    val badgeShape = CutCornerShape(2.dp)
 
     Box(
         modifier = modifier
             .size(badgeSize)
             .clip(badgeShape)
-            .background(MIP_BG)
+            .background(MIP_BLACK)
             .border(1.dp, MIP_CYAN, badgeShape),
         contentAlignment = Alignment.Center
     ) {
@@ -217,14 +297,15 @@ fun OneUiWorkBriefcaseBadge(
     }
 }
 
-private fun monogramGradientForPackage(packageName: String): List<Color> {
+private fun mipPaletteColorForPackage(packageName: String): Color {
+    // 6-bit RGB222 quantized colors only
     val palettes = listOf(
-        listOf(Color(0xFF0EA5E9), Color(0xFF312E81)),
-        listOf(Color(0xFF6366F1), Color(0xFF701A75)),
-        listOf(Color(0xFF14B8A6), Color(0xFF0F172A)),
-        listOf(Color(0xFFF43F5E), Color(0xFF4C1D95)),
-        listOf(Color(0xFF8B5CF6), Color(0xFF1E3A8A)),
-        listOf(Color(0xFF10B981), Color(0xFF064E3B))
+        Color(0xFF0055AA),
+        Color(0xFF5500AA),
+        Color(0xFF005555),
+        Color(0xFFAA0055),
+        Color(0xFF00AA55),
+        Color(0xFF555500)
     )
     val index = abs(packageName.hashCode()) % palettes.size
     return palettes[index]

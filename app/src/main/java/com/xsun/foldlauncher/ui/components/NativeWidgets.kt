@@ -327,13 +327,14 @@ fun TailscaleMeshTelemetryPill(
     }
 }
 
-private val MIP_BG = Color(0xFF0A0D10)
-private val MIP_SURFACE = Color(0xFF11161B)
-private val MIP_GRID = Color(0xFF1E293B)
-private val MIP_INK = Color(0xFFE2E8F0)
-private val MIP_MUTED = Color(0xFF64748B)
-private val MIP_CYAN = Color(0xFF38BDF8)
-private val MIP_GREEN = Color(0xFF22C55E)
+// Strict 6-Bit RGB222 (64-Color) MIP Hardware Palette (~200 PPI reflective LCD spec)
+private val MIP_BG = Color(0xFF000000)
+private val MIP_SURFACE = Color(0xFF000055)
+private val MIP_GRID = Color(0xFF555555)
+private val MIP_INK = Color(0xFFFFFFFF)
+private val MIP_MUTED = Color(0xFFAAAAAA)
+private val MIP_CYAN = Color(0xFF00FFFF)
+private val MIP_GREEN = Color(0xFF00FF55)
 
 /**
  * Fancy Terminal & Low-Resolution MIP Display Header (`OneUiConnectivityPillsRow`):
@@ -400,7 +401,7 @@ fun OneUiConnectivityPillsRow(
     val adbAddressText = if (isWirelessAdbEnabled) rawAdbEndpoint else "OFF"
     val adbDisplaySubtitle = if (adbCopied) "COPIED_ADB" else adbAddressText
 
-    val pillShape = RoundedCornerShape(10.dp)
+    val pillShape = androidx.compose.foundation.shape.CutCornerShape(2.dp)
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -677,20 +678,25 @@ fun OneUiConnectivityPillsRow(
 @Composable
 private fun MipDotMatrixBackdrop(modifier: Modifier = Modifier) {
     Canvas(modifier = modifier) {
-        val step = 6.dp.toPx().coerceAtLeast(4f)
-        val dotSize = 1.dp.toPx().coerceAtLeast(1f)
-        var y = step / 2f
+        val cellPx = kotlin.math.floor(3.dp.toPx()).coerceAtLeast(3f)
+        val gapPx = 1f
+        var x = cellPx - gapPx
+        while (x < size.width) {
+            drawRect(
+                color = MIP_BG,
+                topLeft = Offset(x, 0f),
+                size = Size(gapPx, size.height)
+            )
+            x += cellPx
+        }
+        var y = cellPx - gapPx
         while (y < size.height) {
-            var x = step / 2f
-            while (x < size.width) {
-                drawRect(
-                    color = MIP_GRID.copy(alpha = 0.35f),
-                    topLeft = Offset(x, y),
-                    size = Size(dotSize, dotSize)
-                )
-                x += step
-            }
-            y += step
+            drawRect(
+                color = MIP_BG,
+                topLeft = Offset(0f, y),
+                size = Size(size.width, gapPx)
+            )
+            y += cellPx
         }
     }
 }

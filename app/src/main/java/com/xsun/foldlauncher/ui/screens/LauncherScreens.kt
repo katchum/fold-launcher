@@ -128,12 +128,13 @@ import kotlinx.coroutines.launch
 
 private val HOME_PAGE_TITLES = listOf("DEV", "MAIN", "WORK")
 
-private val MIP_BG = Color(0xFF0A0D10)
-private val MIP_SURFACE = Color(0xFF11161B)
-private val MIP_GRID = Color(0xFF1E293B)
-private val MIP_INK = Color(0xFFE2E8F0)
-private val MIP_MUTED = Color(0xFF64748B)
-private val MIP_CYAN = Color(0xFF38BDF8)
+// Strict 6-Bit RGB222 (64-Color) MIP Hardware Palette (~200 PPI reflective LCD spec)
+private val MIP_BG = Color(0xFF000000)
+private val MIP_SURFACE = Color(0xFF000055)
+private val MIP_GRID = Color(0xFF555555)
+private val MIP_INK = Color(0xFFFFFFFF)
+private val MIP_MUTED = Color(0xFFAAAAAA)
+private val MIP_CYAN = Color(0xFF00FFFF)
 
 /**
  * v1.0.0 Three-Page (`Dev` on left | `Main` in middle | `Work` on right) Minimal One UI Home Screen (`minimal` edition).
@@ -458,7 +459,7 @@ private fun OneUiMinimalPageIndicatorBar(
     onEditCurrentPageApps: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val barShape = RoundedCornerShape(10.dp)
+    val barShape = androidx.compose.foundation.shape.CutCornerShape(2.dp)
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -468,22 +469,22 @@ private fun OneUiMinimalPageIndicatorBar(
         Row(
             modifier = Modifier
                 .clip(barShape)
-                .background(MIP_BG.copy(alpha = 0.90f))
-                .border(1.dp, MIP_GRID, barShape)
-                .padding(horizontal = 8.dp, vertical = 4.dp),
+                .background(MIP_BG)
+                .border(2.dp, MIP_GRID, barShape)
+                .padding(horizontal = 6.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             HOME_PAGE_TITLES.forEachIndexed { index, title ->
                 val selected = index == currentPage
-                val itemShape = RoundedCornerShape(6.dp)
+                val itemShape = androidx.compose.foundation.shape.CutCornerShape(2.dp)
                 Box(
                     modifier = Modifier
                         .clip(itemShape)
-                        .background(if (selected) MIP_SURFACE else Color.Transparent)
+                        .background(if (selected) MIP_CYAN else MIP_BG)
                         .border(
                             width = 1.dp,
-                            color = if (selected) MIP_CYAN.copy(alpha = 0.65f) else Color.Transparent,
+                            color = if (selected) MIP_INK else MIP_GRID,
                             shape = itemShape
                         )
                         .clickable { onSelectPage(index) }
@@ -494,38 +495,39 @@ private fun OneUiMinimalPageIndicatorBar(
                         text = if (selected) "[$title]" else title,
                         fontSize = 10.sp,
                         fontFamily = FontFamily.Monospace,
-                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                        color = if (selected) MIP_CYAN else MIP_MUTED
+                        fontWeight = FontWeight.ExtraBold,
+                        color = if (selected) MIP_BG else MIP_MUTED
                     )
                 }
                 if (index < HOME_PAGE_TITLES.lastIndex) {
                     Text(
-                        text = "•",
+                        text = ":",
                         fontSize = 10.sp,
                         fontFamily = FontFamily.Monospace,
-                        color = MIP_MUTED.copy(alpha = 0.55f)
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MIP_GRID
                     )
                 }
             }
 
             Spacer(modifier = Modifier.width(4.dp))
 
-            val editShape = RoundedCornerShape(6.dp)
+            val editShape = androidx.compose.foundation.shape.CutCornerShape(2.dp)
             Box(
                 modifier = Modifier
                     .clip(editShape)
                     .background(MIP_SURFACE)
-                    .border(1.dp, MIP_GRID, editShape)
+                    .border(1.dp, MIP_CYAN, editShape)
                     .clickable(onClick = onEditCurrentPageApps)
                     .padding(horizontal = 6.dp, vertical = 3.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "[✎]",
-                    fontSize = 10.sp,
+                    text = "[CFG]",
+                    fontSize = 9.5.sp,
                     fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    color = MIP_INK
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MIP_CYAN
                 )
             }
         }
