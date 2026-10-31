@@ -448,7 +448,8 @@ object QuickNavigationLauncher {
                     props.optString("country").trim().takeIf { it.isNotEmpty() }
                 ).joinToString(", ")
 
-                val title = name.ifBlank { street }.ifBlank { continue }
+                val title = name.ifBlank { street }
+                if (title.isBlank()) continue
                 val subtitle = listOfNotNull(
                     street.takeIf { it.isNotBlank() && !it.equals(title, ignoreCase = true) },
                     cityState.takeIf { it.isNotBlank() }
