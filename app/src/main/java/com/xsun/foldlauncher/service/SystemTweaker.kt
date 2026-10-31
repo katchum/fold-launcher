@@ -1121,12 +1121,17 @@ object SystemTweaker {
      * Launches two apps side-by-side in multi-window / split-screen mode on Samsung One UI
      * (both slab phones like S23/S25 and Z Fold 8 inner/cover screens).
      *
-     * On One UI (`StageCoordinator`), `FLAG_ACTIVITY_LAUNCH_ADJACENT` only targets `SideStage`
-     * if `MainStage` split-screen is already active (`isSplitActive=true`). Therefore we:
+     * On One UI (`StageCoordinator` / `ShellSplitScreen`), `GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN`
+     * executes an atomic `WindowContainerTransaction` (`CHANGE_TRANSIT_REQUEST_FULLSCREEN_TO_SPLIT`):
+     * - Reparents the currently focused top task into `SideStage` (bottom/right), AND
+     * - Automatically reparents the next highest `ACTIVITY_TYPE_STANDARD` (`1`) task in
+     *   `DefaultTaskDisplayArea` into `MainStage` (top/left).
+     * Therefore we:
      * 1. Auto-enable [FoldAccessibilityService] if `WRITE_SECURE_SETTINGS` is granted,
-     * 2. Launch [primaryPackage] in standard task mode,
-     * 3. Trigger `GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN` at `+380ms` to dock [primaryPackage] into the top/left stage,
-     * 4. Launch [secondaryPackage] with `FLAG_ACTIVITY_LAUNCH_ADJACENT` at `+820ms` into the bottom/right stage.
+     * 2. Launch [primaryPackage] at `0ms` as a standard task (`mActivityType=1`),
+     * 3. Launch [secondaryPackage] at `+460ms` as a standard task directly above [primaryPackage],
+     * 4. Trigger `GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN` at `+1100ms` so One UI atomically docks
+     *    [primaryPackage] into `MainStage` (top/left) and [secondaryPackage] into `SideStage` (bottom/right).
      */
     fun launchSplitScreenPair(
         context: Context,
@@ -1139,11 +1144,16 @@ object SystemTweaker {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         } ?: return false
 
+        val a11yAvailable = FoldAccessibilityService.instance != null || isAccessibilityServiceEnabled(context)
         val secondaryIntent = pm.getLaunchIntentForPackage(secondaryPackage)?.apply {
             addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or
-                    Intent.FLAG_ACTIVITY_MULTIPLE_TASK
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    if (!a11yAvailable) {
+                        Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or Intent.FLAG_ACTIVITY_MULTIPLE_TASK
+                    } else {
+                        0
+                    }
             )
         } ?: return false
 
@@ -1151,15 +1161,14 @@ object SystemTweaker {
         return try {
             context.startActivity(primaryIntent)
             mainHandler.postDelayed({
-                val docked = FoldAccessibilityService.instance?.toggleSplitScreen() == true
-                val secondDelay = if (docked) 440L else 120L
-                mainHandler.postDelayed({
-                    try {
-                        context.startActivity(secondaryIntent)
-                    } catch (_: Exception) {
-                    }
-                }, secondDelay)
-            }, 380L)
+                try {
+                    context.startActivity(secondaryIntent)
+                    mainHandler.postDelayed({
+                        FoldAccessibilityService.instance?.toggleSplitScreen()
+                    }, 640L)
+                } catch (_: Exception) {
+                }
+            }, 460L)
             true
         } catch (_: Exception) {
             false

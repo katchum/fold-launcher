@@ -58,13 +58,9 @@ import kotlin.math.floor
 
 // Strict 6-Bit RGB222 (64-Color) MIP Hardware Palette (2 bits per R, G, B channel: 0x00, 0x55, 0xAA, 0xFF)
 private val MIP_BLACK = Color(0xFF000000)
-private val MIP_DARK_BLUE = Color(0xFF000055)
-private val MIP_DARK_TEAL = Color(0xFF005555)
 private val MIP_DARK_GRAY = Color(0xFF555555)
-private val MIP_SILVER = Color(0xFFAAAAAA)
 private val MIP_WHITE = Color(0xFFFFFFFF)
 private val MIP_CYAN = Color(0xFF00FFFF)
-private val MIP_GREEN = Color(0xFF00FF55)
 
 private const val MIP_ICON_GRID_RES = 20
 private val mipQuantizedIconCache = ConcurrentHashMap<String, IntArray>()

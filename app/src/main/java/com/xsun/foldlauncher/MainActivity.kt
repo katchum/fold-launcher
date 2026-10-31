@@ -3,6 +3,8 @@ package com.xsun.foldlauncher
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.RenderEffect
+import android.graphics.RuntimeShader
 import android.os.Build
 import android.os.Bundle
 import android.view.Window
@@ -18,8 +20,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asComposeRenderEffect
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -33,10 +40,13 @@ import com.xsun.foldlauncher.ui.components.SpotlightSearchOverlay
 import com.xsun.foldlauncher.ui.screens.CoverOrSlabHomeScreen
 import com.xsun.foldlauncher.ui.screens.FlexTabletopHomeScreen
 import com.xsun.foldlauncher.ui.screens.LauncherSettingsSheet
+import com.xsun.foldlauncher.ui.screens.MipReflectiveWallpaper
+import com.xsun.foldlauncher.ui.screens.MipWallpaperState
 import com.xsun.foldlauncher.ui.screens.OneUiMinimalAppSearchOverlay
 import com.xsun.foldlauncher.ui.screens.UnfoldedInnerDashboardScreen
 import com.xsun.foldlauncher.ui.theme.FoldLauncherTheme
 import com.xsun.foldlauncher.viewmodel.LauncherViewModel
+import kotlin.math.floor
 
 class MainActivity : ComponentActivity() {
 
@@ -196,11 +206,22 @@ private fun FoldLauncherRoot(
     val lockScreenRotationEnabled by viewModel.lockScreenRotationEnabled.collectAsState()
     val isDeXConnected by viewModel.isDeXConnected.collectAsState()
 
+    LaunchedEffect(activity) {
+        MipWallpaperState.ensureLoaded(activity)
+    }
+    val mipWallpaperPreset by MipWallpaperState.presetFlow.collectAsState()
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.16f))
+            .background(Color.Black)
+            .mipWholeLauncherDisplayEffect()
     ) {
+        MipReflectiveWallpaper(
+            preset = mipWallpaperPreset,
+            modifier = Modifier.fillMaxSize()
+        )
+
         PostureAnimatedContainer(
             postureState = postureState,
             modifier = Modifier.fillMaxSize()
@@ -488,5 +509,62 @@ private fun FoldLauncherRoot(
             onOpenAccessibilitySettings = viewModel::openAccessibilitySettings,
             onDismiss = viewModel::closeSettings
         )
+    }
+}
+
+private const val MIP_DISPLAY_AGSL_SHADER = """
+    uniform shader content;
+    uniform float cellPx;
+
+    half4 main(float2 fragCoord) {
+        float2 cellIdx = floor(fragCoord / cellPx);
+        float2 cellCenter = (cellIdx + 0.5) * cellPx;
+        half4 c = content.eval(cellCenter);
+
+        int bx = int(mod(cellIdx.x, 2.0));
+        int by = int(mod(cellIdx.y, 2.0));
+        int bIndex = by * 2 + bx;
+        float bayer = 0.0;
+        if (bIndex == 0) bayer = -0.375;
+        else if (bIndex == 1) bayer = 0.125;
+        else if (bIndex == 2) bayer = 0.375;
+        else bayer = -0.125;
+
+        float dither = bayer * 0.14;
+        float3 rgb = clamp(float3(c.rgb) + dither, 0.0, 1.0);
+        float3 qRgb = floor(rgb * 3.0 + 0.5) / 3.0;
+
+        float2 localPos = mod(fragCoord, cellPx);
+        float gridShade = (localPos.x >= cellPx - 1.0 || localPos.y >= cellPx - 1.0) ? 0.78 : 1.0;
+
+        return half4(half3(qRgb * gridShade), c.a);
+    }
+"""
+
+/**
+ * Applies a whole-launcher GPU AGSL RuntimeShader (Android 13+) that renders the entire
+ * launcher composition at a low-PPI discrete MIP pixel grid (~170 PPI) and quantizes all
+ * colors with 2x2 ordered Bayer dithering into the strict 64-color (6-bit RGB222) MIP palette.
+ */
+@Composable
+private fun Modifier.mipWholeLauncherDisplayEffect(): Modifier {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return this
+    val density = LocalDensity.current
+    val cellPx = remember(density) {
+        with(density) { floor(2.6.dp.toPx()).coerceAtLeast(4f) }
+    }
+    val composeEffect = remember(cellPx) {
+        runCatching {
+            val shader = RuntimeShader(MIP_DISPLAY_AGSL_SHADER)
+            shader.setFloatUniform("cellPx", cellPx)
+            RenderEffect.createRuntimeShaderEffect(shader, "content").asComposeRenderEffect()
+        }.getOrNull()
+    }
+    return if (composeEffect != null) {
+        this.graphicsLayer {
+            renderEffect = composeEffect
+        }
+    } else {
+        this
     }
 }

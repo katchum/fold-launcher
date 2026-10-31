@@ -1,6 +1,6 @@
-# Fold8 Launcher (`com.xsun.foldlauncher`) — `v0.10.0` (One UI + Fancy Terminal MIP Display Edition + Side-by-Side Max Edition)
+# Fold8 Launcher (`com.xsun.foldlauncher`) — `v0.11.0` (Whole-Launcher Low-PPI 64-Color MIP Shader & Atomic Split-Screen Edition)
 
-**Ultra-Fast, Zero-Bloat 120Hz One UI + Fancy Terminal MIP (Memory-In-Pixel) Home Launcher (`com.xsun.foldlauncher`) with `Dev` • `Main` • `Work` 3-Page Layout, MIP Quick-Navigation & Ride-Compare Bar (Google Maps + Uber/Lyft Split-Screen), `9x9` MIP Pixel-Matrix Work Profile Badge, Recent Apps Thumbnail Strip + Smooth Bottom-Keyboard Search, MIP Compact Dev Switches & Side-by-Side Max Edition (`com.xsun.foldlauncher.max`)**
+**Ultra-Fast, Zero-Bloat 120Hz One UI + Fancy Terminal MIP (Memory-In-Pixel) Home Launcher (`com.xsun.foldlauncher`) with Whole-Launcher `~175 PPI` 64-Color (`RGB222`) GPU AGSL `RuntimeShader`, 4 Custom MIP Reflective Wallpapers (`TEAL_HORIZON`, `PAPER_LCD`, `PHOSPHOR_TERMINAL`, `AMBER_COCKPIT`), `20x20` Bayer-Dithered App Icons, Atomic Samsung One UI `StageCoordinator` Uber + Lyft Split-Screen & Side-by-Side Max Edition (`com.xsun.foldlauncher.max`)**
 
 [![Android CI](https://github.com/katchum/fold-launcher/actions/workflows/android-ci.yml/badge.svg)](https://github.com/katchum/fold-launcher/actions/workflows/android-ci.yml)
 
@@ -10,7 +10,21 @@ Fold8 Launcher is a lightweight, 120Hz-native Jetpack Compose home screen replac
 
 ---
 
-## What's New in `v0.10.0`
+## What's New in `v0.11.0`
+
+### 1. Whole-Launcher Low-PPI (`~175 PPI`) + 64-Color (`RGB222`) GPU AGSL `RuntimeShader` (`MainActivity.kt`)
+- **`Modifier.mipWholeLauncherDisplayEffect()`**: Applies a real-time GPU AGSL `RuntimeShader` (`Build.VERSION.SDK_INT >= 33`) across the entire launcher composition (`2.6dp` macro-pixel quantization `~175 PPI`, `4x4` Bayer ordered dithering, strict 64-color `RGB222` 2-bit-per-channel palette quantization, and subtle inter-pixel LCD grid matrix).
+
+### 2. Custom MIP Reflective Wallpapers & `20x20` `RGB222` App Icons (`LauncherScreens.kt`, `AppIconTile.kt`)
+- **Full-Screen Opaque `MipReflectiveWallpaper`**: Replaces the Android system wallpaper bleed-through with a dedicated transflective MIP background canvas featuring 4 selectable presets (`TEAL_HORIZON`, `PAPER_LCD`, `PHOSPHOR_TERMINAL`, `AMBER_COCKPIT`) and a 1-tap `[BG:...]` header cycler.
+- **`20x20` `RGB222` Bayer-Dithered App Icons (`AppIconTile.kt`)**: Downsamples app icons into crisp `20x20` 64-color `RGB222` pixel-matrix bitmaps with a `9x9` MIP pixel-matrix Work Profile briefcase badge (`UserHandle{10}`).
+
+### 3. Atomic Samsung One UI `StageCoordinator` Uber + Lyft Split-Screen (`OneUiQuickNavigationBar.kt`, `SystemTweaker.kt`)
+- **True Side-by-Side Split-Screen on Both Z Fold 8 & Slab Phones**: Uses Samsung One UI's `StageCoordinator` (`CHANGE_TRANSIT_REQUEST_FULLSCREEN_TO_SPLIT`) and multi-window task staging (`SystemTweaker`) to atomically launch **Uber (`com.ubercab`) and Lyft (`me.lyft.android`)** into top/bottom or left/right split-screen with destination & price estimates pre-filled, including full Work Profile (`UserHandle{10}`) app discovery and launching.
+
+---
+
+## Highlights from `v0.10.0`
 
 ### 1. Centered `Dev` • `Main` • `Work` 3-Page Layout (`MinimalOneUiHomeScreen`)
 - **Starts on `Main` in the Center (`initialPage = 1`)**:

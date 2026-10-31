@@ -123,7 +123,12 @@ import com.xsun.foldlauncher.vc.VcCommandCenterCard
 import com.xsun.foldlauncher.vc.VcLiveSummary
 import com.xsun.foldlauncher.viewmodel.WorkspaceProfile
 import kotlin.math.abs
+import kotlin.math.floor
+import kotlin.math.sin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 private val HOME_PAGE_TITLES = listOf("DEV", "MAIN", "WORK")
@@ -135,6 +140,153 @@ private val MIP_GRID = Color(0xFF555555)
 private val MIP_INK = Color(0xFFFFFFFF)
 private val MIP_MUTED = Color(0xFFAAAAAA)
 private val MIP_CYAN = Color(0xFF00FFFF)
+
+/**
+ * v0.11.0 Selectable Low-PPI 64-Color (`RGB222`) MIP Reflective LCD Background Presets.
+ */
+enum class MipWallpaperPreset(val key: String, val badge: String) {
+    TEAL_HORIZON("teal_horizon", "TEAL"),
+    PAPER_LCD("paper_lcd", "LCD"),
+    PHOSPHOR_TERMINAL("phosphor_terminal", "TERM"),
+    AMBER_COCKPIT("amber_cockpit", "AMBR");
+
+    fun next(): MipWallpaperPreset {
+        val all = entries
+        return all[(ordinal + 1) % all.size]
+    }
+
+    companion object {
+        fun fromKey(raw: String?): MipWallpaperPreset {
+            return entries.firstOrNull { it.key.equals(raw, ignoreCase = true) } ?: TEAL_HORIZON
+        }
+    }
+}
+
+object MipWallpaperState {
+    private const val PREFS_NAME = "fold_launcher_prefs"
+    private const val KEY_MIP_WALLPAPER = "mip_wallpaper_preset"
+
+    private val _presetFlow = MutableStateFlow(MipWallpaperPreset.TEAL_HORIZON)
+    val presetFlow: StateFlow<MipWallpaperPreset> = _presetFlow.asStateFlow()
+    private var loaded = false
+
+    fun ensureLoaded(context: android.content.Context) {
+        if (!loaded) {
+            loaded = true
+            val prefs = context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+            _presetFlow.value = MipWallpaperPreset.fromKey(prefs.getString(KEY_MIP_WALLPAPER, null))
+        }
+    }
+
+    fun cyclePreset(context: android.content.Context): MipWallpaperPreset {
+        ensureLoaded(context)
+        val next = _presetFlow.value.next()
+        _presetFlow.value = next
+        context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_MIP_WALLPAPER, next.key)
+            .apply()
+        return next
+    }
+}
+
+/**
+ * v0.11.0 Custom Opaque Low-PPI 64-Color (`RGB222`) MIP Reflective LCD Wallpaper (`MipReflectiveWallpaper`).
+ *
+ * Drawn on a coarse `4.dp x 4.dp` MIP pixel cell grid using strict 6-bit `RGB222` colors (`0x00`, `0x55`,
+ * `0xAA`, `0xFF` per channel) with `1px` dark `#000000` inter-pixel LCD matrix grid lines so the phone's
+ * high-PPI photo wallpaper never bleeds through.
+ */
+@Composable
+fun MipReflectiveWallpaper(
+    preset: MipWallpaperPreset = MipWallpaperPreset.TEAL_HORIZON,
+    modifier: Modifier = Modifier
+) {
+    // 2x2 ordered Bayer matrix (0..3)
+    val bayer2x2 = remember { intArrayOf(0, 2, 3, 1) }
+
+    Canvas(modifier = modifier.fillMaxSize()) {
+        // Fill base 1px inter-pixel LCD matrix grid with pure #000000
+        drawRect(color = MIP_BG)
+
+        val cellPx = floor(4.dp.toPx()).coerceAtLeast(4f)
+        val dotSize = (cellPx - 1f).coerceAtLeast(2f)
+        val cols = (size.width / cellPx).toInt() + 1
+        val rows = (size.height / cellPx).toInt() + 1
+
+        // Strict 6-bit RGB222 4-stop palette per preset (c0 = darkest, c3 = highlight)
+        val c0: Color
+        val c1: Color
+        val c2: Color
+        val c3: Color
+        when (preset) {
+            MipWallpaperPreset.TEAL_HORIZON -> {
+                c0 = Color(0xFF000000)
+                c1 = Color(0xFF000055)
+                c2 = Color(0xFF005555)
+                c3 = Color(0xFF00AAAA)
+            }
+            MipWallpaperPreset.PAPER_LCD -> {
+                c0 = Color(0xFF000000)
+                c1 = Color(0xFF005555)
+                c2 = Color(0xFF555555)
+                c3 = Color(0xFFAAAAAA)
+            }
+            MipWallpaperPreset.PHOSPHOR_TERMINAL -> {
+                c0 = Color(0xFF000000)
+                c1 = Color(0xFF005500)
+                c2 = Color(0xFF005555)
+                c3 = Color(0xFF00AA55)
+            }
+            MipWallpaperPreset.AMBER_COCKPIT -> {
+                c0 = Color(0xFF000000)
+                c1 = Color(0xFF550000)
+                c2 = Color(0xFF555500)
+                c3 = Color(0xFFAA5500)
+            }
+        }
+
+        val horizonRow = (rows * 0.44f).toInt().coerceAtLeast(1)
+
+        for (gy in 0 until rows) {
+            val ny = gy.toFloat() / rows.toFloat().coerceAtLeast(1f)
+            // Subtle retro-futuristic terrain/horizon wave in coarse MIP cell coordinates
+            for (gx in 0 until cols) {
+                val bayer = bayer2x2[((gy and 1) shl 1) or (gx and 1)]
+                val isMajorGridCross = (gx % 12 == 0 && gy % 12 == 0)
+                val isHorizonLine = gy == horizonRow + ((sin(gx * 0.18f) * 2f).toInt())
+
+                val cellColor = when {
+                    isHorizonLine && (gx % 2 == 0) -> c3
+                    isMajorGridCross -> c2
+                    preset == MipWallpaperPreset.PAPER_LCD -> {
+                        if (((gx + gy) and 1) == 0) c0 else c1
+                    }
+                    else -> {
+                        // Ordered 2x2 Bayer gradient across top sky -> horizon glow -> bottom deck
+                        val distFromHorizon = abs(ny - 0.44f)
+                        val intensity = (1.0f - (distFromHorizon * 2.1f)).coerceIn(0f, 1f)
+                        val level = (intensity * 4.2f).toInt()
+                        when {
+                            level > bayer + 2 -> c2
+                            level > bayer -> c1
+                            gy > horizonRow && ((gy - horizonRow) % 8 == 0) && (gx % 4 == 0) -> c1
+                            else -> c0
+                        }
+                    }
+                }
+
+                if (cellColor != MIP_BG) {
+                    drawRect(
+                        color = cellColor,
+                        topLeft = Offset(gx * cellPx, gy * cellPx),
+                        size = Size(dotSize, dotSize)
+                    )
+                }
+            }
+        }
+    }
+}
 
 /**
  * v1.0.0 Three-Page (`Dev` on left | `Main` in middle | `Work` on right) Minimal One UI Home Screen (`minimal` edition).
@@ -177,6 +329,11 @@ private fun MinimalOneUiHomeScreen(
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    LaunchedEffect(context) {
+        MipWallpaperState.ensureLoaded(context)
+    }
+    val mipWallpaperPreset by MipWallpaperState.presetFlow.collectAsState()
     val view = LocalView.current
     LaunchedEffect(hideSystemStatusBar) {
         val actWindow = (view.context as? android.app.Activity)?.window
@@ -357,9 +514,13 @@ private fun MinimalOneUiHomeScreen(
                 }
             }
 
-            // Minimal MIP 3-Page Indicator ("[DEV]  •  MAIN  •  WORK") + "[✎]" page apps editor button
+            // Minimal MIP 3-Page Indicator ("[DEV]  •  MAIN  •  WORK") + "[BG]" wallpaper cycler + "[CFG]" page apps editor button
             OneUiMinimalPageIndicatorBar(
                 currentPage = pagerState.currentPage,
+                wallpaperPreset = mipWallpaperPreset,
+                onCycleWallpaperPreset = {
+                    MipWallpaperState.cyclePreset(context)
+                },
                 onSelectPage = { targetPage ->
                     coroutineScope.launch {
                         pagerState.animateScrollToPage(targetPage)
@@ -455,6 +616,8 @@ private fun StaticNonScrollingAppGrid(
 @Composable
 private fun OneUiMinimalPageIndicatorBar(
     currentPage: Int,
+    wallpaperPreset: MipWallpaperPreset = MipWallpaperPreset.TEAL_HORIZON,
+    onCycleWallpaperPreset: () -> Unit = {},
     onSelectPage: (Int) -> Unit,
     onEditCurrentPageApps: () -> Unit,
     modifier: Modifier = Modifier
@@ -513,6 +676,24 @@ private fun OneUiMinimalPageIndicatorBar(
             Spacer(modifier = Modifier.width(4.dp))
 
             val editShape = androidx.compose.foundation.shape.CutCornerShape(2.dp)
+            Box(
+                modifier = Modifier
+                    .clip(editShape)
+                    .background(MIP_SURFACE)
+                    .border(1.dp, MIP_INK, editShape)
+                    .clickable(onClick = onCycleWallpaperPreset)
+                    .padding(horizontal = 6.dp, vertical = 3.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "[BG:${wallpaperPreset.badge}]",
+                    fontSize = 9.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MIP_INK
+                )
+            }
+
             Box(
                 modifier = Modifier
                     .clip(editShape)

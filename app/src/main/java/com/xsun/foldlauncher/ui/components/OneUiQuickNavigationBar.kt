@@ -2,21 +2,30 @@ package com.xsun.foldlauncher.ui.components
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.ActivityOptions
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
+import android.graphics.Rect
 import android.location.Geocoder
 import android.location.Location
 import android.location.LocationManager
 import android.net.Uri
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
+import android.os.UserHandle
+import android.os.UserManager
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -850,6 +859,55 @@ object QuickNavigationLauncher {
         }
     }
 
+    /**
+     * Resolves nearby coordinates for [destination] if missing and launches a single ride-share app
+     * (`isUber == true` -> Uber, `isUber == false` -> Lyft) with the destination pre-filled.
+     */
+    suspend fun executeSingleRide(
+        context: Context,
+        isUber: Boolean,
+        destination: NavLocationSuggestion
+    ) {
+        val resolved = if (destination.latitude == null || destination.longitude == null) {
+            withContext(Dispatchers.IO) {
+                val (userLat, userLon) = resolveUserCoordinates(context)
+                val candidates = mutableListOf<NavLocationSuggestion>()
+                candidates.addAll(queryPhotonAutocomplete(destination.fullQuery, 6, userLat, userLon))
+                candidates.addAll(queryAndroidGeocoder(context, destination.fullQuery, 4, userLat, userLon))
+                val nearest = candidates
+                    .filter { it.latitude != null && it.longitude != null }
+                    .minByOrNull { it.distanceMiles ?: Double.MAX_VALUE }
+                if (nearest != null) {
+                    destination.copy(
+                        title = nearest.title.ifBlank { destination.title },
+                        subtitle = nearest.subtitle.ifBlank { destination.subtitle },
+                        fullQuery = nearest.fullQuery.ifBlank { destination.fullQuery },
+                        latitude = nearest.latitude,
+                        longitude = nearest.longitude,
+                        distanceMiles = nearest.distanceMiles
+                    )
+                } else {
+                    destination
+                }
+            }
+        } else {
+            destination
+        }
+
+        saveRecentDestination(context, resolved)
+
+        withContext(Dispatchers.Main) {
+            copyDestinationToClipboard(context, resolved)
+            launchSingleRideApp(
+                context = context,
+                isUber = isUber,
+                destination = resolved,
+                tiledBounds = null,
+                adjacentFlag = false
+            )
+        }
+    }
+
     private fun launchGoogleMapsNavigation(
         context: Context,
         mode: QuickNavMode,
@@ -892,28 +950,162 @@ object QuickNavigationLauncher {
     }
 
     /**
-     * Launches Uber (`com.ubercab`) and Lyft (`me.lyft.android`) side-by-side in Samsung One UI split-screen
-     * (`StageCoordinator` `MainStage` + `SideStage`) with the dropoff destination set and price estimates open:
-     * 1. Ensures [FoldAccessibilityService] is enabled via `WRITE_SECURE_SETTINGS`,
-     * 2. Launches Uber in `MainStage`,
-     * 3. Triggers `GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN` at `+420ms` so One UI docks Uber into the top/left split pane,
-     * 4. Launches Lyft with `FLAG_ACTIVITY_LAUNCH_ADJACENT` at `+900ms` so Lyft lands in the bottom/right split pane!
+     * Computes non-overlapping tiled multi-window [Rect] bounds (`firstPane` + `secondPane`):
+     * - Unfolded Z Fold 8 / landscape (`width >= height`): Left half + Right half.
+     * - Portrait slab / cover screen (`width < height`): Top half + Bottom half.
      */
-    private fun launchUberAndLyftSplitScreen(
-        context: Context,
-        destination: NavLocationSuggestion
-    ) {
-        SystemTweaker.ensureAccessibilityServiceEnabled(context)
-        val pm = context.packageManager
-        val isUberInstalled = runCatching {
-            pm.getLaunchIntentForPackage(UBER_PACKAGE) != null
-        }.getOrDefault(false)
-        val isLyftInstalled = runCatching {
-            pm.getLaunchIntentForPackage(LYFT_PACKAGE) != null
-        }.getOrDefault(false)
+    fun computeTiledSplitBounds(context: Context): Pair<Rect, Rect> {
+        val dm = context.resources.displayMetrics
+        val width = dm.widthPixels.coerceAtLeast(720)
+        val height = dm.heightPixels.coerceAtLeast(1280)
+        val density = dm.density.coerceAtLeast(1f)
+        val topInset = (38f * density).toInt()
+        val bottomInset = (52f * density).toInt()
+        val sidePad = (6f * density).toInt()
+        val gap = (6f * density).toInt()
 
-        val uberUri = Uri.parse(
-            if (isUberInstalled) {
+        return if (width >= height) {
+            val midX = width / 2
+            val leftRect = Rect(sidePad, topInset, midX - (gap / 2), height - bottomInset)
+            val rightRect = Rect(midX + (gap / 2), topInset, width - sidePad, height - bottomInset)
+            leftRect to rightRect
+        } else {
+            val usableHeight = (height - topInset - bottomInset).coerceAtLeast(600)
+            val midY = topInset + (usableHeight / 2)
+            val topRect = Rect(sidePad, topInset, width - sidePad, midY - (gap / 2))
+            val bottomRect = Rect(sidePad, midY + (gap / 2), width - sidePad, height - bottomInset)
+            topRect to bottomRect
+        }
+    }
+
+    /**
+     * Builds a safe [ActivityOptions] bundle with explicit screen [bounds] using ONLY the public
+     * `ActivityOptions.makeBasic().setLaunchBounds(bounds)` API.
+     *
+     * IMPORTANT: Never set `android.activity.windowingMode` (`setLaunchWindowingMode(5)`) from a
+     * non-system app, because AOSP `SafeActivityOptions.checkPermissions()` throws `SecurityException`
+     * if `launchWindowingMode != WINDOWING_MODE_UNDEFINED`.
+     */
+    private fun buildTiledFreeformOptionsBundle(bounds: Rect): Bundle? {
+        return runCatching {
+            ActivityOptions.makeBasic().setLaunchBounds(bounds).toBundle()
+        }.getOrNull()
+    }
+
+    /**
+     * Searches both Personal Profile (`UserHandle{0}`) and Managed Work Profiles (`UserHandle{10}`)
+     * via [LauncherApps] + [UserManager] to locate [packageName] even when installed only in Work Profile.
+     */
+    private fun findPackageAcrossProfiles(
+        context: Context,
+        packageName: String
+    ): Pair<ComponentName, UserHandle>? {
+        return runCatching {
+            val launcherApps = context.getSystemService(LauncherApps::class.java) ?: return null
+            val userManager = context.getSystemService(UserManager::class.java)
+            val myUser = Process.myUserHandle()
+            val profiles = userManager?.userProfiles ?: listOf(myUser)
+            // Check personal profile first, then work profiles
+            val orderedProfiles = profiles.sortedBy { if (it == myUser) 0 else 1 }
+            for (profile in orderedProfiles) {
+                val activities = runCatching {
+                    launcherApps.getActivityList(packageName, profile)
+                }.getOrDefault(emptyList())
+                val first = activities.firstOrNull()
+                if (first != null) {
+                    return first.componentName to profile
+                }
+            }
+            null
+        }.getOrNull()
+    }
+
+    /**
+     * Resolves the best deep-link [Intent] for [pkg] (`com.ubercab` or `me.lyft.android`) across
+     * Personal Profile and Work Profile (`CrossProfileIntentForwarderActivity`):
+     * 1. Direct scheme (`uber://` / `lyft://`) with `.setPackage(pkg)` in Personal Profile,
+     * 2. Universal HTTPS link (`https://m.uber.com/ul/...` / `https://ride.lyft.com/...`) with `.setPackage(pkg)`,
+     * 3. Work Profile `IntentForwarderActivity` / `CrossProfileIntentForwarderActivity` that forwards
+     *    the deep link URI directly into Work Profile Uber/Lyft (`UserHandle{10}`),
+     * 4. Standard Personal Profile launch intent (`pm.getLaunchIntentForPackage(pkg)`).
+     */
+    private fun resolveBestRideIntent(
+        context: Context,
+        pkg: String,
+        deepLinkUri: Uri,
+        universalWebUri: Uri
+    ): Intent? {
+        val pm = context.packageManager
+
+        // 1. Native scheme in Personal Profile
+        val directSchemeIntent = Intent(Intent.ACTION_VIEW, deepLinkUri).apply {
+            setPackage(pkg)
+        }
+        if (runCatching { pm.resolveActivity(directSchemeIntent, 0) }.getOrNull() != null) {
+            return directSchemeIntent
+        }
+
+        // 2. Universal HTTPS link in Personal Profile
+        val directWebIntent = Intent(Intent.ACTION_VIEW, universalWebUri).apply {
+            setPackage(pkg)
+        }
+        if (runCatching { pm.resolveActivity(directWebIntent, 0) }.getOrNull() != null) {
+            return directWebIntent
+        }
+
+        // 3. Check for Cross-Profile Intent Forwarder (forwards uber:// or https://m.uber.com/ul/ to Work Profile User 10)
+        for (candidateUri in listOf(deepLinkUri, universalWebUri)) {
+            val probe = Intent(Intent.ACTION_VIEW, candidateUri).apply {
+                addCategory(Intent.CATEGORY_BROWSABLE)
+            }
+            val resolvedList = runCatching {
+                pm.queryIntentActivities(probe, PackageManager.MATCH_ALL) +
+                    pm.queryIntentActivities(probe, PackageManager.MATCH_DEFAULT_ONLY)
+            }.getOrDefault(emptyList())
+            val forwarder = resolvedList.firstOrNull { ri ->
+                val actPkg = ri.activityInfo?.packageName.orEmpty()
+                val actName = ri.activityInfo?.name.orEmpty()
+                actPkg.equals(pkg, ignoreCase = true) ||
+                    actName.contains("IntentForwarder", ignoreCase = true) ||
+                    actName.contains("CrossProfile", ignoreCase = true)
+            }
+            if (forwarder?.activityInfo != null) {
+                return Intent(Intent.ACTION_VIEW, candidateUri).apply {
+                    addCategory(Intent.CATEGORY_BROWSABLE)
+                    component = ComponentName(
+                        forwarder.activityInfo.packageName,
+                        forwarder.activityInfo.name
+                    )
+                }
+            }
+        }
+
+        // 4. Personal Profile main launch intent
+        return runCatching { pm.getLaunchIntentForPackage(pkg) }.getOrNull()
+    }
+
+    private fun copyDestinationToClipboard(context: Context, destination: NavLocationSuggestion) {
+        runCatching {
+            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            cm?.setPrimaryClip(ClipData.newPlainText("Ride Destination", destination.fullQuery))
+        }
+    }
+
+    /**
+     * Launches a single ride-share app (Uber or Lyft) with destination deep link, supporting both
+     * Personal Profile (`UserHandle{0}`) and Work Profile (`UserHandle{10}`), optionally inside
+     * [tiledBounds] (`WINDOWING_MODE_FREEFORM = 5`).
+     */
+    fun launchSingleRideApp(
+        context: Context,
+        isUber: Boolean,
+        destination: NavLocationSuggestion,
+        tiledBounds: Rect? = null,
+        adjacentFlag: Boolean = false
+    ): Boolean {
+        val pkg = if (isUber) UBER_PACKAGE else LYFT_PACKAGE
+        val deepLinkUri = Uri.parse(
+            if (isUber) {
                 buildUberDeepLinkUri(
                     destinationName = destination.title,
                     formattedAddress = destination.fullQuery,
@@ -921,18 +1113,17 @@ object QuickNavigationLauncher {
                     longitude = destination.longitude
                 )
             } else {
-                buildUberWebFallbackUri(
-                    destinationName = destination.title,
+                buildLyftDeepLinkUri(
                     formattedAddress = destination.fullQuery,
                     latitude = destination.latitude,
                     longitude = destination.longitude
                 )
             }
         )
-
-        val lyftUri = Uri.parse(
-            if (isLyftInstalled) {
-                buildLyftDeepLinkUri(
+        val universalWebUri = Uri.parse(
+            if (isUber) {
+                buildUberWebFallbackUri(
+                    destinationName = destination.title,
                     formattedAddress = destination.fullQuery,
                     latitude = destination.latitude,
                     longitude = destination.longitude
@@ -946,91 +1137,140 @@ object QuickNavigationLauncher {
             }
         )
 
-        val uberIntent = Intent(Intent.ACTION_VIEW, uberUri).apply {
-            if (isUberInstalled) {
-                setPackage(UBER_PACKAGE)
+        val optionsBundle = tiledBounds?.let { buildTiledFreeformOptionsBundle(it) }
+        val baseFlags = Intent.FLAG_ACTIVITY_NEW_TASK or
+            Intent.FLAG_ACTIVITY_CLEAR_TOP or
+            if (adjacentFlag || tiledBounds != null) {
+                Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or Intent.FLAG_ACTIVITY_MULTIPLE_TASK
+            } else {
+                0
             }
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+
+        // 1. Try resolved deep-link / CrossProfileIntentForwarder Intent first
+        val resolvedIntent = resolveBestRideIntent(context, pkg, deepLinkUri, universalWebUri)
+        if (resolvedIntent != null) {
+            resolvedIntent.addFlags(baseFlags)
+            val started = runCatching {
+                if (optionsBundle != null) {
+                    context.startActivity(resolvedIntent, optionsBundle)
+                } else {
+                    context.startActivity(resolvedIntent)
+                }
+                true
+            }.getOrElse {
+                runCatching {
+                    context.startActivity(resolvedIntent)
+                    true
+                }.getOrDefault(false)
+            }
+            if (started) return true
         }
 
-        val lyftAdjacentIntent = Intent(Intent.ACTION_VIEW, lyftUri).apply {
-            if (isLyftInstalled) {
-                setPackage(LYFT_PACKAGE)
+        // 2. Check if installed in Work Profile (UserHandle{10}) or Personal Profile via LauncherApps
+        val profileMatch = findPackageAcrossProfiles(context, pkg)
+        if (profileMatch != null) {
+            val (component, userHandle) = profileMatch
+            val launcherApps = context.getSystemService(LauncherApps::class.java)
+            if (launcherApps != null) {
+                val startedProfileApp = runCatching {
+                    launcherApps.startMainActivity(component, userHandle, tiledBounds, optionsBundle)
+                    true
+                }.getOrElse {
+                    runCatching {
+                        launcherApps.startMainActivity(component, userHandle, tiledBounds, null)
+                        true
+                    }.getOrDefault(false)
+                }
+                if (startedProfileApp) return true
             }
-            addFlags(
-                Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or
-                    Intent.FLAG_ACTIVITY_MULTIPLE_TASK
-            )
         }
 
-        val uberLaunched = runCatching {
-            context.startActivity(uberIntent)
+        // 3. Fallback to Universal Web URL
+        val webFallbackIntent = Intent(Intent.ACTION_VIEW, universalWebUri).apply {
+            addFlags(baseFlags)
+        }
+        return runCatching {
+            if (optionsBundle != null) {
+                context.startActivity(webFallbackIntent, optionsBundle)
+            } else {
+                context.startActivity(webFallbackIntent)
+            }
             true
         }.getOrElse {
             runCatching {
-                val fallbackIntent = Intent(
-                    Intent.ACTION_VIEW,
-                    Uri.parse(
-                        buildUberWebFallbackUri(
-                            destinationName = destination.title,
-                            formattedAddress = destination.fullQuery,
-                            latitude = destination.latitude,
-                            longitude = destination.longitude
-                        )
-                    )
-                ).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                context.startActivity(fallbackIntent)
+                context.startActivity(webFallbackIntent)
                 true
             }.getOrDefault(false)
         }
-
-        val mainHandler = Handler(Looper.getMainLooper())
-        if (uberLaunched) {
-            // Step 2: Dock Uber into One UI MainStage split-screen via AccessibilityService
-            mainHandler.postDelayed({
-                val splitToggled = FoldAccessibilityService.instance?.toggleSplitScreen() == true
-                val lyftDelayMs = if (splitToggled) 480L else 140L
-                // Step 3: Launch Lyft into SideStage (adjacent split-screen)
-                mainHandler.postDelayed({
-                    launchLyftWithFallback(context, lyftAdjacentIntent, destination)
-                }, lyftDelayMs)
-            }, 420L)
-        } else {
-            launchLyftWithFallback(context, lyftAdjacentIntent, destination)
-        }
     }
 
-    private fun launchLyftWithFallback(
+    /**
+     * Launches Uber (`com.ubercab`) and Lyft (`me.lyft.android`) side-by-side on Samsung One UI
+     * with full Work Profile (`UserHandle{10}`) + Personal Profile (`UserHandle{0}`) support.
+     *
+     * Why Samsung One UI `StageCoordinator` (`ShellSplitScreen`) requires launching BOTH standard
+     * tasks (`[1: Uber, 2: Lyft]`) BEFORE calling `GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN`:
+     * - When `toggleSplitScreen()` is invoked on One UI, `StageCoordinator.prepareEnterSplitScreen`
+     *   executes a single `WindowContainerTransaction` (`CHANGE_TRANSIT_REQUEST_FULLSCREEN_TO_SPLIT`):
+     *   1. `{reparent: <focused top task> to top of Task{name=side}}` (docks the focused app into `SideStage`),
+     *   2. `{childrenTasksReparent: from=null to=Task{name=main} mToTop=true mReparentTopOnly=true mWindowingMode=[1, 0] mActivityType=[1]}`
+     *      (automatically reparents the next highest `ACTIVITY_TYPE_STANDARD` task immediately underneath it into `MainStage`!).
+     * - Calling `toggleSplitScreen()` between App 1 and App 2 pulled an older background app into `MainStage`
+     *   and caused App 2 to dismiss split-screen (`SPLIT_DISMISS`), leaving only Lyft on screen.
+     * - By launching Uber at `0ms` (standard task), launching Lyft at `+480ms` (standard task right on top of Uber),
+     *   and calling `toggleSplitScreen()` at `+1150ms` once Lyft is focused, One UI atomically docks
+     *   **Uber into `MainStage` (top/left)** and **Lyft into `SideStage` (bottom/right)**!
+     */
+    fun launchUberAndLyftSplitScreen(
         context: Context,
-        lyftAdjacentIntent: Intent,
         destination: NavLocationSuggestion
     ) {
-        runCatching {
-            context.startActivity(lyftAdjacentIntent)
-        }.onFailure {
-            runCatching {
-                val fallbackLyft = Intent(
-                    Intent.ACTION_VIEW,
-                    Uri.parse(
-                        buildLyftWebFallbackUri(
-                            formattedAddress = destination.fullQuery,
-                            latitude = destination.latitude,
-                            longitude = destination.longitude
-                        )
-                    )
-                ).apply {
-                    addFlags(
-                        Intent.FLAG_ACTIVITY_NEW_TASK or
-                            Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or
-                            Intent.FLAG_ACTIVITY_MULTIPLE_TASK
-                    )
+        SystemTweaker.ensureAccessibilityServiceEnabled(context)
+        copyDestinationToClipboard(context, destination)
+
+        val (_, paneB) = computeTiledSplitBounds(context)
+        val mainHandler = Handler(Looper.getMainLooper())
+        val launcherPkg = context.packageName
+
+        // Step 1 (0ms): Launch Uber as a standard task (mWindowingMode=1, mActivityType=1)
+        // so it sits at the top of DefaultTaskDisplayArea.
+        launchSingleRideApp(
+            context = context,
+            isUber = true,
+            destination = destination,
+            tiledBounds = null,
+            adjacentFlag = false
+        )
+
+        // Step 2 (+480ms): Launch Lyft as a standard task right above Uber in DefaultTaskDisplayArea
+        // so the top two ACTIVITY_TYPE_STANDARD tasks are [1: Lyft (top), 2: Uber (second)].
+        mainHandler.postDelayed({
+            val a11yAvailable = FoldAccessibilityService.instance != null ||
+                SystemTweaker.isAccessibilityServiceEnabled(context)
+
+            launchSingleRideApp(
+                context = context,
+                isUber = false,
+                destination = destination,
+                tiledBounds = if (a11yAvailable) null else paneB,
+                adjacentFlag = !a11yAvailable
+            )
+
+            // Step 3 (+1130ms total): Once Lyft's window is in the foreground, invoke
+            // GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN once. StageCoordinator moves Lyft -> SideStage
+            // and automatically reparents Uber (the top remaining standard task) -> MainStage!
+            fun attemptAtomicSplitDock(attempt: Int) {
+                val fgPkg = FoldAccessibilityService.foregroundPackage.value
+                val rideInForeground = fgPkg.isNotBlank() && fgPkg != launcherPkg
+                if (!rideInForeground && attempt < 4) {
+                    mainHandler.postDelayed({ attemptAtomicSplitDock(attempt + 1) }, 160L)
+                    return
                 }
-                context.startActivity(fallbackLyft)
+                FoldAccessibilityService.instance?.toggleSplitScreen()
             }
-        }
+
+            mainHandler.postDelayed({ attemptAtomicSplitDock(0) }, 650L)
+        }, 480L)
     }
 }
 
@@ -1101,12 +1341,11 @@ fun OneUiQuickNavigationBar(
         )
     }
 
-    fun triggerLaunch(mode: QuickNavMode, targetSuggestion: NavLocationSuggestion? = null) {
+    fun resolveCurrentDestination(targetSuggestion: NavLocationSuggestion? = null): NavLocationSuggestion? {
         val raw = targetSuggestion?.fullQuery ?: destinationText.trim()
-        if (raw.isBlank()) return
-        // Prefer explicit suggestion -> selectedSuggestion -> top nearby suggestion matching query -> raw query
+        if (raw.isBlank()) return null
         val topNearbyMatch = suggestions.firstOrNull { !it.isRecent } ?: suggestions.firstOrNull()
-        val dest = targetSuggestion
+        return targetSuggestion
             ?: selectedSuggestion?.takeIf {
                 it.title.equals(raw, ignoreCase = true) || it.fullQuery.equals(raw, ignoreCase = true)
             }
@@ -1116,7 +1355,10 @@ fun OneUiQuickNavigationBar(
                 subtitle = raw.substringAfter(",", "").trim(),
                 fullQuery = raw
             )
+    }
 
+    fun triggerLaunch(mode: QuickNavMode, targetSuggestion: NavLocationSuggestion? = null) {
+        val dest = resolveCurrentDestination(targetSuggestion) ?: return
         selectedSuggestion = dest
         destinationText = dest.title
         modeMenuExpanded = false
@@ -1125,12 +1367,27 @@ fun OneUiQuickNavigationBar(
         keyboardController?.hide()
         focusManager.clearFocus()
         statusBannerText = if (mode == QuickNavMode.RIDE) {
-            "SPLIT UBER+LYFT >> ${dest.title.uppercase(Locale.US)}"
+            "TILED UBER+LYFT >> ${dest.title.uppercase(Locale.US)}"
         } else {
             "NAV [${mode.icon}] >> ${dest.title.uppercase(Locale.US)}"
         }
         coroutineScope.launch {
             QuickNavigationLauncher.executeNavigation(context, mode, dest)
+        }
+    }
+
+    fun triggerSingleRideLaunch(isUber: Boolean, targetSuggestion: NavLocationSuggestion? = null) {
+        val dest = resolveCurrentDestination(targetSuggestion) ?: return
+        selectedSuggestion = dest
+        destinationText = dest.title
+        modeMenuExpanded = false
+        dropdownOpen = false
+        isInputFocused = false
+        keyboardController?.hide()
+        focusManager.clearFocus()
+        statusBannerText = "${if (isUber) "UBER" else "LYFT"} >> ${dest.title.uppercase(Locale.US)}"
+        coroutineScope.launch {
+            QuickNavigationLauncher.executeSingleRide(context, isUber, dest)
         }
     }
 
@@ -1349,6 +1606,100 @@ fun OneUiQuickNavigationBar(
                         fontSize = 11.sp,
                         fontWeight = FontWeight.ExtraBold
                     )
+                }
+            }
+
+            // Persistent In-Bar Ride Quick-Switch Strip ([UBER: <dest>] [LYFT: <dest>] [TILE BOTH])
+            // Visible whenever RIDE mode is selected or a destination is active so the user can 1-tap
+            // jump directly to Uber, Lyft, or Tiled Multi-Window Both at any time!
+            val activeDestTitle = (selectedSuggestion?.title ?: destinationText.trim()).uppercase(Locale.US)
+            if (activeDestTitle.isNotBlank() || selectedMode == QuickNavMode.RIDE) {
+                val shortDest = if (activeDestTitle.length > 9) {
+                    activeDestTitle.take(8) + ".."
+                } else if (activeDestTitle.isNotEmpty()) {
+                    activeDestTitle
+                } else {
+                    "DEST"
+                }
+                val rideReady = destinationText.isNotBlank() || selectedSuggestion != null
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 1.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 1-Tap Direct Uber Button (supports Work Profile User 10 + Personal Profile)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(mipShape)
+                            .background(if (rideReady) MipDarkBlue else MipBlack)
+                            .border(1.dp, if (rideReady) MipCyan else MipDarkGray, mipShape)
+                            .clickable(enabled = rideReady) {
+                                triggerSingleRideLaunch(isUber = true)
+                            }
+                            .padding(horizontal = 4.dp, vertical = 4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "[UBER:$shortDest]",
+                            color = if (rideReady) MipCyan else MipDarkGray,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    // 1-Tap Direct Lyft Button
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(mipShape)
+                            .background(if (rideReady) MipDarkBlue else MipBlack)
+                            .border(1.dp, if (rideReady) MipGreen else MipDarkGray, mipShape)
+                            .clickable(enabled = rideReady) {
+                                triggerSingleRideLaunch(isUber = false)
+                            }
+                            .padding(horizontal = 4.dp, vertical = 4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "[LYFT:$shortDest]",
+                            color = if (rideReady) MipGreen else MipDarkGray,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    // 1-Tap Tiled Multi-Window Both Button (Top/Bottom or Left/Right Freeform)
+                    Box(
+                        modifier = Modifier
+                            .clip(mipShape)
+                            .background(if (rideReady) MipAmber else MipBlack)
+                            .border(1.dp, if (rideReady) MipWhite else MipDarkGray, mipShape)
+                            .clickable(enabled = rideReady) {
+                                selectedMode = QuickNavMode.RIDE
+                                QuickNavigationLauncher.saveSelectedMode(context, QuickNavMode.RIDE)
+                                triggerLaunch(QuickNavMode.RIDE)
+                            }
+                            .padding(horizontal = 6.dp, vertical = 4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "[TILE BOTH]",
+                            color = if (rideReady) MipBlack else MipDarkGray,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            maxLines = 1
+                        )
+                    }
                 }
             }
 
